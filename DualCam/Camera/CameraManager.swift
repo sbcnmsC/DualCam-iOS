@@ -77,6 +77,7 @@ final class CameraManager: NSObject, ObservableObject {
     private var countdownTimer: Timer?
     private var dragSlot = 0
     private var dragStartBias: Float = 0
+  private var pendingZoomAfterRebuild: (slot: Int, display: CGFloat)?
 
     // MARK: - 启动
 
@@ -242,6 +243,12 @@ final class CameraManager: NSObject, ObservableObject {
             self.ready = running
             self.statusText = running ? "双摄已启动" : "相机未能启动"
             if resetStates { self.slotStates = [SlotState(), SlotState()] }
+            if let pending = self.pendingZoomAfterRebuild {
+                self.pendingZoomAfterRebuild = nil
+                let info = infos[pending.slot]
+                let factor = pending.display / max(info.baseMultiplier, 0.01)
+                self.slotStates[pending.slot].zoom = min(max(factor, 1), max(info.maxZoom, 1))
+            }
             for i in 0..<2 {
                 self.applyZoom(i)
                 self.applyFocus(i)
@@ -555,10 +562,68 @@ final class CameraManager: NSObject, ObservableObject {
     // MARK: - 变焦 / 参数
 
     func zoomPresets(slot: Int) -> [CGFloat] {
+        // Keep the native-camera style shortcuts stable; the selected rear lens may change by preset.
+        return [0.5, 1, 2, 5]
+    }
+
+    func selectZoomPreset(_ displayZoom: CGFloat, slot: Int) {
+        guard (0..<2).contains(slot), !isRecording else { return }
+        let desiredSpec: LensSpec
+        if displayZoom < 0.75 {
+            desiredSpec = .backUltra
+        } else if displayZoom < 1.5 {
+            desiredSpec = .backWide
+        } else {
+            desiredSpec = .backTele
+        }
+
+        guard comboIndex < combos.count else {
+            let info = slotInfos[slot]
+            guard displayZoom >= info.baseMultiplier else {
+                showToast("当前摄像头不支持此焦段")
+                return
+            }
+            setZoom(slot: slot, factor: displayZoom / max(info.baseMultiplier, 0.01))
+            return
+        }
+
+        let currentSpec = slot == 0 ? combos[comboIndex].a : combos[comboIndex].b
+        if currentSpec.position == .front {
+            if displayZoom < 1 {
+                showToast("前置镜头不支持 0.5×")
+                return
+            }
+            setZoom(slot: slot, factor: displayZoom / max(slotInfos[slot].baseMultiplier, 0.01))
+            return
+        }
+
+        // Prefer the matching physical rear lens while retaining the other camera whenever this device supports that pair.
+        if let targetIndex = combos.firstIndex(where: { combo in
+            (slot == 0 ? combo.a : combo.b) == desiredSpec
+        }) {
+            if targetIndex != comboIndex {
+                let targetCombo = combos[targetIndex]
+                comboIndex = targetIndex
+                pendingZoomAfterRebuild = (slot: slot, display: displayZoom)
+                ready = false
+                sessionQueue.async {
+                    self.currentCombo = targetCombo
+                    self.rebuild(resetStates: true)
+                }
+                return
+            }
+            let base = max(slotInfos[slot].baseMultiplier, 0.01)
+            setZoom(slot: slot, factor: displayZoom / base)
+            return
+        }
+
         let info = slotInfos[slot]
-        let maxDisplay = info.baseMultiplier * info.maxZoom
-        let steps: [CGFloat] = [1, 2, 3]
-        return steps.map { info.baseMultiplier * $0 }.filter { $0 <= maxDisplay + 0.01 }
+        guard displayZoom >= info.baseMultiplier,
+              displayZoom <= info.baseMultiplier * info.maxZoom + 0.01 else {
+            showToast("当前设备不支持 \(displayZoom)× 焦段")
+            return
+        }
+        setZoom(slot: slot, factor: displayZoom / max(info.baseMultiplier, 0.01))
     }
 
     func displayZoom(slot: Int) -> CGFloat {
