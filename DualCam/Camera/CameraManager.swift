@@ -54,7 +54,9 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var paramTarget = 0
     @Published var focusMarker: FocusMarker? = nil
 
-    weak var previewView: PreviewUIView?
+    /// 预览显示层：和系统相机同一条硬件通路，IOSurface 零拷贝。
+    /// 在 UI 里通过 PreviewRepresentable 挂载到 DisplayLayerHostView。
+    let displayLayer = AVSampleBufferDisplayLayer()
 
     var mainSlot: Int { cfg.swapped ? 1 : 0 }
 
@@ -62,14 +64,19 @@ final class CameraManager: NSObject, ObservableObject {
 
     private let session = AVCaptureMultiCamSession()
     private let sessionQueue = DispatchQueue(label: "dualcam.session")
-    private let videoQueue = DispatchQueue(label: "dualcam.video", qos: .userInitiated)
+    // 主渲染/显示队列：userInteractive 保证帧回调不被其它任务挤占，预览才跟手。
+    private let videoQueue = DispatchQueue(label: "dualcam.video", qos: .userInteractive)
     private let audioQueue = DispatchQueue(label: "dualcam.audio")
     private let livePhotoQueue = DispatchQueue(label: "dualcam.live-photo", qos: .userInitiated)
     private let thumbnailQueue = DispatchQueue(label: "dualcam.thumbnails", qos: .utility)
     private let outputA = AVCaptureVideoDataOutput()
     private let outputB = AVCaptureVideoDataOutput()
     private let audioOutput = AVCaptureAudioDataOutput()
-    private let ciContext = CIContext(options: [.cacheIntermediates: false])
+    // 关闭颜色管理 + 不缓存中间结果：8-bit 实时管线里明显省 GPU。
+    private let ciContext = CIContext(options: [
+        .workingColorSpace: NSNull(),
+        .cacheIntermediates: false
+    ])
     private let srgb = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
 
     // sessionQueue 独占
@@ -88,11 +95,10 @@ final class CameraManager: NSObject, ObservableObject {
     private var bufferSizes: [CGSize] = [.zero, .zero]
     private var slotFront: [Bool] = [false, false]
     private var lastCanvas = CGSize(width: 1080, height: 1920)
-    private var displayBusy = false
     private var lastThumbTime: Double = 0
     private var sharedFPS = 30
 
-    // 录制状态（用 recLock 保护）
+    // 录像状态（用 recLock 保护）
     private let recLock = NSLock()
     private var recorder: VideoRecorder?
     private var rawRecorders: [VideoRecorder?] = [nil, nil]
@@ -103,16 +109,25 @@ final class CameraManager: NSObject, ObservableObject {
     private var dragStartBias: Float = 0
     private var pendingZoomAfterRebuild: (slot: Int, display: CGFloat)?
 
-    // These are accessed only on videoQueue. JPEG data keeps the rolling buffer memory bounded.
+    // 这些只在 videoQueue 上访问。
     private var liveFrames: [LivePhotoFrame] = []
     private var lastLivePhotoFrameSeconds = -Double.infinity
     private var pendingLivePhotoCapture: PendingLivePhotoCapture?
     private var lastCompositePTS = CMTime.zero
 
+    // 预览像素缓冲池：IOSurface + Metal，直接喂给 displayLayer，零拷贝。
+    private var canvasPool: CVPixelBufferPool?
+    private var poolSize = CGSize.zero
+    // display() 缓存格式描述，尺寸不变就不重复创建。
+    private var displayFormatDescription: CMVideoFormatDescription?
+    private var displayFormatSize: CGSize?
+
     // MARK: - 启动
 
     override init() {
         super.init()
+        displayLayer.videoGravity = .resizeAspect
+        displayLayer.backgroundColor = UIColor.black.cgColor
         observeNotifications()
         requestPermissionsAndStart()
     }
@@ -264,6 +279,15 @@ final class CameraManager: NSObject, ObservableObject {
         sharedFPS = usedFPS
         lock.unlock()
 
+        // 新会话开始：丢弃旧缓冲，避免首帧黑屏 / 残影。
+        videoQueue.async {
+            self.displayLayer.flush()
+            self.canvasPool = nil
+            self.poolSize = .zero
+            self.displayFormatDescription = nil
+            self.displayFormatSize = nil
+        }
+
         session.startRunning()
         restartCount = 0
         let running = session.isRunning
@@ -296,7 +320,7 @@ final class CameraManager: NSObject, ObservableObject {
         guard session.canAddOutput(audioOutput) else { return }
         audioOutput.setSampleBufferDelegate(self, queue: audioQueue)
         session.addOutputWithNoConnections(audioOutput)
-        let ports = micInput.ports(for: .audio, sourceDeviceType: mic.deviceType, sourceDevicePosition: .unspecified)
+        let ports = micInput.ports(for: .audio, sourceDeviceType: mic.deviceType, sourceDevicePosition: mic.position)
         guard !ports.isEmpty else { return }
         let conn = AVCaptureConnection(inputPorts: ports, output: audioOutput)
         if session.canAddConnection(conn) {
@@ -458,7 +482,7 @@ final class CameraManager: NSObject, ObservableObject {
                 if self.isRecording { self.stopRecording() }
             }
         }
-        nc.addObserver(forName: .AVCaptureSessionInterruptionEnded, object: session, queue: nil) { [weak self] _ in
+        nc.addObserver(forName: .AVCaptureSessionInterruptionEnded, object: session, queue: nil) { [weak self] in
             self?.postStatus("双摄已启动")
         }
         nc.addObserver(forName: .AVCaptureDeviceSubjectAreaDidChange, object: nil, queue: nil) { [weak self] _ in
@@ -481,7 +505,7 @@ final class CameraManager: NSObject, ObservableObject {
     // MARK: - 逐帧处理
 
     private func orient(_ image: CIImage) -> CIImage {
-        // 连接已设为竖屏；如果系统没有旋转，兜底转正
+        // 连接已设为竖屏；如果系统没有旋转，兜底转正。
         if image.extent.width > image.extent.height { return image.oriented(.right) }
         return image
     }
@@ -529,26 +553,23 @@ final class CameraManager: NSObject, ObservableObject {
         if canvasChanged {
             let label = "\(Int(canvas.width))×\(Int(canvas.height))"
             DispatchQueue.main.async { self.outputLabel = label }
+            // 画布尺寸变了，重建像素缓冲池。
+            canvasPool = nil
+            poolSize = .zero
+            displayFormatDescription = nil
+            displayFormatSize = nil
         }
 
-        // 录像
+        // 录像（VideoRecorder 内部有自己的像素池，和显示互不影响）
         recLock.lock()
         let rec = recorder
         recLock.unlock()
         rec?.appendComposite(finalImage, context: ciContext, time: pts)
 
-        // 预览保持原始合成画布分辨率，不因性能优化而降像素。
-        // 性能优化集中在隔离缩略图工作、避免帧队列积压；显示端只保留最新完成帧。
-        if beginDisplay() {
-            if let cg = ciContext.createCGImage(finalImage, from: full,
-                                                format: .RGBA8, colorSpace: srgb) {
-                DispatchQueue.main.async { [weak self] in
-                    self?.previewView?.show(cg)
-                    self?.endDisplay()
-                }
-            } else {
-                endDisplay()
-            }
+        // 预览：渲染进 IOSurface 池缓冲 → 直接 enqueue 到 AVSampleBufferDisplayLayer。
+        // 不做 createCGImage、不切主线程、不设 displayBusy，彻底消除预览延时。
+        if let canvasBuf = renderToPool(finalImage, size: canvas) {
+            display(canvasBuf, pts: pts)
         }
 
         // 缩略图计算会生成多张 CGImage；放到独立低优先级队列，避免阻塞相机帧处理。
@@ -559,6 +580,73 @@ final class CameraManager: NSObject, ObservableObject {
                 self?.makeThumbnails(from: composed, canvas: canvas)
             }
         }
+    }
+
+    /// 从池里拿一块 IOSurface 像素缓冲，把合成图渲染进去。池满 6 块就丢这一帧，
+    /// 防止显示/编码短暂积压时无限增长。
+    private func renderToPool(_ image: CIImage, size: CGSize) -> CVPixelBuffer? {
+        if canvasPool == nil || poolSize != size {
+            var pool: CVPixelBufferPool?
+            let attrs: [String: Any] = [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferWidthKey as String: Int(size.width),
+                kCVPixelBufferHeightKey as String: Int(size.height),
+                kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any](),
+                kCVPixelBufferMetalCompatibilityKey as String: true
+            ]
+            let poolAttrs: [String: Any] = [kCVPixelBufferPoolMinimumBufferCountKey as String: 4]
+            CVPixelBufferPoolCreate(nil, poolAttrs as CFDictionary, attrs as CFDictionary, &pool)
+            canvasPool = pool
+            poolSize = size
+        }
+        guard let pool = canvasPool else { return nil }
+        var pb: CVPixelBuffer?
+        let limits: [String: Any] = [kCVPixelBufferPoolAllocationThresholdKey as String: 6]
+        guard CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(
+            kCFAllocatorDefault, pool, limits as CFDictionary, &pb
+        ) == kCVReturnSuccess, let out = pb else { return nil }
+        ciContext.render(image, to: out, bounds: CGRect(origin: .zero, size: size), colorSpace: nil)
+        return out
+    }
+
+    /// 把像素缓冲包成 CMSampleBuffer 立即送显，不排队。
+    private func display(_ pixelBuffer: CVPixelBuffer, pts: CMTime) {
+        if displayLayer.status == .failed { displayLayer.flush() }
+        guard displayLayer.isReadyForMoreMediaData else { return }
+
+        let size = CGSize(width: CVPixelBufferGetWidth(pixelBuffer),
+                          height: CVPixelBufferGetHeight(pixelBuffer))
+        if displayFormatDescription == nil || displayFormatSize != size {
+            var format: CMVideoFormatDescription?
+            CMVideoFormatDescriptionCreateForImageBuffer(allocator: kCFAllocatorDefault,
+                                                         imageBuffer: pixelBuffer,
+                                                         formatDescriptionOut: &format)
+            displayFormatDescription = format
+            displayFormatSize = size
+        }
+        guard let format = displayFormatDescription else { return }
+
+        // 用相机帧的 PTS 做时间戳，AVSampleBufferDisplayLayer 按这个节奏展示；
+        // 同时打 DisplayImmediately 标记，绕过层内任何内部缓冲。
+        var timing = CMSampleTimingInfo(
+            duration: .invalid,
+            presentationTimeStamp: pts,
+            decodeTimeStamp: .invalid)
+        var sample: CMSampleBuffer?
+        CMSampleBufferCreateReadyWithImageBuffer(allocator: kCFAllocatorDefault,
+                                                 imageBuffer: pixelBuffer,
+                                                 formatDescription: format,
+                                                 sampleTiming: &timing,
+                                                 sampleBufferOut: &sample)
+        guard let sample = sample else { return }
+        if let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: true),
+           CFArrayGetCount(attachments) > 0 {
+            let dict = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
+            CFDictionarySetValue(dict,
+                                 Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
+                                 Unmanaged.passUnretained(kCFBooleanTrue).toOpaque())
+        }
+        displayLayer.enqueue(sample)
     }
 
     private func collectLivePhotoFrame(_ image: CIImage, pts: CMTime) {
@@ -616,20 +704,6 @@ final class CameraManager: NSObject, ObservableObject {
         liveFrames.removeAll { $0.seconds < cutoff }
     }
 
-    private func beginDisplay() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        if displayBusy { return false }
-        displayBusy = true
-        return true
-    }
-
-    private func endDisplay() {
-        lock.lock()
-        displayBusy = false
-        lock.unlock()
-    }
-
     private func makeThumbnails(from image: CIImage, canvas: CGSize) {
         let tw: CGFloat = 120
         let th = max(2, (tw * canvas.height / canvas.width).rounded())
@@ -648,7 +722,6 @@ final class CameraManager: NSObject, ObservableObject {
     // MARK: - 变焦 / 参数
 
     func zoomPresets(slot: Int) -> [CGFloat] {
-        // Keep the native-camera style shortcuts stable; the selected rear lens may change by preset.
         return [0.5, 1, 2, 5]
     }
 
@@ -660,8 +733,6 @@ final class CameraManager: NSObject, ObservableObject {
         } else if displayZoom >= 4.0 {
             desiredSpec = .backTele
         } else {
-            // 1× and 2× remain on the wide lens (2× is a clean crop on many iPhones);
-            // use the physical telephoto lens for the 5× stop when the device supports it.
             desiredSpec = .backWide
         }
 
@@ -685,7 +756,6 @@ final class CameraManager: NSObject, ObservableObject {
             return
         }
 
-        // If the selected slot already uses the requested physical lens, just apply digital zoom.
         if currentSpec == desiredSpec {
             let base = max(slotInfos[slot].baseMultiplier, 0.01)
             let factor = displayZoom / base
@@ -697,7 +767,6 @@ final class CameraManager: NSObject, ObservableObject {
             return
         }
 
-        // Prefer the matching physical rear lens while retaining the other camera whenever this device supports that pair.
         if let targetIndex = combos.firstIndex(where: { combo in
             (slot == 0 ? combo.a : combo.b) == desiredSpec
         }) {
@@ -1112,7 +1181,6 @@ final class CameraManager: NSObject, ObservableObject {
 
     private func jpeg(_ image: CIImage) -> Data? {
         let key = CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String)
-        // The default path is filter-free original output; use the highest JPEG quality available here.
         return ciContext.jpegRepresentation(of: image, colorSpace: srgb, options: [key: 1.0])
     }
 
