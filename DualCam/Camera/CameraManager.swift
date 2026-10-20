@@ -575,15 +575,13 @@ final class CameraManager: NSObject, ObservableObject {
             displayFormatSize = nil
         }
 
-        // 录像（VideoRecorder 内部有自己的像素池，和显示互不影响）
-        recLock.lock()
-        let rec = recorder
-        recLock.unlock()
-        rec?.appendComposite(finalImage, context: ciContext, time: pts)
-
-        // 预览：渲染进 IOSurface 池缓冲 → 直接 enqueue 到 AVSampleBufferDisplayLayer。
-        // 不做 createCGImage、不切主线程、不设 displayBusy，彻底消除预览延时。
+        // Render the final composite once into an IOSurface pixel buffer and reuse it for both preview and recording.
+        // This avoids a second full CIContext.render pass on every camera frame.
         if let canvasBuf = renderToPool(finalImage, size: canvas) {
+            recLock.lock()
+            let rec = recorder
+            recLock.unlock()
+            rec?.appendRaw(canvasBuf, time: pts)
             display(canvasBuf, pts: pts)
         }
 
