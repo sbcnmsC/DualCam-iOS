@@ -6,6 +6,20 @@ import Photos
 import SwiftUI
 import UIKit
 
+private struct LivePhotoFrame {
+    let seconds: Double
+    let data: Data
+}
+
+private struct PendingLivePhotoCapture {
+    let identifier: String
+    let requestedAt: Double
+    let stillPhotoData: Data
+    let keyVideoFrame: Data
+    let preFrames: [LivePhotoFrame]
+    var postFrames: [LivePhotoFrame]
+}
+
 final class CameraManager: NSObject, ObservableObject {
 
     // MARK: - 界面状态（只在主线程修改）
@@ -25,6 +39,13 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var screenFlash = false
     @Published var flashEnabled = false
     @Published var timerSeconds = 0
+    @Published var livePhotoEnabled = false {
+        didSet {
+            lock.lock()
+            sharedLivePhotoEnabled = livePhotoEnabled
+            lock.unlock()
+        }
+    }
     @Published var toast: String? = nil
     @Published var outputLabel = ""
     @Published var effectiveFPS = 30
@@ -43,6 +64,7 @@ final class CameraManager: NSObject, ObservableObject {
     private let sessionQueue = DispatchQueue(label: "dualcam.session")
     private let videoQueue = DispatchQueue(label: "dualcam.video", qos: .userInitiated)
     private let audioQueue = DispatchQueue(label: "dualcam.audio")
+    private let livePhotoQueue = DispatchQueue(label: "dualcam.live-photo", qos: .userInitiated)
     private let outputA = AVCaptureVideoDataOutput()
     private let outputB = AVCaptureVideoDataOutput()
     private let audioOutput = AVCaptureAudioDataOutput()
@@ -60,6 +82,7 @@ final class CameraManager: NSObject, ObservableObject {
     private let lock = NSLock()
     private var sharedCfg = Config()
     private var sharedThumbs = false
+    private var sharedLivePhotoEnabled = false
     private var latest: [CVPixelBuffer?] = [nil, nil]
     private var bufferSizes: [CGSize] = [.zero, .zero]
     private var slotFront: [Bool] = [false, false]
@@ -77,7 +100,13 @@ final class CameraManager: NSObject, ObservableObject {
     private var countdownTimer: Timer?
     private var dragSlot = 0
     private var dragStartBias: Float = 0
-  private var pendingZoomAfterRebuild: (slot: Int, display: CGFloat)?
+    private var pendingZoomAfterRebuild: (slot: Int, display: CGFloat)?
+
+    // These are accessed only on videoQueue. JPEG data keeps the rolling buffer memory bounded.
+    private var liveFrames: [LivePhotoFrame] = []
+    private var lastLivePhotoFrameSeconds = -Double.infinity
+    private var pendingLivePhotoCapture: PendingLivePhotoCapture?
+    private var lastCompositePTS = CMTime.zero
 
     // MARK: - 启动
 
@@ -489,6 +518,8 @@ final class CameraManager: NSObject, ObservableObject {
         let full = CGRect(origin: .zero, size: canvas)
         let composed = Compositor.compose(main: mainImage, sub: subImage, cfg: c, canvas: canvas)
         let finalImage = c.filter.apply(to: composed, intensity: c.filterIntensity).cropped(to: full)
+        lastCompositePTS = pts
+        collectLivePhotoFrame(finalImage, pts: pts)
 
         lock.lock()
         let canvasChanged = canvas != lastCanvas
@@ -528,6 +559,61 @@ final class CameraManager: NSObject, ObservableObject {
             lastThumbTime = now
             makeThumbnails(from: composed, canvas: canvas)
         }
+    }
+
+    private func collectLivePhotoFrame(_ image: CIImage, pts: CMTime) {
+        lock.lock()
+        let enabled = sharedLivePhotoEnabled
+        lock.unlock()
+
+        let seconds = CMTimeGetSeconds(pts)
+        guard seconds.isFinite else { return }
+        guard enabled || pendingLivePhotoCapture != nil else {
+            liveFrames.removeAll(keepingCapacity: true)
+            lastLivePhotoFrameSeconds = -Double.infinity
+            return
+        }
+
+        var newFrame: LivePhotoFrame?
+        if seconds - lastLivePhotoFrameSeconds >= 0.095,
+           let data = LivePhotoMovieWriter.videoFrameJPEG(from: image, context: ciContext, colorSpace: srgb) {
+            let frame = LivePhotoFrame(seconds: seconds, data: data)
+            liveFrames.append(frame)
+            lastLivePhotoFrameSeconds = seconds
+            newFrame = frame
+        }
+
+        if var pending = pendingLivePhotoCapture {
+            if let frame = newFrame, frame.seconds > pending.requestedAt + 0.02 {
+                pending.postFrames.append(frame)
+            }
+
+            if seconds >= pending.requestedAt + 1.4 && pending.postFrames.count >= 8 {
+                pendingLivePhotoCapture = nil
+                let sequence = pending.preFrames.map(\.data) + [pending.keyVideoFrame] + pending.postFrames.map(\.data)
+                let stillIndex = pending.preFrames.count
+
+                livePhotoQueue.async {
+                    LivePhotoMovieWriter.writePairedMovie(
+                        identifier: pending.identifier,
+                        jpegFrames: sequence,
+                        stillFrameIndex: stillIndex
+                    ) { result in
+                        switch result {
+                        case .success(let movieURL):
+                            self.saveLivePhoto(stillData: pending.stillPhotoData, movieURL: movieURL)
+                        case .failure(let error):
+                            self.showToast("实况生成失败：\(error.localizedDescription)")
+                        }
+                    }
+                }
+            } else {
+                pendingLivePhotoCapture = pending
+            }
+        }
+
+        let cutoff = seconds - 1.7
+        liveFrames.removeAll { $0.seconds < cutoff }
     }
 
     private func beginDisplay() -> Bool {
@@ -895,6 +981,11 @@ final class CameraManager: NSObject, ObservableObject {
         }
     }
 
+    func toggleLivePhoto() {
+        livePhotoEnabled.toggle()
+        showToast(livePhotoEnabled ? "实况已开启，请等待约 1.5 秒再拍摄" : "实况已关闭")
+    }
+
     private func cancelCountdown() {
         countdownTimer?.invalidate()
         countdownTimer = nil
@@ -936,6 +1027,7 @@ final class CameraManager: NSObject, ObservableObject {
         let a = latest[0]
         let b = latest[1]
         let front = slotFront
+        let isLivePhotoCapture = sharedLivePhotoEnabled
         lock.unlock()
         guard let bufA = a else {
             showToast("还没有画面")
@@ -967,6 +1059,44 @@ final class CameraManager: NSObject, ObservableObject {
         let composed = Compositor.compose(main: mainImage, sub: subImage, cfg: c, canvas: canvas)
         let finalImage = c.filter.apply(to: composed, intensity: c.filterIntensity).cropped(to: full)
 
+        if isLivePhotoCapture {
+            guard pendingLivePhotoCapture == nil else {
+                showToast("上一张实况照片仍在处理中")
+                return
+            }
+            let requestedAt = liveFrames.last?.seconds ?? CMTimeGetSeconds(lastCompositePTS)
+            let preFrames = liveFrames.filter { $0.seconds >= requestedAt - 1.5 && $0.seconds <= requestedAt + 0.001 }
+            guard preFrames.count >= 8 else {
+                showToast("实况正在缓存，请开启后等待约 1.5 秒")
+                return
+            }
+            let identifier = UUID().uuidString
+            guard let stillData = LivePhotoMovieWriter.photoJPEG(
+                from: finalImage, context: ciContext, colorSpace: srgb, identifier: identifier
+            ), let keyFrame = LivePhotoMovieWriter.videoFrameJPEG(
+                from: finalImage, context: ciContext, colorSpace: srgb
+            ) else {
+                showToast("无法生成实况照片")
+                return
+            }
+            var rawPhotos: [Data] = []
+            if c.saveRaw {
+                if let data = jpeg(rawA) { rawPhotos.append(data) }
+                if let rawB, let data = jpeg(rawB) { rawPhotos.append(data) }
+            }
+            pendingLivePhotoCapture = PendingLivePhotoCapture(
+                identifier: identifier,
+                requestedAt: requestedAt,
+                stillPhotoData: stillData,
+                keyVideoFrame: keyFrame,
+                preFrames: preFrames,
+                postFrames: []
+            )
+            if !rawPhotos.isEmpty { saveImages(rawPhotos) }
+            showToast("照片已拍摄，正在记录实况动态…")
+            return
+        }
+
         var datas: [Data] = []
         if let d = jpeg(finalImage) { datas.append(d) }
         if c.saveRaw {
@@ -984,6 +1114,31 @@ final class CameraManager: NSObject, ObservableObject {
         let key = CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String)
         // The default path is filter-free original output; use the highest JPEG quality available here.
         return ciContext.jpegRepresentation(of: image, colorSpace: srgb, options: [key: 1.0])
+    }
+
+    private func saveLivePhoto(stillData: Data, movieURL: URL) {
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self] status in
+            guard let self = self else {
+                try? FileManager.default.removeItem(at: movieURL)
+                return
+            }
+            guard status == .authorized || status == .limited else {
+                try? FileManager.default.removeItem(at: movieURL)
+                self.showToast("请在「设置」中允许保存到照片")
+                return
+            }
+
+            PHPhotoLibrary.shared().performChanges({
+                let request = PHAssetCreationRequest.forAsset()
+                request.addResource(with: .photo, data: stillData, options: nil)
+                let options = PHAssetResourceCreationOptions()
+                options.shouldMoveFile = true
+                request.addResource(with: .pairedVideo, fileURL: movieURL, options: options)
+            }, completionHandler: { success, error in
+                try? FileManager.default.removeItem(at: movieURL)
+                self.showToast(success ? "实况照片已保存" : "实况保存失败：\(error?.localizedDescription ?? "未知错误")")
+            })
+        }
     }
 
     private func saveImages(_ datas: [Data]) {
