@@ -15,6 +15,18 @@ The current project already has a native iOS target, SwiftUI screens, an `AVCapt
 
 This is significant overlap with DualCam Studio. Replacing the current camera engine wholesale would risk regressing existing features (filtering, per-lens controls, Live Photo, timer, and current layout gestures) and would introduce a broad Swift 6 / architecture migration at the same time.
 
+## Live Photo status and integration strategy
+
+The existing DualCam-iOS branch already contains an experimental Live Photo pipeline in `LivePhotoWriter.swift` and `CameraManager.swift`: it builds a matching JPEG/MOV pair, embeds a shared content identifier and still-image-time metadata, buffers pre/post frames, and saves the pair as one Photos asset. The README correctly marks this as not yet fully verified on a real device. DualCam Studio's documented feature set is primarily video recording and does not replace this Live Photo pipeline, so the integration must preserve it and harden it rather than remove it.
+
+### Live Photo hardening checklist
+
+1. Verify the paired JPEG/MOV is recognized by Photos as a Live Photo on iPhone 16-series hardware, including playback and the key photo frame.
+2. Verify the maker metadata identifier and MOV content identifier match, and that the still-image-time metadata track lands on the intended frame.
+3. Test pre/post capture timing, insufficient buffered frames, rapid repeat captures, disabling Live Photo while a capture is pending, and writer failures.
+4. Keep the composited still and motion frames visually consistent with the active layout, filter, crop, orientation, and front-camera mirror state.
+5. Test Photos permission denial, low storage, app backgrounding/interruption, and cleanup of temporary MOV files.
+
 ## Recommended integration approach
 
 ### Phase 1 — keep the existing capture engine
@@ -47,4 +59,4 @@ Keep `CameraManager`, `Compositor`, and `VideoRecorder` as the production path i
 
 ## Decision
 
-Proceed with small, independently testable improvements. Do not wholesale-replace the existing camera stack. The immediate next implementation should be a focused audit of format negotiation and layout parity, then a separate PR for the specific fixes supported by code and tests.
+Proceed with small, independently testable improvements. Do not wholesale-replace the existing camera stack. The first PR adds a safe resource-budget failure path; the next implementation should improve the resolution/FPS negotiation ladder, compare layout parity, and harden the existing experimental Live Photo pipeline. Each change should remain separately reviewable. Do not claim Live Photo support is production-ready until the paired asset is verified in Photos on a real iPhone.
