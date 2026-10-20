@@ -6,6 +6,8 @@ import UniformTypeIdentifiers
 
 enum LivePhotoWriterError: LocalizedError {
     case noFrames
+    case invalidStillFrameIndex
+    case inconsistentFrameDimensions
     case cannotCreateMetadata
     case cannotStartWriter
     case cannotCreatePixelBuffer
@@ -15,6 +17,8 @@ enum LivePhotoWriterError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .noFrames: return "实况视频没有有效帧"
+        case .invalidStillFrameIndex: return "实况关键帧索引无效"
+        case .inconsistentFrameDimensions: return "实况视频帧尺寸不一致"
         case .cannotCreateMetadata: return "无法创建实况照片元数据"
         case .cannotStartWriter: return "无法启动实况视频编码"
         case .cannotCreatePixelBuffer: return "无法创建实况视频帧"
@@ -81,6 +85,29 @@ enum LivePhotoMovieWriter {
               jpegFrames.count >= 3 else {
             completion(.failure(LivePhotoWriterError.noFrames))
             return
+        }
+
+        // A Live Photo's still-image-time marker must refer to the exact frame
+        // represented by the paired still image. Reject invalid indices instead
+        // of silently clamping them to a different frame.
+        guard jpegFrames.indices.contains(stillFrameIndex) else {
+            completion(.failure(LivePhotoWriterError.invalidStillFrameIndex))
+            return
+        }
+
+        // Every buffered frame should come from the same composed canvas. Reject
+        // malformed or mixed-size JPEGs instead of stretching a bad frame into
+        // the output dimensions and producing a visually inconsistent Live Photo.
+        for data in jpegFrames {
+            guard let frameSource = CGImageSourceCreateWithData(data as CFData, nil),
+                  let frame = CGImageSourceCreateImageAtIndex(frameSource, 0, nil) else {
+                completion(.failure(LivePhotoWriterError.noFrames))
+                return
+            }
+            guard frame.width == firstImage.width, frame.height == firstImage.height else {
+                completion(.failure(LivePhotoWriterError.inconsistentFrameDimensions))
+                return
+            }
         }
 
         let width = max(2, firstImage.width / 2 * 2)
@@ -194,8 +221,7 @@ enum LivePhotoMovieWriter {
                 }
             }
 
-            let safeIndex = min(max(stillFrameIndex, 0), jpegFrames.count - 1)
-            let stillTime = CMTime(value: Int64(safeIndex), timescale: 10)
+            let stillTime = CMTime(value: Int64(stillFrameIndex), timescale: 10)
             let stillItem = AVMutableMetadataItem()
             stillItem.keySpace = AVMetadataKeySpace(rawValue: "mdta")
             stillItem.key = "com.apple.quicktime.still-image-time" as NSString
