@@ -136,6 +136,6 @@ private extension CIImage {
     func transformedToFill(_ rect: CGRect) -> CIImage {
         let sx = rect.width / extent.width, sy = rect.height / extent.height
         let scaled = transformed(by: CGAffineTransform(scaleX: max(sx, sy), y: max(sx, sy)))
-        return scaled.transformed(by: CGAffineTransform(x: 1, y: 0, z: 0, w: 1, tx: rect.midX - scaled.extent.midX, ty: rect.midY - scaled.extent.midY))
+        return scaled.transformed(by: CGAffineTransform(a: 1, b: 0, c: 0, d: 1, tx: rect.midX - scaled.extent.midX, ty: rect.midY - scaled.extent.midY))
     }
 }
