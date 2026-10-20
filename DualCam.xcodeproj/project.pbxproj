@@ -11,6 +11,7 @@
   A1000000000000000000000D = {isa = PBXBuildFile; fileRef = B1000000000000000000000D;};
   A1000000000000000000000E = {isa = PBXBuildFile; fileRef = B1000000000000000000000E;};
   A1000000000000000000000F = {isa = PBXBuildFile; fileRef = B1000000000000000000000F;};
+  A10000000000000000000010 = {isa = PBXBuildFile; fileRef = B10000000000000000000010;};
   B10000000000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DualCamApp.swift; sourceTree = "<group>";};
   B10000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraManager.swift; sourceTree = "<group>";};
   B10000000000000000000003 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraScreen.swift; sourceTree = "<group>";};
@@ -20,16 +21,17 @@
   B1000000000000000000000D = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoRecorder.swift; sourceTree = "<group>";};
   B1000000000000000000000E = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewView.swift; sourceTree = "<group>";};
   B1000000000000000000000F = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolPanel.swift; sourceTree = "<group>";};
+  B10000000000000000000010 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraHomeScreen.swift; sourceTree = "<group>";};
   B10000000000000000000004 = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>";};
   B10000000000000000000005 = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>";};
   B10000000000000000000006 = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DualCam.app; sourceTree = BUILT_PRODUCTS_DIR;};
   C10000000000000000000001 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;};
-  C10000000000000000000002 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000001, A10000000000000000000002, A10000000000000000000003, A1000000000000000000000A, A1000000000000000000000B, A1000000000000000000000C, A1000000000000000000000D, A1000000000000000000000E, A1000000000000000000000F,); runOnlyForDeploymentPostprocessing = 0;};
+  C10000000000000000000002 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000001, A10000000000000000000002, A10000000000000000000003, A1000000000000000000000A, A1000000000000000000000B, A1000000000000000000000C, A1000000000000000000000D, A1000000000000000000000E, A1000000000000000000000F, A10000000000000000000010,); runOnlyForDeploymentPostprocessing = 0;};
   C10000000000000000000003 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;};
   D10000000000000000000001 = {isa = PBXGroup; children = (D10000000000000000000002, B10000000000000000000005, B10000000000000000000006,); sourceTree = "<group>";};
   D10000000000000000000002 = {isa = PBXGroup; path = DualCam; sourceTree = "<group>"; children = (B10000000000000000000001, D10000000000000000000003, D10000000000000000000004, B10000000000000000000004,);};
   D10000000000000000000003 = {isa = PBXGroup; path = Camera; sourceTree = "<group>"; children = (B10000000000000000000002, B1000000000000000000000A, B1000000000000000000000B, B1000000000000000000000C, B1000000000000000000000D,);};
-  D10000000000000000000004 = {isa = PBXGroup; path = UI; sourceTree = "<group>"; children = (B10000000000000000000003, B1000000000000000000000E, B1000000000000000000000F,);};
+  D10000000000000000000004 = {isa = PBXGroup; path = UI; sourceTree = "<group>"; children = (B10000000000000000000003, B1000000000000000000000E, B1000000000000000000000F, B10000000000000000000010,);};
   E10000000000000000000001 = {isa = PBXNativeTarget; buildConfigurationList = F10000000000000000000002; buildPhases = (C10000000000000000000001, C10000000000000000000002, C10000000000000000000003,); buildRules = (); dependencies = (); name = DualCam; productName = DualCam; productReference = B10000000000000000000006; productType = "com.apple.product-type.application";};
   F10000000000000000000001 = {isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = 1; LastUpgradeCheck = 1600; TargetAttributes = {E10000000000000000000001 = {CreatedOnToolsVersion = 16.0;};};}; buildConfigurationList = F10000000000000000000003; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base,); mainGroup = D10000000000000000000001; projectDirPath = ""; projectRoot = ""; targets = (E10000000000000000000001,);};
   G10000000000000000000001 = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; IPHONEOS_DEPLOYMENT_TARGET = 17.0; SDKROOT = iphoneos; SWIFT_VERSION = 5.0;}; name = Debug;};

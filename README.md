@@ -29,20 +29,21 @@ iPhone 双摄原生相机（Swift / SwiftUI，基于 `AVCaptureMultiCamSession`�
 
 **对焦 / 曝光**：点按画面对焦并测光（点小窗就对小窗镜头）；画面内容明显变化后自动回到连续对焦；点按后上下滑动实时调曝光补偿；双指捏合变焦。
 
-**变焦**：快门上方显示当前倍率和快捷档位（超广角 0.5×，长焦按实际倍率），主 / 副镜头各自记住自己的变焦。
+**变焦**：主界面固定显示 `.5 / 1× / 2 / 5` 四个快捷档位；选择焦段时优先切换支持的后置物理镜头组合，再用数字变焦补足。可用组合随 iPhone 机型变化；主 / 副镜头分别记忆变焦。
 
 **拍照 / 录像**：定时器倒数（再点一下取消）；录像时可随时切布局、拖小窗、换滤镜，合成视频实时跟随。照片保存为 JPEG，视频为 HEVC（H.265），均写入系统「照片」。
 
 **稳定性**：预览直接绘制到 `CALayer`，不经过 SwiftUI 逐帧刷新；会话先提交配置再启动；按多摄支持的格式选取并检查硬件开销；处理会话中断、运行时错误；进入后台自动停止录像。
 
-## 尚未实现
+## 尚未实现 / 已知限制
 
-- 实况照片、视频转实况
-- 小窗之外的第三路画面、HDR / 人像等高级模式
+- **实况照片（Live Photos）尚未实现**。当前照片是静态 JPEG，视频是独立 MOV 文件。
+- 小窗之外的第三路画面、HDR / 人像等高级模式。
+- `.5 / 1× / 2 / 5` 是固定快捷入口，但真实物理焦段可用性取决于具体 iPhone 与多摄组合；不支持时应用会提示。
 
 ## 构建
 
 1. 在 macOS 上用 Xcode 16+ 打开 `DualCam.xcodeproj`，选择自己的 Team，并把 `com.example.DualCam` 改成唯一的 Bundle ID。
 2. 连接支持多摄的 iPhone（iOS 17+），运行并允许相机、麦克风、照片权限。
 
-或者直接用 GitHub Actions：每次推送到 `main` 会编译未签名 IPA，上传到 Actions 的 Artifacts，并自动发布到 Releases。IPA 未签名，需要用 Sideloadly / AltStore 等工具用自己的 Apple ID 重新签名后安装。
+或者直接用 GitHub Actions：每次推送到 `main` 会编译未签名 IPA，上传到 Actions Artifacts 并发布到 Releases。**正式签名 IPA 需要 Apple 签名材料**：开发者 Team、证书（P12）及密码、Provisioning Profile，并应存放在 GitHub Actions Secrets 中；仓库本身无法凭空生成这些材料。临时个人安装可以用 Sideloadly / AltStore 以自己的 Apple ID 重新签名。

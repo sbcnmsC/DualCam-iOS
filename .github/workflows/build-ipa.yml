@@ -1,4 +1,4 @@
-name: Build iOS app (unsigned IPA)
+name: Build iOS app
 
 on:
   workflow_dispatch:
@@ -20,33 +20,104 @@ jobs:
           xcodebuild -version
           xcodebuild -showsdks
 
-      - name: Build for iPhone (unsigned)
+      - name: Prepare Apple signing (optional)
+        id: signing
+        shell: bash
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_BUNDLE_ID: ${{ secrets.APPLE_BUNDLE_ID }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${APPLE_CERTIFICATE_BASE64:-}" || -z "${APPLE_CERTIFICATE_PASSWORD:-}" || -z "${APPLE_PROVISIONING_PROFILE_BASE64:-}" || -z "${APPLE_TEAM_ID:-}" || -z "${APPLE_BUNDLE_ID:-}" ]]; then
+            echo "SIGNING_ENABLED=false" >> "$GITHUB_ENV"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Signing secrets are incomplete; building an unsigned IPA."
+            exit 0
+          fi
+
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
+          echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          echo "$APPLE_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/profile.mobileprovision"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/build.keychain"
+          security set-keychain-settings -lut 21600 "$RUNNER_TEMP/build.keychain"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/build.keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$RUNNER_TEMP/build.keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/build.keychain"
+          security list-keychains -d user -s "$RUNNER_TEMP/build.keychain" login.keychain-db
+
+          security cms -D -i "$RUNNER_TEMP/profile.mobileprovision" > "$RUNNER_TEMP/profile.plist"
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print UUID' "$RUNNER_TEMP/profile.plist")
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp "$RUNNER_TEMP/profile.mobileprovision" "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+
+          echo "SIGNING_ENABLED=true" >> "$GITHUB_ENV"
+          echo "APPLE_PROFILE_UUID=$PROFILE_UUID" >> "$GITHUB_ENV"
+          echo "APPLE_TEAM_ID=$APPLE_TEAM_ID" >> "$GITHUB_ENV"
+          echo "APPLE_BUNDLE_ID=$APPLE_BUNDLE_ID" >> "$GITHUB_ENV"
+          echo "APPLE_SIGNING_IDENTITY=${APPLE_SIGNING_IDENTITY:-Apple Distribution}" >> "$GITHUB_ENV"
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build for iPhone
+        shell: bash
         run: |
           set -o pipefail
-          xcodebuild \
-            -project DualCam.xcodeproj \
-            -scheme DualCam \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath build/DerivedData \
-            CODE_SIGNING_ALLOWED=NO \
-            build | tee build.log
+          COMMON=(
+            -project DualCam.xcodeproj
+            -scheme DualCam
+            -configuration Release
+            -sdk iphoneos
+            -destination 'generic/platform=iOS'
+            -derivedDataPath build/DerivedData
+          )
+
+          if [[ "${SIGNING_ENABLED:-false}" == "true" ]]; then
+            xcodebuild "${COMMON[@]}" \
+              CODE_SIGNING_ALLOWED=YES \
+              CODE_SIGNING_REQUIRED=YES \
+              CODE_SIGN_STYLE=Manual \
+              DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+              PRODUCT_BUNDLE_IDENTIFIER="$APPLE_BUNDLE_ID" \
+              PROVISIONING_PROFILE_SPECIFIER="$APPLE_PROFILE_UUID" \
+              CODE_SIGN_IDENTITY="$APPLE_SIGNING_IDENTITY" \
+              build | tee build.log
+          else
+            xcodebuild "${COMMON[@]}" CODE_SIGNING_ALLOWED=NO build | tee build.log
+          fi
+
+      - name: Verify signed app
+        if: steps.signing.outputs.enabled == 'true'
+        run: |
+          APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/DualCam.app"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          test -f "$APP_PATH/embedded.mobileprovision"
+          echo "IPA_FILENAME=DualCam-signed.ipa" >> "$GITHUB_ENV"
+
+      - name: Select unsigned package name
+        if: steps.signing.outputs.enabled != 'true'
+        run: echo "IPA_FILENAME=DualCam-unsigned.ipa" >> "$GITHUB_ENV"
+
+      - name: Package IPA
+        run: |
+          set -euo pipefail
+          APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/DualCam.app"
+          mkdir -p package/Payload
+          cp -R "$APP_PATH" package/Payload/
+          cd package
+          /usr/bin/zip -qry "../$IPA_FILENAME" Payload
 
       - name: Annotate compiler errors
         if: failure()
         run: |
-          grep -E "error:" build.log | sort -u | head -40 | while IFS= read -r line; do
-            echo "::error::${line}"
-          done
-
-      - name: Package unsigned IPA
-        if: success()
-        run: |
-          mkdir -p package/Payload
-          cp -R build/DerivedData/Build/Products/Release-iphoneos/DualCam.app package/Payload/
-          cd package
-          /usr/bin/zip -r ../DualCam-unsigned.ipa Payload
+          if [ -f build.log ]; then
+            grep -E "error:" build.log | sort -u | head -40 | while IFS= read -r line; do
+              echo "::error::${line}"
+            done
+          fi
 
       - name: Upload build logs
         if: always()
@@ -56,12 +127,12 @@ jobs:
           path: build.log
           if-no-files-found: ignore
 
-      - name: Upload unsigned IPA
+      - name: Upload IPA artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: DualCam-unsigned-IPA
-          path: DualCam-unsigned.ipa
+          name: DualCam-IPA-${{ github.run_number }}
+          path: DualCam-*.ipa
           if-no-files-found: error
 
       - name: Publish GitHub Release
@@ -71,7 +142,8 @@ jobs:
           tag_name: build-${{ github.run_number }}
           name: DualCam build ${{ github.run_number }}
           body: |
-            未签名 IPA，安装前需要用 Sideloadly / AltStore 等工具用自己的 Apple ID 重新签名。
+            构建模式由仓库的 Apple 签名 Secrets 决定。
+            文件名为 DualCam-signed.ipa 时表示已使用配置的证书和描述文件签名；DualCam-unsigned.ipa 为未签名版本。
             对应提交：${{ github.sha }}
           prerelease: true
-          files: DualCam-unsigned.ipa
+          files: DualCam-*.ipa

@@ -70,7 +70,7 @@ struct Config: Equatable {
     // 布局
     var layout: LayoutMode = .pip
     var swapped = false
-    var aspect: CanvasAspect = .r916
+    var aspect: CanvasAspect = .r34
     var pipCenter = CGPoint(x: 0.76, y: 0.20)   // 归一化，左上角为原点
     var pipWidth: CGFloat = 0.32                // 占画布宽度的比例
     var pipRatio: PiPRatio = .r34
