@@ -711,7 +711,7 @@ final class CameraManager: NSObject, ObservableObject {
 
         if frame.seconds >= pending.requestedAt + 1.4 && pending.postFrames.count >= 8 {
             pendingLivePhotoCapture = nil
-            let sequence = pending.preFrames.map(\\.data) + [pending.keyVideoFrame] + pending.postFrames.map(\\.data)
+            let sequence = pending.preFrames.map(\.data) + [pending.keyVideoFrame] + pending.postFrames.map(\.data)
             let stillIndex = pending.preFrames.count
 
             livePhotoQueue.async {
@@ -724,7 +724,7 @@ final class CameraManager: NSObject, ObservableObject {
                     case .success(let movieURL):
                         self.saveLivePhoto(stillData: pending.stillPhotoData, movieURL: movieURL)
                     case .failure(let error):
-                        self.showToast("实况生成失败：\\(error.localizedDescription)")
+                        self.showToast("实况生成失败：\(error.localizedDescription)")
                     }
                 }
             }
