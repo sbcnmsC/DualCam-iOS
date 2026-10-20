@@ -1,29 +1,48 @@
-# DualCam iOS
+# DualCam 双摄相机
 
-Native iPhone camera app scaffold using Swift and SwiftUI, based on the supplied DualCam requirements.
+iPhone 双摄原生相机（Swift / SwiftUI，基于 `AVCaptureMultiCamSession`，iOS 17+）。两个摄像头同时取景，实时合成为画中画或上下分屏，可同时拍照、录像。
 
-## Current implementation
+预览显示的就是最终合成画面，**滤镜、小窗位置、画幅都是所见即所得**。
 
-- Attempts to start an `AVCaptureMultiCamSession` with the rear and front wide cameras on supported devices.
-- Basic live composite preview with picture-in-picture / split layout switch.
-- Basic grid overlay, zoom buttons, timer UI, and JPEG photo saving to Photos.
-- Xcode project targeting iOS 17+.
+> 状态：代码已通过 GitHub Actions 云端编译，**尚未在真机上完整测试**。多摄支持因机型而异（需要 iPhone XS / XR 及以上），部分镜头组合、60 帧、4K 在不同机型上可能退回较低规格。
 
-## Known limitations
+## 已实现
 
-This is an initial scaffold, not a complete implementation of every requirement. In particular:
+**界面**
 
-- Video recording and export are not implemented yet; the record control currently displays a status message.
-- Picture-in-picture drag/resize/swap and split-divider gestures are not implemented.
-- Flash, timer capture delay, exposure slider, filter collection, full camera-combination switching, manual ISO/shutter, white balance, focus controls, and true 4K / 60 fps selection are incomplete or UI-only.
-- Live Photo, saving original streams, audio recording, stabilization controls, interruption recovery, and extensive device capability negotiation are not implemented.
-- Multi-camera support varies by iPhone model and camera combination. This code requires device-side validation and may need adjustments for specific hardware.
+- 顶部：闪光灯 / 定时器（关 → 3 秒 → 10 秒）/ 布局切换（画中画 ↔ 上下分屏）；右侧是镜头组合，点一下循环切换（按本机支持的组合自动列出）；中间显示输出分辨率和帧率，录像时变成计时。
+- 底部：工具面板开关、拍照 / 录像切换（点击或左右滑动）、快门、主 / 副画面互换。
 
-## Build and test
+**小窗（画中画）**
 
-1. On macOS, open `DualCam.xcodeproj` in Xcode 16 or newer.
-2. Select your own development Team and change `com.example.DualCam` to a unique Bundle Identifier if needed.
-3. Connect a physical iPhone running iOS 17 or later that supports `AVCaptureMultiCamSession`.
-4. Grant camera and Photos permissions and check the Xcode console for capture-session errors.
+- 手指拖动小窗，松手自动吸附到边缘 / 中线（可关）
+- 双指在小窗上捏合缩放，或拖小窗右下角的把手缩放
+- 点一下小窗：互换主 / 副画面
+- 「小窗」页：大小、形状（圆角 / 圆形）、比例（3:4 / 1:1 / 4:3 / 9:16）、圆角、边框、透明度、复位位置
+- 上下分屏时，拖动中间分割线（或面板里的滑杆）调整上下比例
 
-The project has **not** been compiled with Xcode or tested on a physical iPhone in this environment. No successful build or device test is claimed.
+**滤镜**：12 个实时滤镜（原片、鲜艳、暖阳、冷调、清新、电影、胶片、复古、褪色、铬黄、黑白、黑金），缩略图用当前画面实时生成，可调强度。滤镜作用在合成后的照片 / 视频上。
+
+**参数**（主 / 副镜头分别设置）：变焦、曝光补偿、手动 ISO / 快门、白平衡（色温 + 色调）、手动对焦、锁定对焦 / 曝光。
+
+**设置**：画幅 9:16 / 3:4 / 1:1；分辨率 720p / 1080p / 最高（不超过摄像头实际像素）；帧率 30 / 60；保存两路原片、弱光增亮、视频防抖、前置镜像、三分参考线。
+
+**对焦 / 曝光**：点按画面对焦并测光（点小窗就对小窗镜头）；画面内容明显变化后自动回到连续对焦；点按后上下滑动实时调曝光补偿；双指捏合变焦。
+
+**变焦**：快门上方显示当前倍率和快捷档位（超广角 0.5×，长焦按实际倍率），主 / 副镜头各自记住自己的变焦。
+
+**拍照 / 录像**：定时器倒数（再点一下取消）；录像时可随时切布局、拖小窗、换滤镜，合成视频实时跟随。照片保存为 JPEG，视频为 HEVC（H.265），均写入系统「照片」。
+
+**稳定性**：预览直接绘制到 `CALayer`，不经过 SwiftUI 逐帧刷新；会话先提交配置再启动；按多摄支持的格式选取并检查硬件开销；处理会话中断、运行时错误；进入后台自动停止录像。
+
+## 尚未实现
+
+- 实况照片、视频转实况
+- 小窗之外的第三路画面、HDR / 人像等高级模式
+
+## 构建
+
+1. 在 macOS 上用 Xcode 16+ 打开 `DualCam.xcodeproj`，选择自己的 Team，并把 `com.example.DualCam` 改成唯一的 Bundle ID。
+2. 连接支持多摄的 iPhone（iOS 17+），运行并允许相机、麦克风、照片权限。
+
+或者直接用 GitHub Actions：每次推送到 `main` 会编译未签名 IPA，上传到 Actions 的 Artifacts，并自动发布到 Releases。IPA 未签名，需要用 Sideloadly / AltStore 等工具用自己的 Apple ID 重新签名后安装。

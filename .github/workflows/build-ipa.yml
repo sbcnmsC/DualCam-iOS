@@ -5,6 +5,9 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-15
@@ -30,6 +33,13 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build | tee build.log
 
+      - name: Annotate compiler errors
+        if: failure()
+        run: |
+          grep -E "error:" build.log | sort -u | head -40 | while IFS= read -r line; do
+            echo "::error::${line}"
+          done
+
       - name: Package unsigned IPA
         if: success()
         run: |
@@ -53,3 +63,15 @@ jobs:
           name: DualCam-unsigned-IPA
           path: DualCam-unsigned.ipa
           if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: DualCam build ${{ github.run_number }}
+          body: |
+            未签名 IPA，安装前需要用 Sideloadly / AltStore 等工具用自己的 Apple ID 重新签名。
+            对应提交：${{ github.sha }}
+          prerelease: true
+          files: DualCam-unsigned.ipa
