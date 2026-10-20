@@ -482,7 +482,7 @@ final class CameraManager: NSObject, ObservableObject {
                 if self.isRecording { self.stopRecording() }
             }
         }
-        nc.addObserver(forName: .AVCaptureSessionInterruptionEnded, object: session, queue: nil) { [weak self] in
+        nc.addObserver(forName: .AVCaptureSessionInterruptionEnded, object: session, queue: nil) { [weak self] _ in
             self?.postStatus("双摄已启动")
         }
         nc.addObserver(forName: .AVCaptureDeviceSubjectAreaDidChange, object: nil, queue: nil) { [weak self] _ in
