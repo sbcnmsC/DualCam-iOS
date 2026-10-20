@@ -1393,7 +1393,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate, AVCapture
         recLock.lock()
         let raw = rawRecorders[slot]
         recLock.unlock()
-        raw?.appendRaw(pixel, time: pts)
+        raw?.appendPixelBuffer(pixel, time: pts)
 
         if slot == 0 { processFrame(pts) }
     }
