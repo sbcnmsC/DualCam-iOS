@@ -267,8 +267,23 @@ final class CameraManager: NSObject, ObservableObject {
             return
         }
 
-        if (session.hardwareCost > 1.0 || session.systemPressureCost > 1.0) && attempt + 1 < heights.count {
-            rebuild(attempt: attempt + 1, resetStates: resetStates)
+        let exceedsMultiCamBudget = session.hardwareCost > 1.0 || session.systemPressureCost > 1.0
+        if exceedsMultiCamBudget {
+            if attempt + 1 < heights.count {
+                rebuild(attempt: attempt + 1, resetStates: resetStates)
+                return
+            }
+
+            // Do not report a ready session when the lowest supported format still
+            // exceeds the MultiCam resource budget. This is especially important on
+            // devices where a front/rear lens pair is supported but the requested
+            // quality cannot be sustained concurrently.
+            session.stopRunning()
+            postStatus("当前摄像头组合超出多摄资源预算，请降低帧率或更换镜头组合")
+            DispatchQueue.main.async {
+                self.ready = false
+                self.statusText = "双摄资源不足"
+            }
             return
         }
 
