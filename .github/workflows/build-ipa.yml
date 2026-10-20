@@ -1,0 +1,55 @@
+name: Build iOS app (unsigned IPA)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          xcodebuild -version
+          xcodebuild -showsdks
+
+      - name: Build for iPhone (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project DualCam.xcodeproj \
+            -scheme DualCam \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            build | tee build.log
+
+      - name: Package unsigned IPA
+        if: success()
+        run: |
+          mkdir -p package/Payload
+          cp -R build/DerivedData/Build/Products/Release-iphoneos/DualCam.app package/Payload/
+          cd package
+          /usr/bin/zip -r ../DualCam-unsigned.ipa Payload
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcode-build-logs
+          path: build.log
+          if-no-files-found: ignore
+
+      - name: Upload unsigned IPA
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DualCam-unsigned-IPA
+          path: DualCam-unsigned.ipa
+          if-no-files-found: error
