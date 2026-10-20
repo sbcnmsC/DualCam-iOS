@@ -11,7 +11,7 @@ Reference license: MIT (retain its copyright and license notice if any substanti
 
 ## Current repository findings
 
-The current project already has a native iOS target, SwiftUI screens, an `AVCaptureMultiCamSession`-based `CameraManager`, a `Compositor`, a `VideoRecorder`, a preview layer, filters, settings, and Live Photo work. The project targets iOS 17 and uses Swift language mode 5. Its existing README explicitly says that full real-device validation has not yet been completed.
+The current project already has a native iOS target, SwiftUI screens, an `AVCaptureMultiCamSession`-based `CameraManager`, a `Compositor`, a `VideoRecorder`, audio capture and optional audio writing, a preview layer, filters, settings, and an experimental Live Photo writer. The project targets iOS 17 and uses Swift language mode 5. Its existing README explicitly says that full real-device validation has not yet been completed.
 
 This is significant overlap with DualCam Studio. Replacing the current camera engine wholesale would risk regressing existing features (filtering, per-lens controls, Live Photo, timer, and current layout gestures) and would introduce a broad Swift 6 / architecture migration at the same time.
 
@@ -21,11 +21,13 @@ The existing DualCam-iOS branch already contains an experimental Live Photo pipe
 
 ### Live Photo hardening checklist
 
-1. Verify the paired JPEG/MOV is recognized by Photos as a Live Photo on iPhone 16-series hardware, including playback and the key photo frame.
-2. Verify the maker metadata identifier and MOV content identifier match, and that the still-image-time metadata track lands on the intended frame.
-3. Test pre/post capture timing, insufficient buffered frames, rapid repeat captures, disabling Live Photo while a capture is pending, and writer failures.
-4. Keep the composited still and motion frames visually consistent with the active layout, filter, crop, orientation, and front-camera mirror state.
-5. Test Photos permission denial, low storage, app backgrounding/interruption, and cleanup of temporary MOV files.
+1. **Implemented in this branch:** validate that the still-frame index is within the buffered sequence and reject mixed-size or undecodable frame JPEGs before creating a movie. This prevents silently clamping a bad keyframe index or stretching malformed frames.
+2. Verify the paired JPEG/MOV is recognized by Photos as a Live Photo on iPhone 16-series hardware, including playback and the key photo frame.
+3. Verify the MakerApple identifier and MOV content identifier match, and that the still-image-time metadata track lands on the intended frame.
+4. Test pre/post capture timing, insufficient buffered frames, rapid repeat captures, disabling Live Photo while a capture is pending, and writer failures.
+5. Keep the composited still and motion frames visually consistent with the active layout, filter, crop, orientation, and front-camera mirror state.
+6. Test Photos permission denial, low storage, app backgrounding/interruption, and cleanup of temporary MOV files.
+7. **Audio note:** normal video recording already has an audio output/writer path. The experimental Live Photo movie writer currently writes video plus still-image-time metadata only; audio capture/writing must be deliberately added and validated if the product requirement is sound-bearing Live Photos. Do not claim audio support until verified.
 
 ## Recommended integration approach
 
@@ -56,6 +58,10 @@ Keep `CameraManager`, `Compositor`, and `VideoRecorder` as the production path i
 - [ ] Unit tests cover any extracted pure logic.
 - [ ] Real-device smoke test recorded separately from simulator CI.
 - [ ] No claim of IPA signing or device verification unless actually performed.
+
+## Native camera UI decision
+
+Use a native SwiftUI interface styled to feel familiar to iPhone users (clean black camera canvas, native-feeling shutter/control affordances, compact top controls, bottom mode selector and responsive safe-area behavior). A third-party app cannot embed or reuse Apple's private Camera app interface itself; use public SwiftUI/UIKit APIs and AVFoundation while keeping the app's dual-camera controls accessible.
 
 ## Decision
 
