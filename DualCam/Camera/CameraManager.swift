@@ -676,12 +676,29 @@ final class CameraManager: NSObject, ObservableObject {
         }
 
         var newFrame: LivePhotoFrame?
-        if seconds - lastLivePhotoFrameSeconds >= 0.095,
-           let data = LivePhotoMovieWriter.videoFrameJPEG(from: image, context: ciContext, colorSpace: srgb) {
-            let frame = LivePhotoFrame(seconds: seconds, data: data)
-            liveFrames.append(frame)
+        // JPEG encoding is expensive and must not run on the real-time camera callback.
+        // Sample the already-composited frame at a modest cadence, retain only the latest
+        // pending frame, and encode it on the dedicated live-photo queue.
+        if seconds - lastLivePhotoFrameSeconds >= 0.12 {
             lastLivePhotoFrameSeconds = seconds
-            newFrame = frame
+            let sampledImage = image
+            livePhotoQueue.async { [weak self] in
+                guard let self,
+                      let data = LivePhotoMovieWriter.videoFrameJPEG(
+                        from: sampledImage, context: self.ciContext, colorSpace: self.srgb
+                      ) else { return }
+                let frame = LivePhotoFrame(seconds: seconds, data: data)
+                self.videoQueue.async {
+                    let enabledNow: Bool
+                    self.lock.lock()
+                    enabledNow = self.sharedLivePhotoEnabled
+                    self.lock.unlock()
+                    guard enabledNow || self.pendingLivePhotoCapture != nil else { return }
+                    self.liveFrames.append(frame)
+                    let cutoff = seconds - 1.7
+                    self.liveFrames.removeAll { $0.seconds < cutoff }
+                }
+            }
         }
 
         if var pending = pendingLivePhotoCapture {
