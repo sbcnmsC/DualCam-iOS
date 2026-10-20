@@ -968,7 +968,8 @@ final class CameraManager: NSObject, ObservableObject {
 
     private func jpeg(_ image: CIImage) -> Data? {
         let key = CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String)
-        return ciContext.jpegRepresentation(of: image, colorSpace: srgb, options: [key: 0.95])
+        // The default path is filter-free original output; use the highest JPEG quality available here.
+        return ciContext.jpegRepresentation(of: image, colorSpace: srgb, options: [key: 1.0])
     }
 
     private func saveImages(_ datas: [Data]) {
