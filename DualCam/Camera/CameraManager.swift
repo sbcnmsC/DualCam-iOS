@@ -67,7 +67,8 @@ final class CameraManager: NSObject, ObservableObject {
     // 主渲染/显示队列：userInteractive 保证帧回调不被其它任务挤占，预览才跟手。
     private let videoQueue = DispatchQueue(label: "dualcam.video", qos: .userInteractive)
     private let audioQueue = DispatchQueue(label: "dualcam.audio")
-    private let livePhotoQueue = DispatchQueue(label: "dualcam.live-photo", qos: .userInitiated)
+    private let livePhotoQueue = DispatchQueue(label: "dualcam.live-photo-frames", qos: .userInitiated)
+    private let livePhotoWriterQueue = DispatchQueue(label: "dualcam.live-photo-writer", qos: .utility)
     private let thumbnailQueue = DispatchQueue(label: "dualcam.thumbnails", qos: .utility)
     private let outputA = AVCaptureVideoDataOutput()
     private let outputB = AVCaptureVideoDataOutput()
@@ -267,8 +268,23 @@ final class CameraManager: NSObject, ObservableObject {
             return
         }
 
-        if (session.hardwareCost > 1.0 || session.systemPressureCost > 1.0) && attempt + 1 < heights.count {
-            rebuild(attempt: attempt + 1, resetStates: resetStates)
+        let exceedsMultiCamBudget = session.hardwareCost > 1.0 || session.systemPressureCost > 1.0
+        if exceedsMultiCamBudget {
+            if attempt + 1 < heights.count {
+                rebuild(attempt: attempt + 1, resetStates: resetStates)
+                return
+            }
+
+            // Do not report a ready session when the lowest supported format still
+            // exceeds the MultiCam resource budget. This is especially important on
+            // devices where a front/rear lens pair is supported but the requested
+            // quality cannot be sustained concurrently.
+            session.stopRunning()
+            postStatus("当前摄像头组合超出多摄资源预算，请降低帧率或更换镜头组合")
+            DispatchQueue.main.async {
+                self.ready = false
+                self.statusText = "双摄资源不足"
+            }
             return
         }
 
@@ -560,15 +576,13 @@ final class CameraManager: NSObject, ObservableObject {
             displayFormatSize = nil
         }
 
-        // 录像（VideoRecorder 内部有自己的像素池，和显示互不影响）
-        recLock.lock()
-        let rec = recorder
-        recLock.unlock()
-        rec?.appendComposite(finalImage, context: ciContext, time: pts)
-
-        // 预览：渲染进 IOSurface 池缓冲 → 直接 enqueue 到 AVSampleBufferDisplayLayer。
-        // 不做 createCGImage、不切主线程、不设 displayBusy，彻底消除预览延时。
+        // Render the final composite once into an IOSurface pixel buffer and reuse it for both preview and recording.
+        // This avoids a second full CIContext.render pass on every camera frame.
         if let canvasBuf = renderToPool(finalImage, size: canvas) {
+            recLock.lock()
+            let rec = recorder
+            recLock.unlock()
+            rec?.appendPixelBuffer(canvasBuf, time: pts)
             display(canvasBuf, pts: pts)
         }
 
@@ -662,46 +676,62 @@ final class CameraManager: NSObject, ObservableObject {
             return
         }
 
-        var newFrame: LivePhotoFrame?
-        if seconds - lastLivePhotoFrameSeconds >= 0.095,
-           let data = LivePhotoMovieWriter.videoFrameJPEG(from: image, context: ciContext, colorSpace: srgb) {
+        // JPEG encoding is expensive and must not run on the real-time camera callback.
+        // Sample at roughly 8 fps and encode on the dedicated Live Photo queue.
+        guard seconds - lastLivePhotoFrameSeconds >= 0.12 else { return }
+        lastLivePhotoFrameSeconds = seconds
+        let sampledImage = image
+        livePhotoQueue.async { [weak self] in
+            guard let self,
+                  let data = LivePhotoMovieWriter.videoFrameJPEG(
+                    from: sampledImage, context: self.ciContext, colorSpace: self.srgb
+                  ) else { return }
             let frame = LivePhotoFrame(seconds: seconds, data: data)
-            liveFrames.append(frame)
-            lastLivePhotoFrameSeconds = seconds
-            newFrame = frame
+            self.videoQueue.async {
+                self.acceptEncodedLivePhotoFrame(frame)
+            }
+        }
+    }
+
+    /// Must be called on videoQueue. Keeping this state transition here preserves
+    /// the pre/post-frame ordering while the expensive JPEG encoding runs elsewhere.
+    private func acceptEncodedLivePhotoFrame(_ frame: LivePhotoFrame) {
+        lock.lock()
+        let enabled = sharedLivePhotoEnabled
+        lock.unlock()
+        guard enabled || pendingLivePhotoCapture != nil else { return }
+
+        liveFrames.append(frame)
+        let cutoff = frame.seconds - 1.7
+        liveFrames.removeAll { $0.seconds < cutoff }
+
+        guard var pending = pendingLivePhotoCapture else { return }
+        if frame.seconds > pending.requestedAt + 0.02 {
+            pending.postFrames.append(frame)
         }
 
-        if var pending = pendingLivePhotoCapture {
-            if let frame = newFrame, frame.seconds > pending.requestedAt + 0.02 {
-                pending.postFrames.append(frame)
-            }
+        if frame.seconds >= pending.requestedAt + 1.4 && pending.postFrames.count >= 8 {
+            pendingLivePhotoCapture = nil
+            let sequence = pending.preFrames.map(\.data) + [pending.keyVideoFrame] + pending.postFrames.map(\.data)
+            let stillIndex = pending.preFrames.count
 
-            if seconds >= pending.requestedAt + 1.4 && pending.postFrames.count >= 8 {
-                pendingLivePhotoCapture = nil
-                let sequence = pending.preFrames.map(\.data) + [pending.keyVideoFrame] + pending.postFrames.map(\.data)
-                let stillIndex = pending.preFrames.count
-
-                livePhotoQueue.async {
-                    LivePhotoMovieWriter.writePairedMovie(
-                        identifier: pending.identifier,
-                        jpegFrames: sequence,
-                        stillFrameIndex: stillIndex
-                    ) { result in
-                        switch result {
-                        case .success(let movieURL):
-                            self.saveLivePhoto(stillData: pending.stillPhotoData, movieURL: movieURL)
-                        case .failure(let error):
-                            self.showToast("实况生成失败：\(error.localizedDescription)")
-                        }
+            livePhotoWriterQueue.async {
+                LivePhotoMovieWriter.writePairedMovie(
+                    identifier: pending.identifier,
+                    jpegFrames: sequence,
+                    stillFrameIndex: stillIndex
+                ) { result in
+                    switch result {
+                    case .success(let movieURL):
+                        self.saveLivePhoto(stillData: pending.stillPhotoData, movieURL: movieURL)
+                    case .failure(let error):
+                        self.showToast("实况生成失败：\(error.localizedDescription)")
                     }
                 }
-            } else {
-                pendingLivePhotoCapture = pending
             }
+        } else {
+            pendingLivePhotoCapture = pending
         }
-
-        let cutoff = seconds - 1.7
-        liveFrames.removeAll { $0.seconds < cutoff }
     }
 
     private func makeThumbnails(from image: CIImage, canvas: CGSize) {
@@ -1364,7 +1394,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate, AVCapture
         recLock.lock()
         let raw = rawRecorders[slot]
         recLock.unlock()
-        raw?.appendRaw(pixel, time: pts)
+        raw?.appendPixelBuffer(pixel, time: pts)
 
         if slot == 0 { processFrame(pts) }
     }

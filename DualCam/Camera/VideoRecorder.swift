@@ -77,8 +77,8 @@ final class VideoRecorder {
         appendBuffer(buffer, time: time)
     }
 
-    /// 直接写入一路原始画面。
-    func appendRaw(_ buffer: CVPixelBuffer, time: CMTime) {
+    /// Write an existing pixel buffer without another Core Image render. Used for both raw-camera tracks and the already-composited preview frame.
+    func appendPixelBuffer(_ buffer: CVPixelBuffer, time: CMTime) {
         appendBuffer(buffer, time: time)
     }
 
