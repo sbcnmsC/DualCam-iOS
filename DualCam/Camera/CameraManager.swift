@@ -65,6 +65,7 @@ final class CameraManager: NSObject, ObservableObject {
     private let videoQueue = DispatchQueue(label: "dualcam.video", qos: .userInitiated)
     private let audioQueue = DispatchQueue(label: "dualcam.audio")
     private let livePhotoQueue = DispatchQueue(label: "dualcam.live-photo", qos: .userInitiated)
+    private let thumbnailQueue = DispatchQueue(label: "dualcam.thumbnails", qos: .utility)
     private let outputA = AVCaptureVideoDataOutput()
     private let outputB = AVCaptureVideoDataOutput()
     private let audioOutput = AVCaptureAudioDataOutput()
@@ -536,9 +537,11 @@ final class CameraManager: NSObject, ObservableObject {
         recLock.unlock()
         rec?.appendComposite(finalImage, context: ciContext, time: pts)
 
-        // 预览
+        // 预览：实时取景不需要输出分辨率。限制到 720px 长边，避免每帧创建
+        // 1080p/4K CGImage 后再缩小显示；图像仍由专用 videoQueue 渲染。
         if beginDisplay() {
-            let scale = min(1, 1280 / max(canvas.width, canvas.height))
+            let previewMaxDimension: CGFloat = 720
+            let scale = min(1, previewMaxDimension / max(canvas.width, canvas.height))
             let pw = max(2, (canvas.width * scale).rounded())
             let ph = max(2, (canvas.height * scale).rounded())
             let scaled = finalImage.transformed(by: CGAffineTransform(scaleX: pw / canvas.width, y: ph / canvas.height))
@@ -553,11 +556,13 @@ final class CameraManager: NSObject, ObservableObject {
             }
         }
 
-        // 滤镜缩略图
+        // 缩略图计算会生成多张 CGImage；放到独立低优先级队列，避免阻塞相机帧处理。
         let now = CMTimeGetSeconds(pts)
         if thumbsOn && now - lastThumbTime > 0.7 {
             lastThumbTime = now
-            makeThumbnails(from: composed, canvas: canvas)
+            thumbnailQueue.async { [weak self] in
+                self?.makeThumbnails(from: composed, canvas: canvas)
+            }
         }
     }
 
