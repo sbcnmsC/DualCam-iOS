@@ -67,7 +67,8 @@ final class CameraManager: NSObject, ObservableObject {
     // 主渲染/显示队列：userInteractive 保证帧回调不被其它任务挤占，预览才跟手。
     private let videoQueue = DispatchQueue(label: "dualcam.video", qos: .userInteractive)
     private let audioQueue = DispatchQueue(label: "dualcam.audio")
-    private let livePhotoQueue = DispatchQueue(label: "dualcam.live-photo", qos: .userInitiated)
+    private let livePhotoQueue = DispatchQueue(label: "dualcam.live-photo-frames", qos: .userInitiated)
+    private let livePhotoWriterQueue = DispatchQueue(label: "dualcam.live-photo-writer", qos: .utility)
     private let thumbnailQueue = DispatchQueue(label: "dualcam.thumbnails", qos: .utility)
     private let outputA = AVCaptureVideoDataOutput()
     private let outputB = AVCaptureVideoDataOutput()
@@ -714,7 +715,7 @@ final class CameraManager: NSObject, ObservableObject {
             let sequence = pending.preFrames.map(\.data) + [pending.keyVideoFrame] + pending.postFrames.map(\.data)
             let stillIndex = pending.preFrames.count
 
-            livePhotoQueue.async {
+            livePhotoWriterQueue.async {
                 LivePhotoMovieWriter.writePairedMovie(
                     identifier: pending.identifier,
                     jpegFrames: sequence,
