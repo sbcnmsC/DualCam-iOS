@@ -6,7 +6,7 @@ struct DualCamApp: App {
 
     var body: some Scene {
         WindowGroup {
-            CameraScreen()
+            CameraHomeScreen()
                 .environmentObject(camera)
                 .preferredColorScheme(.dark)
                 .onAppear { UIApplication.shared.isIdleTimerDisabled = true }
