@@ -17,7 +17,6 @@ private struct PendingLivePhotoCapture {
     let stillPhotoData: Data
     let keyVideoFrame: Data
     let preFrames: [LivePhotoFrame]
-    let rawPhotos: [Data]
     var postFrames: [LivePhotoFrame]
 }
 
@@ -1028,6 +1027,7 @@ final class CameraManager: NSObject, ObservableObject {
         let a = latest[0]
         let b = latest[1]
         let front = slotFront
+        let isLivePhotoCapture = sharedLivePhotoEnabled
         lock.unlock()
         guard let bufA = a else {
             showToast("还没有画面")
@@ -1059,7 +1059,7 @@ final class CameraManager: NSObject, ObservableObject {
         let composed = Compositor.compose(main: mainImage, sub: subImage, cfg: c, canvas: canvas)
         let finalImage = c.filter.apply(to: composed, intensity: c.filterIntensity).cropped(to: full)
 
-        if livePhotoEnabled {
+        if isLivePhotoCapture {
             guard pendingLivePhotoCapture == nil else {
                 showToast("上一张实况照片仍在处理中")
                 return
@@ -1090,7 +1090,6 @@ final class CameraManager: NSObject, ObservableObject {
                 stillPhotoData: stillData,
                 keyVideoFrame: keyFrame,
                 preFrames: preFrames,
-                rawPhotos: rawPhotos,
                 postFrames: []
             )
             if !rawPhotos.isEmpty { saveImages(rawPhotos) }
