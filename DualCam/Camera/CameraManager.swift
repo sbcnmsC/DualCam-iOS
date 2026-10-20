@@ -571,10 +571,12 @@ final class CameraManager: NSObject, ObservableObject {
         let desiredSpec: LensSpec
         if displayZoom < 0.75 {
             desiredSpec = .backUltra
-        } else if displayZoom < 1.5 {
-            desiredSpec = .backWide
-        } else {
+        } else if displayZoom >= 4.0 {
             desiredSpec = .backTele
+        } else {
+            // 1× and 2× remain on the wide lens (2× is a clean crop on many iPhones);
+            // use the physical telephoto lens for the 5× stop when the device supports it.
+            desiredSpec = .backWide
         }
 
         guard comboIndex < combos.count else {
@@ -594,6 +596,18 @@ final class CameraManager: NSObject, ObservableObject {
                 return
             }
             setZoom(slot: slot, factor: displayZoom / max(slotInfos[slot].baseMultiplier, 0.01))
+            return
+        }
+
+        // If the selected slot already uses the requested physical lens, just apply digital zoom.
+        if currentSpec == desiredSpec {
+            let base = max(slotInfos[slot].baseMultiplier, 0.01)
+            let factor = displayZoom / base
+            guard factor <= slotInfos[slot].maxZoom + 0.01 else {
+                showToast("当前镜头无法达到 \(displayZoom)×")
+                return
+            }
+            setZoom(slot: slot, factor: factor)
             return
         }
 
