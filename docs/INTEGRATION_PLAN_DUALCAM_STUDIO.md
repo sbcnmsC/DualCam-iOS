@@ -32,8 +32,9 @@ The existing DualCam-iOS branch already contains an experimental Live Photo pipe
 ## Low-latency pipeline changes in this branch
 
 1. **Implemented:** render the final composed frame once into the bounded IOSurface pixel-buffer pool and reuse that buffer for both preview and the composite recording track. This removes the previous second full-frame `CIContext.render` pass per frame. Raw tracks still write their original camera buffers.
-2. **Implemented:** move Live Photo motion-frame JPEG encoding off the real-time `videoQueue` to the dedicated `livePhotoQueue`, sampling at approximately 8 fps. Encoded frames return to `videoQueue` for ordered cache and post-capture state updates, so expensive JPEG work no longer blocks preview processing.
-3. **Still to validate:** measure frame time and capture-to-display latency on iPhone 16 hardware at 720p/1080p; verify preview and recorded output, Live Photo pre/post timing, and sustained thermal behavior. No measured latency improvement is claimed until this is tested on device.
+2. **Implemented:** move Live Photo motion-frame JPEG encoding off the real-time `videoQueue` to a dedicated frame-encoding queue, sampling at approximately 8 fps. Encoded frames return to `videoQueue` for ordered cache and post-capture state updates, so expensive JPEG work no longer blocks preview processing.
+3. **Implemented:** use a separate utility-priority writer queue for assembling the Live Photo MOV, so movie encoding cannot monopolize the frame-JPEG queue and cause the next Live Photo buffer to go stale.
+4. **Still to validate:** measure frame time and capture-to-display latency on iPhone 16 hardware at 720p/1080p; verify preview and recorded output, Live Photo pre/post timing, and sustained thermal behavior. No measured latency improvement is claimed until this is tested on device.
 
 ## Recommended integration approach
 
