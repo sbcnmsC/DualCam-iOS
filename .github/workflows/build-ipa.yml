@@ -34,6 +34,7 @@ jobs:
           set -euo pipefail
           if [[ -z "${APPLE_CERTIFICATE_BASE64:-}" || -z "${APPLE_CERTIFICATE_PASSWORD:-}" || -z "${APPLE_PROVISIONING_PROFILE_BASE64:-}" || -z "${APPLE_TEAM_ID:-}" || -z "${APPLE_BUNDLE_ID:-}" ]]; then
             echo "SIGNING_ENABLED=false" >> "$GITHUB_ENV"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
             echo "Signing secrets are incomplete; building an unsigned IPA."
             exit 0
           fi
@@ -59,6 +60,7 @@ jobs:
           echo "APPLE_TEAM_ID=$APPLE_TEAM_ID" >> "$GITHUB_ENV"
           echo "APPLE_BUNDLE_ID=$APPLE_BUNDLE_ID" >> "$GITHUB_ENV"
           echo "APPLE_SIGNING_IDENTITY=${APPLE_SIGNING_IDENTITY:-Apple Distribution}" >> "$GITHUB_ENV"
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
 
       - name: Build for iPhone
         shell: bash
@@ -88,7 +90,7 @@ jobs:
           fi
 
       - name: Verify signed app
-        if: env.SIGNING_ENABLED == 'true'
+        if: steps.signing.outputs.enabled == 'true'
         run: |
           APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/DualCam.app"
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
@@ -96,7 +98,7 @@ jobs:
           echo "IPA_FILENAME=DualCam-signed.ipa" >> "$GITHUB_ENV"
 
       - name: Select unsigned package name
-        if: env.SIGNING_ENABLED != 'true'
+        if: steps.signing.outputs.enabled != 'true'
         run: echo "IPA_FILENAME=DualCam-unsigned.ipa" >> "$GITHUB_ENV"
 
       - name: Package IPA
