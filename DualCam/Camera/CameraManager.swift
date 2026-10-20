@@ -675,63 +675,62 @@ final class CameraManager: NSObject, ObservableObject {
             return
         }
 
-        var newFrame: LivePhotoFrame?
         // JPEG encoding is expensive and must not run on the real-time camera callback.
-        // Sample the already-composited frame at a modest cadence, retain only the latest
-        // pending frame, and encode it on the dedicated live-photo queue.
-        if seconds - lastLivePhotoFrameSeconds >= 0.12 {
-            lastLivePhotoFrameSeconds = seconds
-            let sampledImage = image
-            livePhotoQueue.async { [weak self] in
-                guard let self,
-                      let data = LivePhotoMovieWriter.videoFrameJPEG(
-                        from: sampledImage, context: self.ciContext, colorSpace: self.srgb
-                      ) else { return }
-                let frame = LivePhotoFrame(seconds: seconds, data: data)
-                self.videoQueue.async {
-                    let enabledNow: Bool
-                    self.lock.lock()
-                    enabledNow = self.sharedLivePhotoEnabled
-                    self.lock.unlock()
-                    guard enabledNow || self.pendingLivePhotoCapture != nil else { return }
-                    self.liveFrames.append(frame)
-                    let cutoff = seconds - 1.7
-                    self.liveFrames.removeAll { $0.seconds < cutoff }
-                }
+        // Sample at roughly 8 fps and encode on the dedicated Live Photo queue.
+        guard seconds - lastLivePhotoFrameSeconds >= 0.12 else { return }
+        lastLivePhotoFrameSeconds = seconds
+        let sampledImage = image
+        livePhotoQueue.async { [weak self] in
+            guard let self,
+                  let data = LivePhotoMovieWriter.videoFrameJPEG(
+                    from: sampledImage, context: self.ciContext, colorSpace: self.srgb
+                  ) else { return }
+            let frame = LivePhotoFrame(seconds: seconds, data: data)
+            self.videoQueue.async {
+                self.acceptEncodedLivePhotoFrame(frame)
             }
         }
+    }
 
-        if var pending = pendingLivePhotoCapture {
-            if let frame = newFrame, frame.seconds > pending.requestedAt + 0.02 {
-                pending.postFrames.append(frame)
-            }
+    /// Must be called on videoQueue. Keeping this state transition here preserves
+    /// the pre/post-frame ordering while the expensive JPEG encoding runs elsewhere.
+    private func acceptEncodedLivePhotoFrame(_ frame: LivePhotoFrame) {
+        lock.lock()
+        let enabled = sharedLivePhotoEnabled
+        lock.unlock()
+        guard enabled || pendingLivePhotoCapture != nil else { return }
 
-            if seconds >= pending.requestedAt + 1.4 && pending.postFrames.count >= 8 {
-                pendingLivePhotoCapture = nil
-                let sequence = pending.preFrames.map(\.data) + [pending.keyVideoFrame] + pending.postFrames.map(\.data)
-                let stillIndex = pending.preFrames.count
+        liveFrames.append(frame)
+        let cutoff = frame.seconds - 1.7
+        liveFrames.removeAll { $0.seconds < cutoff }
 
-                livePhotoQueue.async {
-                    LivePhotoMovieWriter.writePairedMovie(
-                        identifier: pending.identifier,
-                        jpegFrames: sequence,
-                        stillFrameIndex: stillIndex
-                    ) { result in
-                        switch result {
-                        case .success(let movieURL):
-                            self.saveLivePhoto(stillData: pending.stillPhotoData, movieURL: movieURL)
-                        case .failure(let error):
-                            self.showToast("实况生成失败：\(error.localizedDescription)")
-                        }
+        guard var pending = pendingLivePhotoCapture else { return }
+        if frame.seconds > pending.requestedAt + 0.02 {
+            pending.postFrames.append(frame)
+        }
+
+        if frame.seconds >= pending.requestedAt + 1.4 && pending.postFrames.count >= 8 {
+            pendingLivePhotoCapture = nil
+            let sequence = pending.preFrames.map(\\.data) + [pending.keyVideoFrame] + pending.postFrames.map(\\.data)
+            let stillIndex = pending.preFrames.count
+
+            livePhotoQueue.async {
+                LivePhotoMovieWriter.writePairedMovie(
+                    identifier: pending.identifier,
+                    jpegFrames: sequence,
+                    stillFrameIndex: stillIndex
+                ) { result in
+                    switch result {
+                    case .success(let movieURL):
+                        self.saveLivePhoto(stillData: pending.stillPhotoData, movieURL: movieURL)
+                    case .failure(let error):
+                        self.showToast("实况生成失败：\\(error.localizedDescription)")
                     }
                 }
-            } else {
-                pendingLivePhotoCapture = pending
             }
+        } else {
+            pendingLivePhotoCapture = pending
         }
-
-        let cutoff = seconds - 1.7
-        liveFrames.removeAll { $0.seconds < cutoff }
     }
 
     private func makeThumbnails(from image: CIImage, canvas: CGSize) {
