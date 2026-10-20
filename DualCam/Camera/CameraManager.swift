@@ -537,15 +537,10 @@ final class CameraManager: NSObject, ObservableObject {
         recLock.unlock()
         rec?.appendComposite(finalImage, context: ciContext, time: pts)
 
-        // 预览：实时取景不需要输出分辨率。限制到 720px 长边，避免每帧创建
-        // 1080p/4K CGImage 后再缩小显示；图像仍由专用 videoQueue 渲染。
+        // 预览保持原始合成画布分辨率，不因性能优化而降像素。
+        // 性能优化集中在隔离缩略图工作、避免帧队列积压；显示端只保留最新完成帧。
         if beginDisplay() {
-            let previewMaxDimension: CGFloat = 720
-            let scale = min(1, previewMaxDimension / max(canvas.width, canvas.height))
-            let pw = max(2, (canvas.width * scale).rounded())
-            let ph = max(2, (canvas.height * scale).rounded())
-            let scaled = finalImage.transformed(by: CGAffineTransform(scaleX: pw / canvas.width, y: ph / canvas.height))
-            if let cg = ciContext.createCGImage(scaled, from: CGRect(x: 0, y: 0, width: pw, height: ph),
+            if let cg = ciContext.createCGImage(finalImage, from: full,
                                                 format: .RGBA8, colorSpace: srgb) {
                 DispatchQueue.main.async { [weak self] in
                     self?.previewView?.show(cg)
