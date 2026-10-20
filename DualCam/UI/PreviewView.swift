@@ -12,8 +12,6 @@ final class DisplayLayerHostView: UIView {
         layer.removeFromSuperlayer()
         layer.videoGravity = .resizeAspect
         layer.backgroundColor = UIColor.black.cgColor
-        layer.automaticallyCompressesToLongSide = false
-        layer.needsDisplayOnBoundsChange = false
         self.layer.addSublayer(layer)
         hosted = layer
         setNeedsLayout()
