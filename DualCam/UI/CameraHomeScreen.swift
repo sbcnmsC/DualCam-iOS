@@ -64,13 +64,17 @@ struct CameraHomeScreen: View {
     }
 
     private var topControls: some View {
-        HStack(spacing: 30) {
+        HStack(spacing: 22) {
             topIcon("bolt.fill", tint: cam.flashEnabled ? .yellow : .white) {
                 cam.flashEnabled.toggle()
             }
 
             topIcon("timer", tint: cam.timerSeconds == 0 ? .white : .yellow) {
                 cam.cycleTimer()
+            }
+
+            topIcon("livephoto", tint: cam.livePhotoEnabled ? .yellow : .white) {
+                cam.toggleLivePhoto()
             }
 
             topIcon("moon.fill", tint: cam.cfg.lowLight ? .yellow : .white) {
