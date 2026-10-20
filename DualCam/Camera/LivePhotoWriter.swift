@@ -133,10 +133,10 @@ enum LivePhotoMovieWriter {
             ]
             var metadataDescription: CMMetadataFormatDescription?
             let metadataStatus = CMMetadataFormatDescriptionCreateWithMetadataSpecifications(
-                kCFAllocatorDefault,
-                kCMMetadataFormatType_Boxed,
-                [specification] as CFArray,
-                &metadataDescription
+                allocator: kCFAllocatorDefault,
+                metadataType: kCMMetadataFormatType_Boxed,
+                metadataSpecifications: [specification] as CFArray,
+                formatDescriptionOut: &metadataDescription
             )
             guard metadataStatus == noErr, let metadataDescription else {
                 throw LivePhotoWriterError.cannotCreateMetadata
