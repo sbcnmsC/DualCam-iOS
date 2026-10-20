@@ -581,7 +581,7 @@ final class CameraManager: NSObject, ObservableObject {
             recLock.lock()
             let rec = recorder
             recLock.unlock()
-            rec?.appendRaw(canvasBuf, time: pts)
+            rec?.appendPixelBuffer(canvasBuf, time: pts)
             display(canvasBuf, pts: pts)
         }
 
