@@ -1,35 +1,44 @@
 import SwiftUI
+import AVFoundation
 import UIKit
 
-/// 预览画面直接用 CALayer 显示，不经过 SwiftUI 刷新，避免每帧重绘整个界面。
-final class PreviewUIView: UIView {
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        backgroundColor = .black
-        isUserInteractionEnabled = false
-        layer.contentsGravity = .resizeAspectFill
-        layer.masksToBounds = true
+/// 预览直接挂 AVSampleBufferDisplayLayer：和系统相机同一条硬件显示通路，
+/// IOSurface 零拷贝，不做 layer.contents = CGImage（避免每帧主线程上传 GPU）。
+final class DisplayLayerHostView: UIView {
+    private var hosted: CALayer?
+
+    func attach(_ layer: AVSampleBufferDisplayLayer) {
+        guard !(hosted === layer) else { return }
+        layer.removeFromSuperlayer()
+        layer.videoGravity = .resizeAspect
+        layer.backgroundColor = UIColor.black.cgColor
+        layer.automaticallyCompressesToLongSide = false
+        layer.needsDisplayOnBoundsChange = false
+        self.layer.addSublayer(layer)
+        hosted = layer
+        setNeedsLayout()
     }
 
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    func show(_ image: CGImage) {
-        layer.contents = image
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        hosted?.frame = bounds
+        CATransaction.commit()
     }
 }
 
 struct PreviewRepresentable: UIViewRepresentable {
     @EnvironmentObject private var cam: CameraManager
 
-    func makeUIView(context: Context) -> PreviewUIView {
-        let view = PreviewUIView()
-        cam.previewView = view
-        return view
+    func makeUIView(context: Context) -> DisplayLayerHostView {
+        let v = DisplayLayerHostView()
+        v.backgroundColor = .black
+        v.attach(cam.displayLayer)
+        return v
     }
 
-    func updateUIView(_ uiView: PreviewUIView, context: Context) {
-        cam.previewView = uiView
+    func updateUIView(_ uiView: DisplayLayerHostView, context: Context) {
+        uiView.attach(cam.displayLayer)
     }
 }
