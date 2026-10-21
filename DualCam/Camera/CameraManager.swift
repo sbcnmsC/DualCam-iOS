@@ -69,7 +69,7 @@ final class CameraManager: NSObject, ObservableObject {
     private var highResolutionBatchData: [Int: Data] = [:]
     private var highResolutionBatchCompletion: (([Int: Data]) -> Void)?
     private let audioOutput = AVCaptureAudioDataOutput()
-    private let ciContext = CIContext(options: [.cacheIntermediates: false])
+    private let ciContext = CIContext(options: [.cacheIntermediates: false, .highQualityDownsample: true])
     /// 缩略图专用，和实时渲染互不干扰。
     private let thumbContext = CIContext(options: [.cacheIntermediates: false])
     private let srgb = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
@@ -91,6 +91,8 @@ final class CameraManager: NSObject, ObservableObject {
     // 渲染线程与主线程共享（用 lock 保护）
     private let lock = NSLock()
     private var sharedCfg = Config()
+    /// Transient PiP drag override, protected by lock and consumed by the render queue.
+    private var previewPiPCenter: CGPoint?
     private var sharedThumbs = false
     private var thumbsNeedRefresh = false
     private var latest: [CVPixelBuffer?] = [nil, nil]
@@ -485,6 +487,7 @@ final class CameraManager: NSObject, ObservableObject {
     private func cfgDidChange(_ old: Config) {
         lock.lock()
         sharedCfg = cfg
+        if let previewPiPCenter { sharedCfg.pipCenter = previewPiPCenter }
         lock.unlock()
         let new = cfg
         if old.resolution != new.resolution || old.fps != new.fps {
@@ -584,7 +587,8 @@ final class CameraManager: NSObject, ObservableObject {
 
         // The capture canvas remains full resolution. Only downscale the idle preview render graph.
         // Composite video and Live Photo motion still use the full-resolution canvas.
-        let canvas = Compositor.canvasSize(aspect: c.aspect, resolution: c.resolution, sourceWidth: mainImage.extent.width)
+        let canvas = Compositor.canvasSize(aspect: c.aspect, resolution: c.resolution,
+                                           sourceWidth: mainImage.extent.width, aspectRatio: c.aspectRatio)
         recLock.lock()
         let rec = recorder
         let live = liveComposite
@@ -1037,8 +1041,35 @@ final class CameraManager: NSObject, ObservableObject {
     }
 
     func resetPiP() {
+        clearPiPDragPreview()
         cfg.pipCenter = CGPoint(x: 0.76, y: 0.20)
         cfg.pipWidth = 0.32
+    }
+
+    /// Update the render-thread PiP position without publishing the whole camera Config.
+    /// This avoids rebuilding the complete SwiftUI screen for every point in a drag gesture.
+    func updatePiPDragPreview(center: CGPoint) {
+        lock.lock()
+        previewPiPCenter = center
+        sharedCfg.pipCenter = center
+        lock.unlock()
+    }
+
+    /// Call after committing the final center to Config and applying snap.
+    func clearPiPDragPreview() {
+        lock.lock()
+        previewPiPCenter = nil
+        sharedCfg.pipCenter = cfg.pipCenter
+        lock.unlock()
+    }
+
+    func updateFreeAspect(width: CGFloat, height: CGFloat) {
+        guard width.isFinite, height.isFinite, width > 0, height > 0 else { return }
+        let ratio = min(max(width / height, 0.2), 4.0)
+        guard abs(cfg.freeAspect - ratio) > 0.002 else { return }
+        var next = cfg
+        next.freeAspect = ratio
+        cfg = next
     }
 
     func snapPiP() {
@@ -1271,7 +1302,7 @@ final class CameraManager: NSObject, ObservableObject {
         }
 
         let extent = main.extent
-        let aspect = max(config.aspect.value, 0.1)
+        let aspect = max(config.aspectRatio, 0.1)
         let width = max(2, floor(min(extent.width, extent.height * aspect) / 2) * 2)
         let height = max(2, floor(width / aspect / 2) * 2)
         let canvas = CGSize(width: width, height: height)
@@ -1531,7 +1562,8 @@ final class CameraManager: NSObject, ObservableObject {
             subImage = imgB
         }
 
-        let canvas = Compositor.canvasSize(aspect: c.aspect, resolution: c.resolution, sourceWidth: mainImage.extent.width)
+        let canvas = Compositor.canvasSize(aspect: c.aspect, resolution: c.resolution,
+                                           sourceWidth: mainImage.extent.width, aspectRatio: c.aspectRatio)
         let full = CGRect(origin: .zero, size: canvas)
         let composed = Compositor.compose(main: mainImage, sub: subImage, cfg: c, canvas: canvas)
         let finalImage = c.filter.apply(to: composed, intensity: c.filterIntensity).cropped(to: full)
