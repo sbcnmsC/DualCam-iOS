@@ -6,6 +6,8 @@ enum FilterKind: String, CaseIterable, Identifiable {
     case warm = "暖阳"
     case cool = "冷调"
     case fresh = "清新"
+    case beach = "海边"
+    case humanistic = "人文"
     case cinema = "电影"
     case film = "胶片"
     case retro = "复古"
@@ -50,6 +52,24 @@ enum FilterKind: String, CaseIterable, Identifiable {
         case .fresh:
             let c = colorControls(image, saturation: 1.07, brightness: 0.015, contrast: 0.98)
             return colorMatrix(c, r: 0.99, g: 1.02, b: 1.02)
+        case .beach:
+            // Lift shadows gently and preserve sky/water color without pushing skin tones too far.
+            let balanced = image.applyingFilter("CIHighlightShadowAdjust", parameters: [
+                "inputHighlightAmount": 0.94,
+                "inputShadowAmount": 0.22
+            ])
+            let vibrant = balanced.applyingFilter("CIVibrance", parameters: ["inputAmount": 0.22])
+            let tinted = colorMatrix(vibrant, r: 1.015, g: 1.025, b: 1.045)
+            return colorControls(tinted, saturation: 1.07, brightness: 0.008, contrast: 1.025)
+        case .humanistic:
+            // Documentary street/travel rendering: quieter color, warm midtones, readable shadows.
+            let balanced = image.applyingFilter("CIHighlightShadowAdjust", parameters: [
+                "inputHighlightAmount": 0.95,
+                "inputShadowAmount": 0.18
+            ])
+            let subdued = colorControls(balanced, saturation: 0.88, brightness: 0.004, contrast: 1.045)
+            return colorMatrix(subdued, r: 1.025, g: 1.008, b: 0.985,
+                               bias: CIVector(x: 0.006, y: 0.004, z: 0.002, w: 0))
         case .cinema:
             let c = colorControls(image, saturation: 0.91, brightness: -0.005, contrast: 1.08)
             return colorMatrix(c, r: 1.025, g: 1.005, b: 0.98)
