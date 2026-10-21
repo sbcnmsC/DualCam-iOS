@@ -492,26 +492,26 @@ struct BottomBar: View {
 
                 Button {
                     withAnimation(.easeInOut(duration: 0.22)) {
-                        if showPanel && panelTab == .params {
+                        if showPanel && panelTab == .filter {
                             showPanel = false
                         } else {
-                            panelTab = .params
+                            panelTab = .filter
                             showPanel = true
                         }
                     }
                 } label: {
-                    Image(systemName: "slider.horizontal.3")
+                    Image(systemName: "camera.filters")
                         .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(showPanel && panelTab == .params ? Color.yellow : Color.white)
+                        .foregroundStyle(showPanel && panelTab == .filter ? Color.yellow : Color.white)
                         .frame(width: 52, height: 52)
                         .background(Circle().fill(Color.white.opacity(0.12)))
                         .overlay(Circle().stroke(
-                            showPanel && panelTab == .params ? Color.yellow.opacity(0.7) : Color.clear,
+                            showPanel && panelTab == .filter ? Color.yellow.opacity(0.7) : Color.clear,
                             lineWidth: 1.2
                         ))
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("参数设置")
+                .accessibilityLabel("滤镜")
             }
             .padding(.horizontal, 28)
 
