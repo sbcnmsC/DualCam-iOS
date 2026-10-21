@@ -35,7 +35,7 @@ struct ToolPanel: View {
                     switch tab {
                     case .pip: PiPTab()
                     case .filter: FilterTab()
-                    case .params: ParamsTab()
+                    case .params: QuickParamsTab()
                     case .settings: SettingsTab()
                     }
                 }
@@ -384,6 +384,33 @@ struct ParamsTab: View {
                                   valueText: "\(Int(st.tint))")
                 }
             }
+                HStack(spacing: 8) {
+                    Button {
+                        cam.copyWhiteBalanceToOtherSlot(i)
+                    } label: {
+                        Label("同步到另一镜头", systemImage: "arrow.left.arrow.right")
+                            .font(.system(size: 11, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 32)
+                            .background(Capsule().fill(Color.yellow.opacity(0.18)))
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        cam.slotStates[i].manualWB = false
+                        cam.applyWhiteBalance(i)
+                    } label: {
+                        Label("自动白平衡", systemImage: "sparkles")
+                            .font(.system(size: 11, weight: .medium))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 32)
+                            .background(Capsule().fill(Color.white.opacity(0.10)))
+                    }
+                    .buttonStyle(.plain)
+                }
+                Text("两颗镜头色温可能不同；先在一侧调好，再同步到另一侧，可减少分屏色差。")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.white.opacity(0.58))
             .padding(10)
             .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.055)))
 
@@ -453,6 +480,7 @@ struct SettingsTab: View {
                 Picker("", selection: $cam.cfg.fps) {
                     Text("30 fps").tag(30)
                     Text("60 fps").tag(60)
+                    Text("120 fps").tag(120)
                 }
                 .pickerStyle(.segmented)
                 .disabled(cam.isRecording)
@@ -496,11 +524,281 @@ struct SettingsTab: View {
                     Spacer()
                 }
             }
+            Toggle("原生高画质录像（单摄）", isOn: $cam.cfg.nativeVideoRecording)
+                .font(.system(size: 13)).disabled(cam.isRecording)
+            Text("开启后使用原生视频文件输出，优先尝试所选帧率下的最高分辨率（设备支持时可达 4K/120）；录像期间录制当前主镜头，停止后恢复双摄。关闭则沿用双摄合成录像。")
+                .font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.6))
             Toggle("弱光增亮", isOn: $cam.cfg.lowLight).font(.system(size: 13))
-            Toggle("视频防抖（开启会增加预览延迟）", isOn: $cam.cfg.stabilization).font(.system(size: 13))
+            Toggle("视频防抖（系统标准模式）", isOn: $cam.cfg.stabilization).font(.system(size: 13)).disabled(cam.isRecording)
+            Text("启用时优先使用 iOS 原生视频防抖；是否生效取决于设备与当前双摄格式支持。最高分辨率会优先使用双摄可用的高分辨率格式，不通过插值放大画面。")
+                .font(.system(size: 10))
+                .foregroundStyle(Color.white.opacity(0.6))
             Toggle("前置镜像", isOn: $cam.cfg.mirrorFront).font(.system(size: 13))
             Toggle("三分参考线", isOn: $cam.cfg.showGrid).font(.system(size: 13))
 
         }
+    }
+}
+
+
+// MARK: - 快捷参数栏（选择参数类型后即时显示调节器）
+
+private enum QuickParameter: String, CaseIterable, Identifiable {
+    case exposure = "曝光"
+    case iso = "ISO"
+    case shutter = "快门"
+    case focus = "对焦"
+    case whiteBalance = "白平衡"
+    case zoom = "变焦"
+    case resolution = "分辨率"
+    case frameRate = "帧率"
+    case timer = "定时器"
+    case stabilization = "防抖"
+    case recordingMode = "录像模式"
+
+    var id: String { rawValue }
+    var icon: String {
+        switch self {
+        case .exposure: return "sun.max"
+        case .iso: return "camera.aperture"
+        case .shutter: return "timer"
+        case .focus: return "scope"
+        case .whiteBalance: return "thermometer.medium"
+        case .zoom: return "plus.magnifyingglass"
+        case .resolution: return "viewfinder"
+        case .frameRate: return "speedometer"
+        case .timer: return "hourglass"
+        case .stabilization: return "viewfinder.circle"
+        case .recordingMode: return "video"
+        }
+    }
+}
+
+struct QuickParamsTab: View {
+    @EnvironmentObject private var cam: CameraManager
+    @State private var selected: QuickParameter = .exposure
+
+    var body: some View {
+        let i = min(max(cam.paramTarget, 0), 1)
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 6) {
+                Text("快捷控制").font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.65))
+                Spacer()
+                Picker("镜头", selection: $cam.paramTarget) {
+                    Text(cam.slotInfos[0].name).tag(0)
+                    Text(cam.slotInfos[1].name).tag(1)
+                }
+                .pickerStyle(.menu)
+                .tint(.yellow)
+                .frame(maxWidth: 150)
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 7) {
+                    ForEach(QuickParameter.allCases) { item in
+                        Button {
+                            withAnimation(.easeOut(duration: 0.15)) { selected = item }
+                        } label: {
+                            VStack(spacing: 4) {
+                                Image(systemName: item.icon).font(.system(size: 16, weight: .semibold))
+                                Text(item.rawValue).font(.system(size: 10, weight: .medium))
+                            }
+                            .foregroundStyle(selected == item ? Color.yellow : Color.white.opacity(0.8))
+                            .frame(width: 59, height: 49)
+                            .background(RoundedRectangle(cornerRadius: 10)
+                                .fill(selected == item ? Color.yellow.opacity(0.14) : Color.white.opacity(0.065)))
+                            .overlay(RoundedRectangle(cornerRadius: 10)
+                                .stroke(selected == item ? Color.yellow.opacity(0.75) : Color.clear, lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+
+            controlBody(slot: i)
+        }
+    }
+
+    @ViewBuilder
+    private func controlBody(slot i: Int) -> some View {
+        let st = cam.slotStates[i]
+        let info = cam.slotInfos[i]
+        let base = max(info.baseMultiplier, 0.01)
+
+        switch selected {
+        case .exposure:
+            HStack {
+                Label("曝光补偿", systemImage: "sun.max").font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Text(String(format: "%+.1f EV", Double(st.exposureBias)))
+                    .font(.system(size: 11, design: .monospaced)).foregroundStyle(Color.yellow)
+                Button("归零") { cam.resetExposureBias(i) }
+                    .font(.system(size: 11, weight: .semibold)).tint(.yellow)
+            }
+            LabeledSlider(title: "EV", value: numberBinding(i, \.exposureBias) { cam.applyExposure($0) },
+                          range: Double(info.minBias)...Double(max(info.maxBias, info.minBias + 0.1)),
+                          valueText: String(format: "%+.1f", Double(st.exposureBias)),
+                          disabled: st.manualExposure || st.locked)
+        case .iso:
+            if !st.manualExposure {
+                Button {
+                    cam.slotStates[i].manualExposure = true
+                    cam.applyExposure(i)
+                } label: {
+                    Label("启用手动曝光以调节 ISO", systemImage: "lock.open")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(maxWidth: .infinity).frame(height: 32)
+                        .background(Capsule().fill(Color.yellow.opacity(0.16)))
+                }.buttonStyle(.plain)
+            } else {
+                LabeledSlider(icon: "camera.aperture", title: "ISO",
+                              value: numberBinding(i, \.iso) { cam.applyExposure($0) },
+                              range: Double(info.minISO)...Double(max(info.maxISO, info.minISO + 1)),
+                              valueText: "\(Int(st.iso))")
+            }
+        case .shutter:
+            if !st.manualExposure {
+                Button {
+                    cam.slotStates[i].manualExposure = true
+                    cam.applyExposure(i)
+                } label: {
+                    Label("启用手动曝光以调节快门", systemImage: "lock.open")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(maxWidth: .infinity).frame(height: 32)
+                        .background(Capsule().fill(Color.yellow.opacity(0.16)))
+                }.buttonStyle(.plain)
+            } else {
+                LabeledSlider(icon: "timer", title: "快门",
+                              value: numberBinding(i, \.shutter) { cam.applyExposure($0) },
+                              range: 0...1, valueText: shutterText(info: info, t: st.shutter))
+            }
+        case .focus:
+            HStack {
+                Toggle("手动对焦", isOn: boolBinding(i, \.manualFocus) { cam.applyFocus($0) })
+                    .font(.system(size: 12))
+                Spacer()
+                Button("自动对焦") { cam.setAutoFocus(i) }
+                    .font(.system(size: 11, weight: .semibold)).tint(.yellow)
+            }
+            if st.manualFocus {
+                LabeledSlider(icon: "scope", title: "对焦距离",
+                              value: numberBinding(i, \.lensPosition) { cam.applyFocus($0) },
+                              range: 0...1, valueText: String(format: "%.2f", Double(st.lensPosition)),
+                              disabled: !info.supportsManualFocus)
+            } else {
+                Text("点按预览对焦；焦点框右侧太阳滑杆可调节曝光。")
+                    .font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.62))
+            }
+        case .whiteBalance:
+            Toggle("手动白平衡", isOn: boolBinding(i, \.manualWB) { cam.applyWhiteBalance($0) })
+                .font(.system(size: 12))
+            if st.manualWB {
+                LabeledSlider(icon: "thermometer", title: "色温",
+                              value: numberBinding(i, \.temperature) { cam.applyWhiteBalance($0) },
+                              range: 2500...9000, valueText: "\(Int(st.temperature))K")
+                LabeledSlider(icon: "circle.lefthalf.filled", title: "色调",
+                              value: numberBinding(i, \.tint) { cam.applyWhiteBalance($0) },
+                              range: -150...150, valueText: "\(Int(st.tint))")
+            }
+            HStack(spacing: 8) {
+                Button { cam.copyWhiteBalanceToOtherSlot(i) } label: {
+                    Label("同步另一镜头", systemImage: "arrow.left.arrow.right")
+                        .font(.system(size: 11, weight: .semibold)).frame(maxWidth: .infinity).frame(height: 30)
+                        .background(Capsule().fill(Color.yellow.opacity(0.14)))
+                }.buttonStyle(.plain)
+                Button {
+                    cam.slotStates[i].manualWB = false
+                    cam.applyWhiteBalance(i)
+                } label: {
+                    Label("自动白平衡", systemImage: "sparkles")
+                        .font(.system(size: 11, weight: .medium)).frame(maxWidth: .infinity).frame(height: 30)
+                        .background(Capsule().fill(Color.white.opacity(0.09)))
+                }.buttonStyle(.plain)
+            }
+        case .zoom:
+            LabeledSlider(icon: "plus.magnifyingglass", title: "变焦",
+                          value: Binding(
+                            get: { Double(cam.displayZoom(slot: i)) },
+                            set: { cam.setZoom(slot: i, factor: CGFloat($0) / base) }),
+                          range: Double(base)...Double(max(base * info.maxZoom, base + 0.01)),
+                          valueText: String(format: "%.1f×", Double(cam.displayZoom(slot: i))))
+        case .resolution:
+            HStack {
+                Text("分辨率").font(.system(size: 12, weight: .semibold))
+                Picker("分辨率", selection: $cam.cfg.resolution) {
+                    ForEach(ResolutionOption.allCases) { option in Text(option.rawValue).tag(option) }
+                }
+                .pickerStyle(.segmented).disabled(cam.isRecording)
+            }
+        case .frameRate:
+            HStack {
+                Text("帧率").font(.system(size: 12, weight: .semibold))
+                Picker("帧率", selection: $cam.cfg.fps) {
+                    Text("30 fps").tag(30)
+                    Text("60 fps").tag(60)
+                    Text("120 fps").tag(120)
+                }
+                .pickerStyle(.segmented).disabled(cam.isRecording)
+            }
+            Text("原生录像优先匹配所选帧率，并选用该帧率下可用的最高像素格式；双摄合成会按设备能力自动降档。")
+                .font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.6))
+            Text("当前双摄格式不支持所选帧率时，会自动退到可用档位。")
+                .font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.6))
+        case .timer:
+            HStack {
+                Text("定时器").font(.system(size: 12, weight: .semibold))
+                Picker("定时器", selection: $cam.timerSeconds) {
+                    Text("关闭").tag(0)
+                    Text("3 秒").tag(3)
+                    Text("10 秒").tag(10)
+                }
+                .pickerStyle(.segmented)
+            }
+        case .stabilization:
+            Toggle("系统视频防抖", isOn: $cam.cfg.stabilization)
+                .font(.system(size: 12)).disabled(cam.isRecording)
+            Text("只在设备和当前双摄连接支持时生效。")
+                .font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.6))
+        case .recordingMode:
+            Toggle("原生高画质录像（单摄）", isOn: $cam.cfg.nativeVideoRecording)
+                .font(.system(size: 12)).disabled(cam.isRecording)
+            Text("开启后优先使用原生视频文件输出，最高能力取决于机型、镜头与支持格式。录像期间只录当前主镜头，停止后自动恢复双摄；关闭则沿用双摄合成录像。")
+                .font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.6))
+        }
+    }
+
+    private func numberBinding<T: BinaryFloatingPoint>(
+        _ i: Int, _ keyPath: WritableKeyPath<SlotState, T>,
+        apply: @escaping (Int) -> Void
+    ) -> Binding<Double> {
+        Binding(
+            get: { Double(cam.slotStates[i][keyPath: keyPath]) },
+            set: {
+                cam.slotStates[i][keyPath: keyPath] = T($0)
+                apply(i)
+            }
+        )
+    }
+
+    private func boolBinding(
+        _ i: Int, _ keyPath: WritableKeyPath<SlotState, Bool>,
+        apply: @escaping (Int) -> Void
+    ) -> Binding<Bool> {
+        Binding(
+            get: { cam.slotStates[i][keyPath: keyPath] },
+            set: {
+                cam.slotStates[i][keyPath: keyPath] = $0
+                apply(i)
+            }
+        )
+    }
+
+    private func shutterText(info: SlotInfo, t: Double) -> String {
+        let ratio = max(info.maxShutter / max(info.minShutter, 0.000001), 1)
+        let seconds = info.minShutter * pow(ratio, t)
+        if seconds >= 0.5 { return String(format: "%.1fs", seconds) }
+        return "1/\(Int((1 / max(seconds, 0.000001)).rounded()))"
     }
 }

@@ -34,6 +34,7 @@ enum CanvasAspect: String, CaseIterable, Identifiable {
     case r916 = "9:16"
     case r34 = "3:4"
     case r11 = "1:1"
+    case r169 = "16:9"
     var id: String { rawValue }
     /// 宽 / 高
     var value: CGFloat {
@@ -41,6 +42,7 @@ enum CanvasAspect: String, CaseIterable, Identifiable {
         case .r916: return 9.0 / 16.0
         case .r34: return 3.0 / 4.0
         case .r11: return 1.0
+        case .r169: return 16.0 / 9.0
         }
     }
 }
@@ -107,12 +109,14 @@ struct Config: Equatable {
     var filter: FilterKind = .original
     var filterIntensity: CGFloat = 1
     // 采集
-    var resolution: ResolutionOption = .p1080
-    var fps = 30
+    var resolution: ResolutionOption = .maximum
+    var fps = 120
+    /// Native single-camera recording requests the best device-supported format up to 120 fps.
+    var nativeVideoRecording = true
     var outputMode: OutputMode = .original
     var livePhoto = true
     var lowLight = true
-    var stabilization = false   // 默认关闭：防抖会让预览多延迟几帧
+    var stabilization = true    // 默认开启系统标准防抖（若双摄输出支持）
     var showGrid = true
 }
 
@@ -199,10 +203,12 @@ struct FocusMarker: Equatable {
     let id: UUID
     var point: CGPoint   // 归一化，相对预览区域
     var exposureBias: Float?
+    var slot: Int?
 
-    init(point: CGPoint, exposureBias: Float? = nil, id: UUID = UUID()) {
+    init(point: CGPoint, exposureBias: Float? = nil, slot: Int? = nil, id: UUID = UUID()) {
         self.id = id
         self.point = point
         self.exposureBias = exposureBias
+        self.slot = slot
     }
 }
