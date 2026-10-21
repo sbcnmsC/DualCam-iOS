@@ -30,8 +30,15 @@ jobs:
 
       - name: Xcode version and project info
         run: |
-          xcodebuild -version
-          xcodebuild -list -project "$APP_NAME.xcodeproj"
+          set -o pipefail
+          xcodebuild -version | while IFS= read -r l; do echo "::notice::$l"; done
+          echo "::notice::xcodegen $(xcodegen --version 2>&1 | head -1)"
+          echo "::notice::pbxproj $(grep -m1 objectVersion "$APP_NAME.xcodeproj/project.pbxproj" | tr -d '\t ')"
+          if ! xcodebuild -list -project "$APP_NAME.xcodeproj" > list.log 2>&1; then
+            while IFS= read -r l; do echo "::error::$l"; done < list.log
+            exit 1
+          fi
+          cat list.log
 
       - name: Detect signing secrets
         id: sign

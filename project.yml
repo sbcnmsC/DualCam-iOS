@@ -2,6 +2,8 @@ name: DualCam
 
 options:
   bundleIdPrefix: com.dualcam
+  # 固定工程文件格式为 Xcode 15.4：新版 XcodeGen 默认生成 Xcode 16 格式，旧 Xcode 打不开
+  xcodeVersion: "15.4"
   deploymentTarget:
     iOS: "17.0"
 
