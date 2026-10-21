@@ -28,8 +28,10 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Xcode version
-        run: xcodebuild -version
+      - name: Xcode version and project info
+        run: |
+          xcodebuild -version
+          xcodebuild -list -project "$APP_NAME.xcodeproj"
 
       - name: Detect signing secrets
         id: sign
@@ -121,7 +123,7 @@ jobs:
             PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
             PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
             CODE_SIGN_IDENTITY="$IDENTITY" \
-            archive | tee build.log
+            archive 2>&1 | tee build.log
 
           cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
@@ -141,7 +143,7 @@ jobs:
           xcodebuild -exportArchive \
             -archivePath "$RUNNER_TEMP/$APP_NAME.xcarchive" \
             -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
-            -exportPath "$RUNNER_TEMP/export" | tee -a build.log
+            -exportPath "$RUNNER_TEMP/export" 2>&1 | tee -a build.log
 
           cp "$RUNNER_TEMP/export/$APP_NAME.ipa" "$APP_NAME.ipa"
 
@@ -161,7 +163,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            build | tee build.log
+            build 2>&1 | tee build.log
 
           APP=$(find build/DerivedData/Build/Products -maxdepth 3 -name "$APP_NAME.app" | head -n 1)
           echo "App bundle: $APP"
@@ -172,7 +174,7 @@ jobs:
       - name: Annotate compiler errors
         if: failure()
         run: |
-          grep -E "error:" build.log | sort -u | head -40 | while IFS= read -r line; do
+          grep -E "error" build.log | sort -u | head -40 | while IFS= read -r line; do
             echo "::error::${line}"
           done
 
