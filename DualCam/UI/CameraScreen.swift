@@ -627,8 +627,7 @@ struct TopBar: View {
                                active: cam.timerSeconds > 0,
                                label: cam.timerSeconds == 0 ? "设置倒计时" : "倒计时：\(cam.timerSeconds) 秒",
                                badge: cam.timerSeconds == 0 ? nil : "\(cam.timerSeconds)") {
-                        timerDraft = cam.timerSeconds > 0 ? cam.timerSeconds : 5
-                        showTimerSettings = true
+                        onTimerTap()
                     }
                 }
             }
