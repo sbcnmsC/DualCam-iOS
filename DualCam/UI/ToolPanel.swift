@@ -524,7 +524,10 @@ struct SettingsTab: View {
                 }
             }
             Toggle("弱光增亮", isOn: $cam.cfg.lowLight).font(.system(size: 13))
-            Toggle("视频防抖（开启会增加预览延迟）", isOn: $cam.cfg.stabilization).font(.system(size: 13))
+            Toggle("视频防抖（系统标准模式）", isOn: $cam.cfg.stabilization).font(.system(size: 13))
+            Text("启用时优先使用 iOS 原生视频防抖；是否生效取决于设备与当前双摄格式支持。最高分辨率会优先使用双摄可用的高分辨率格式，不通过插值放大画面。")
+                .font(.system(size: 10))
+                .foregroundStyle(Color.white.opacity(0.6))
             Toggle("前置镜像", isOn: $cam.cfg.mirrorFront).font(.system(size: 13))
             Toggle("三分参考线", isOn: $cam.cfg.showGrid).font(.system(size: 13))
 

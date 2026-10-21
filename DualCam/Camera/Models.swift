@@ -107,12 +107,12 @@ struct Config: Equatable {
     var filter: FilterKind = .original
     var filterIntensity: CGFloat = 1
     // 采集
-    var resolution: ResolutionOption = .p1080
+    var resolution: ResolutionOption = .maximum
     var fps = 30
     var outputMode: OutputMode = .original
     var livePhoto = true
     var lowLight = true
-    var stabilization = false   // 默认关闭：防抖会让预览多延迟几帧
+    var stabilization = true    // 默认开启系统标准防抖（若双摄输出支持）
     var showGrid = true
 }
 

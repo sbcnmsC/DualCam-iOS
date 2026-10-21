@@ -279,7 +279,9 @@ final class CameraManager: NSObject, ObservableObject {
                 conn.isVideoMirrored = false
             }
             if conn.isVideoStabilizationSupported {
-                conn.preferredVideoStabilizationMode = snapshot().stabilization ? .auto : .off
+                // Prefer the native standard stabilizer on each capture connection.
+                // MultiCam/device format combinations may not support stabilization; keep that check.
+                conn.preferredVideoStabilizationMode = snapshot().stabilization ? .standard : .off
             }
             devices[i] = dev
             infos[i] = makeInfo(device: dev, spec: spec)
@@ -433,7 +435,7 @@ final class CameraManager: NSObject, ObservableObject {
         }
         for output in [outputA, outputB] {
             for conn in output.connections where conn.isVideoStabilizationSupported {
-                conn.preferredVideoStabilizationMode = c.stabilization ? .auto : .off
+                conn.preferredVideoStabilizationMode = c.stabilization ? .standard : .off
             }
         }
     }

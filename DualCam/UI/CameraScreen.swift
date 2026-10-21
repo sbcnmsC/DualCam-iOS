@@ -36,7 +36,7 @@ struct CameraScreen: View {
                         ToolPanel(tab: $panelTab)
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
-                    BottomBar(showPanel: $showPanel)
+                    BottomBar(showPanel: $showPanel, panelTab: $panelTab)
                 }
 
                 OverlayLayer()
@@ -399,6 +399,7 @@ struct TopBar: View {
 struct BottomBar: View {
     @EnvironmentObject private var cam: CameraManager
     @Binding var showPanel: Bool
+    @Binding var panelTab: PanelTab
 
     var body: some View {
         VStack(spacing: 16) {
@@ -418,14 +419,28 @@ struct BottomBar: View {
                 ShutterButton()
                 Spacer()
 
-                Button { showPanel.toggle() } label: {
-                    Image(systemName: "circle.grid.2x3.fill")
-                        .font(.system(size: 20))
-                        .foregroundStyle(showPanel ? Color.yellow : Color.white)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.22)) {
+                        if showPanel && panelTab == .params {
+                            showPanel = false
+                        } else {
+                            panelTab = .params
+                            showPanel = true
+                        }
+                    }
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(showPanel && panelTab == .params ? Color.yellow : Color.white)
                         .frame(width: 52, height: 52)
                         .background(Circle().fill(Color.white.opacity(0.12)))
+                        .overlay(Circle().stroke(
+                            showPanel && panelTab == .params ? Color.yellow.opacity(0.7) : Color.clear,
+                            lineWidth: 1.2
+                        ))
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("参数设置")
             }
             .padding(.horizontal, 28)
 
