@@ -56,6 +56,9 @@
     </clipPath>
   </defs>
 
+  <!-- Keep the square source fully opaque; iOS applies its own rounded icon mask. -->
+  <rect width="1024" height="1024" fill="#030408"/>
+
   <g clip-path="url(#tile)">
     <rect width="1024" height="1024" fill="url(#background)"/>
     <rect x="2" y="2" width="1020" height="1020" rx="244" fill="none" stroke="url(#rim)" stroke-width="9"/>
