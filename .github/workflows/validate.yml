@@ -25,7 +25,7 @@ jobs:
       - name: Generate Xcode project
         run: |
           xcodegen generate
-          sed -i '' -E 's/objectVersion = 77;/objectVersion = 60/; s/preferredProjectObjectVersion = 77;/preferredProjectObjectVersion = 60/' DualCam.xcodeproj/project.pbxproj
+          sed -i '' -E 's/objectVersion = 77;/objectVersion = 60;/; s/preferredProjectObjectVersion = 77;/preferredProjectObjectVersion = 60;/' DualCam.xcodeproj/project.pbxproj
 
       - name: Build for iOS Simulator
         run: |
