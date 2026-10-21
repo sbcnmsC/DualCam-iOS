@@ -77,16 +77,16 @@ final class VideoRecorder {
             idItem.dataType = "com.apple.metadata.datatype.UTF-8"
             w.metadata = [idItem]
 
-            let spec: [String: Any] = [
-                kCMMetadataFormatDescriptionMetadataSpecificationKey_Identifier as String:
+            let spec: NSDictionary = [
+                kCMMetadataFormatDescriptionMetadataSpecificationKey_Identifier as NSString:
                     "mdta/com.apple.quicktime.still-image-time",
-                kCMMetadataFormatDescriptionMetadataSpecificationKey_DataType as String:
+                kCMMetadataFormatDescriptionMetadataSpecificationKey_DataType as NSString:
                     "com.apple.metadata.datatype.int8"
             ]
             var desc: CMFormatDescription?
             CMMetadataFormatDescriptionCreateWithMetadataSpecifications(
                 allocator: kCFAllocatorDefault,
-                metadataType: kCMMetadataFormatDescriptionMetadataType_Metadata,
+                metadataType: kCMMetadataFormatType_Boxed,
                 metadataSpecifications: [spec] as CFArray,
                 formatDescriptionOut: &desc)
             if let desc = desc {

@@ -452,7 +452,7 @@ final class CameraManager: NSObject, ObservableObject {
 
     private func observeNotifications() {
         let nc = NotificationCenter.default
-        nc.addObserver(forName: AVCaptureSession.runtimeErrorNotification, object: session, queue: nil) { [weak self] _ in
+        nc.addObserver(forName: .AVCaptureSessionRuntimeError, object: session, queue: nil) { [weak self] _ in
             guard let self = self else { return }
             self.sessionQueue.async {
                 guard self.restartCount < 3 else { return }
@@ -460,14 +460,14 @@ final class CameraManager: NSObject, ObservableObject {
                 self.sessionQueue.asyncAfter(deadline: .now() + 0.5) { self.rebuild() }
             }
         }
-        nc.addObserver(forName: AVCaptureSession.wasInterruptedNotification, object: session, queue: nil) { [weak self] _ in
+        nc.addObserver(forName: .AVCaptureSessionWasInterrupted, object: session, queue: nil) { [weak self] _ in
             guard let self = self else { return }
             DispatchQueue.main.async {
                 self.statusText = "相机被系统打断"
                 if self.isRecording { self.stopRecording() }
             }
         }
-        nc.addObserver(forName: AVCaptureSession.interruptionEndedNotification, object: session, queue: nil) { [weak self] _ in
+        nc.addObserver(forName: .AVCaptureSessionInterruptionEnded, object: session, queue: nil) { [weak self] _ in
             self?.postStatus("双摄已启动")
         }
         nc.addObserver(forName: .AVCaptureDeviceSubjectAreaDidChange, object: nil, queue: nil) { [weak self] _ in
