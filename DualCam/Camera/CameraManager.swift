@@ -91,8 +91,11 @@ final class CameraManager: NSObject, ObservableObject {
     private var countdownTimer: Timer?
     private var dragSlot = 0
     private var dragStartBias: Float = 0
-    // sessionQueue-owned tokens coalesce rapid slider updates; taps remain immediate.
+    // sessionQueue-owned throttling state for fast slider/zoom updates.
     private var pendingDeviceUpdateTokens: [String: UUID] = [:]
+    private var pendingDeviceUpdateBodies: [String: (AVCaptureDevice) -> Void] = [:]
+    private var lastDeviceUpdateAt: [String: UInt64] = [:]
+    private var sessionGeneration: UInt64 = 0
 
     // MARK: - 启动
 
@@ -208,7 +211,13 @@ final class CameraManager: NSObject, ObservableObject {
 
     private func rebuild(attempt: Int = 0, resetStates: Bool = false) {
         guard let combo = currentCombo else { return }
-        if session.isRunning { session.stopRunning() }
+
+        // Invalidate delayed controls from the previous camera configuration.
+        // Keep the session running and apply input/output changes in one transaction.
+        sessionGeneration &+= 1
+        pendingDeviceUpdateTokens.removeAll()
+        pendingDeviceUpdateBodies.removeAll()
+        lastDeviceUpdateAt.removeAll()
 
         session.beginConfiguration()
         for input in session.inputs { session.removeInput(input) }
@@ -273,7 +282,11 @@ final class CameraManager: NSObject, ObservableObject {
         session.commitConfiguration()
 
         if let failure = failure {
-            postStatus(failure)
+            if session.isRunning { session.stopRunning() }
+            DispatchQueue.main.async {
+                self.ready = false
+                self.statusText = failure
+            }
             return
         }
 
@@ -289,7 +302,7 @@ final class CameraManager: NSObject, ObservableObject {
         sharedFPS = usedFPS
         lock.unlock()
 
-        session.startRunning()
+        if !session.isRunning { session.startRunning() }
         restartCount = 0
         let running = session.isRunning
         DispatchQueue.main.async {
@@ -664,7 +677,8 @@ final class CameraManager: NSObject, ObservableObject {
         guard comboIndex < combos.count else { return }
         let current = combos[comboIndex]
         if current.a == stop.spec {
-            setZoom(slot: 0, factor: stop.zoom)
+            // Use AVFoundation's native ramp for discrete optical zoom steps.
+            setZoom(slot: 0, factor: stop.zoom, animated: true)
             return
         }
         guard !isRecording else {
@@ -690,10 +704,10 @@ final class CameraManager: NSObject, ObservableObject {
         return slotStates[slot].zoom * slotInfos[slot].baseMultiplier
     }
 
-    func setZoom(slot: Int, factor: CGFloat) {
+    func setZoom(slot: Int, factor: CGFloat, animated: Bool = false) {
         let m = max(slotInfos[slot].maxZoom, 1)
         slotStates[slot].zoom = min(max(factor, 1), m)
-        applyZoom(slot)
+        applyZoom(slot, animated: animated)
     }
 
     private func withDevice(_ slot: Int, _ body: @escaping (AVCaptureDevice) -> Void) {
@@ -705,37 +719,79 @@ final class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    /// Coalesce high-frequency slider changes so stale device-configuration work never piles up.
-    /// All token access and AVCaptureDevice configuration happen on sessionQueue.
-    private func withDeviceDebounced(_ slot: Int, key: String, delay: TimeInterval = 0.045,
-                                     _ body: @escaping (AVCaptureDevice) -> Void) {
+    /// Throttle high-frequency controls while preserving the newest value.
+    /// Unlike trailing debounce, this continues to update during a pinch gesture.
+    private func withDeviceThrottled(
+        _ slot: Int,
+        key: String,
+        minimumInterval: TimeInterval = 1.0 / 30.0,
+        _ body: @escaping (AVCaptureDevice) -> Void
+    ) {
         sessionQueue.async { [weak self] in
-            guard let self = self else { return }
+            guard let self = self, slot < self.devices.count,
+                  self.devices[slot] != nil else { return }
+
             let updateKey = "\(slot):\(key)"
+            let generation = self.sessionGeneration
+            let now = DispatchTime.now().uptimeNanoseconds
+            let interval = UInt64(max(0, minimumInterval) * 1_000_000_000)
+            let last = self.lastDeviceUpdateAt[updateKey] ?? 0
+
+            if last == 0 || now >= last + interval {
+                self.pendingDeviceUpdateTokens.removeValue(forKey: updateKey)
+                self.pendingDeviceUpdateBodies.removeValue(forKey: updateKey)
+                self.performDeviceUpdate(slot, key: updateKey, body: body)
+                return
+            }
+
+            self.pendingDeviceUpdateBodies[updateKey] = body
+            guard self.pendingDeviceUpdateTokens[updateKey] == nil else { return }
+
             let token = UUID()
             self.pendingDeviceUpdateTokens[updateKey] = token
-            self.sessionQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
+            let waitNanos = max(1, last + interval - now)
+            self.sessionQueue.asyncAfter(deadline: .now() + Double(waitNanos) / 1_000_000_000) { [weak self] in
                 guard let self = self,
+                      self.sessionGeneration == generation,
                       self.pendingDeviceUpdateTokens[updateKey] == token else { return }
                 self.pendingDeviceUpdateTokens.removeValue(forKey: updateKey)
-                guard slot < self.devices.count, let device = self.devices[slot] else { return }
-                do { try device.lockForConfiguration() } catch { return }
-                body(device)
-                device.unlockForConfiguration()
+                guard let newestBody = self.pendingDeviceUpdateBodies.removeValue(forKey: updateKey) else { return }
+                self.performDeviceUpdate(slot, key: updateKey, body: newestBody)
             }
         }
     }
 
-    func applyZoom(_ slot: Int) {
+    private func performDeviceUpdate(
+        _ slot: Int,
+        key: String,
+        body: (AVCaptureDevice) -> Void
+    ) {
+        guard slot < devices.count, let device = devices[slot] else { return }
+        do { try device.lockForConfiguration() } catch { return }
+        body(device)
+        device.unlockForConfiguration()
+        lastDeviceUpdateAt[key] = DispatchTime.now().uptimeNanoseconds
+    }
+
+    func applyZoom(_ slot: Int, animated: Bool = false) {
         let z = slotStates[slot].zoom
-        withDeviceDebounced(slot, key: "zoom") { d in
-            d.videoZoomFactor = min(max(z, 1), d.activeFormat.videoMaxZoomFactor)
+        withDeviceThrottled(slot, key: "zoom") { d in
+            let target = min(max(z, 1), d.activeFormat.videoMaxZoomFactor)
+            if animated {
+                if d.isRampingVideoZoom { d.cancelVideoZoomRamp() }
+                if abs(d.videoZoomFactor - target) > 0.01 {
+                    d.ramp(toVideoZoomFactor: target, withRate: 4.5)
+                }
+            } else {
+                if d.isRampingVideoZoom { d.cancelVideoZoomRamp() }
+                d.videoZoomFactor = target
+            }
         }
     }
 
     func applyFocus(_ slot: Int) {
         let s = slotStates[slot]
-        withDeviceDebounced(slot, key: "focus") { d in
+        withDeviceThrottled(slot, key: "focus") { d in
             if s.manualFocus, d.isLockingFocusWithCustomLensPositionSupported {
                 d.setFocusModeLocked(lensPosition: s.lensPosition, completionHandler: nil)
             } else if s.locked, d.isFocusModeSupported(.locked) {
@@ -748,7 +804,7 @@ final class CameraManager: NSObject, ObservableObject {
 
     func applyExposure(_ slot: Int) {
         let s = slotStates[slot]
-        withDeviceDebounced(slot, key: "exposure") { d in
+        withDeviceThrottled(slot, key: "exposure") { d in
             if s.manualExposure {
                 let f = d.activeFormat
                 let iso = min(max(s.iso, f.minISO), f.maxISO)
@@ -771,7 +827,7 @@ final class CameraManager: NSObject, ObservableObject {
 
     func applyWhiteBalance(_ slot: Int) {
         let s = slotStates[slot]
-        withDeviceDebounced(slot, key: "white-balance") { d in
+        withDeviceThrottled(slot, key: "white-balance") { d in
             if s.manualWB, d.isLockingWhiteBalanceWithCustomDeviceGainsSupported {
                 let tt = AVCaptureDevice.WhiteBalanceTemperatureAndTintValues(temperature: s.temperature, tint: s.tint)
                 var gains = d.deviceWhiteBalanceGains(for: tt)
