@@ -340,9 +340,6 @@ struct TopBar: View {
                                dimmed: cam.captureMode == .video) {
                         cam.cfg.livePhoto.toggle()
                     }
-                    iconButton(cam.cfg.lowLight ? "moon.fill" : "moon", active: cam.cfg.lowLight) {
-                        cam.cfg.lowLight.toggle()
-                    }
                 }
             }
 
