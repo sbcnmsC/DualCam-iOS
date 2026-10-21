@@ -91,8 +91,8 @@ final class CameraManager: NSObject, ObservableObject {
     // 渲染线程与主线程共享（用 lock 保护）
     private let lock = NSLock()
     private var sharedCfg = Config()
-    /// Transient PiP drag override, protected by lock and consumed by the render queue.
-    private var previewPiPCenter: CGPoint?
+    /// While PiP is dragged, omit the secondary image from idle preview rendering.
+    private var sharedPiPDragActive = false
     private var sharedThumbs = false
     private var thumbsNeedRefresh = false
     private var latest: [CVPixelBuffer?] = [nil, nil]
@@ -487,7 +487,6 @@ final class CameraManager: NSObject, ObservableObject {
     private func cfgDidChange(_ old: Config) {
         lock.lock()
         sharedCfg = cfg
-        if let previewPiPCenter { sharedCfg.pipCenter = previewPiPCenter }
         lock.unlock()
         let new = cfg
         if old.resolution != new.resolution || old.fps != new.fps {
@@ -563,6 +562,7 @@ final class CameraManager: NSObject, ObservableObject {
         let a = latest[0]
         let b = latest[1]
         let front = slotFront
+        let isPiPDragging = sharedPiPDragActive
         lock.unlock()
         guard let bufA = a else { return }
 
@@ -605,7 +605,8 @@ final class CameraManager: NSObject, ObservableObject {
             )
         }
         let renderBounds = CGRect(origin: .zero, size: renderCanvas)
-        let composed = Compositor.compose(main: mainImage, sub: subImage, cfg: c, canvas: renderCanvas)
+        let previewSubImage = (isPiPDragging && !needsFullResolution && c.layout == .pip) ? nil : subImage
+        let composed = Compositor.compose(main: mainImage, sub: previewSubImage, cfg: c, canvas: renderCanvas)
         let finalImage = c.filter.apply(to: composed, intensity: c.filterIntensity).cropped(to: renderBounds)
 
         lock.lock()
@@ -1046,21 +1047,16 @@ final class CameraManager: NSObject, ObservableObject {
         cfg.pipWidth = 0.32
     }
 
-    /// Update the render-thread PiP position without publishing the whole camera Config.
-    /// This avoids rebuilding the complete SwiftUI screen for every point in a drag gesture.
-    func updatePiPDragPreview(center: CGPoint) {
+    /// Keep the renderer on the main camera while the UI moves a frosted-glass PiP placeholder.
+    /// The secondary feed is composed again when the gesture ends.
+    func setPiPDragPreviewActive(_ active: Bool) {
         lock.lock()
-        previewPiPCenter = center
-        sharedCfg.pipCenter = center
+        sharedPiPDragActive = active
         lock.unlock()
     }
 
-    /// Call after committing the final center to Config and applying snap.
     func clearPiPDragPreview() {
-        lock.lock()
-        previewPiPCenter = nil
-        sharedCfg.pipCenter = cfg.pipCenter
-        lock.unlock()
+        setPiPDragPreviewActive(false)
     }
 
     func updateFreeAspect(width: CGFloat, height: CGFloat) {
@@ -1769,7 +1765,8 @@ final class CameraManager: NSObject, ObservableObject {
                 self.showToast("还没有画面")
                 return
             }
-            let canvas = Compositor.canvasSize(aspect: c.aspect, resolution: c.resolution, sourceWidth: mainSize.width)
+            let canvas = Compositor.canvasSize(aspect: c.aspect, resolution: c.resolution,
+                                               sourceWidth: mainSize.width, aspectRatio: c.aspectRatio)
 
             var audioSettings: [String: Any]? = nil
             if self.audioActive {
