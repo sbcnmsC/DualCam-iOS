@@ -34,6 +34,7 @@ enum CanvasAspect: String, CaseIterable, Identifiable {
     case r916 = "9:16"
     case r34 = "3:4"
     case r11 = "1:1"
+    case r169 = "16:9"
     var id: String { rawValue }
     /// 宽 / 高
     var value: CGFloat {
@@ -41,6 +42,7 @@ enum CanvasAspect: String, CaseIterable, Identifiable {
         case .r916: return 9.0 / 16.0
         case .r34: return 3.0 / 4.0
         case .r11: return 1.0
+        case .r169: return 16.0 / 9.0
         }
     }
 }
