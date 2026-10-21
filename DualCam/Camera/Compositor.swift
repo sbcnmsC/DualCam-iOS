@@ -7,7 +7,8 @@ enum Compositor {
 
     // MARK: - 尺寸
 
-    static func canvasSize(aspect: CanvasAspect, resolution: ResolutionOption, sourceWidth: CGFloat) -> CGSize {
+    static func canvasSize(aspect: CanvasAspect, resolution: ResolutionOption, sourceWidth: CGFloat,
+                           aspectRatio: CGFloat? = nil) -> CGSize {
         var w: CGFloat
         switch resolution {
         case .p720: w = 720
@@ -17,7 +18,8 @@ enum Compositor {
         // 不超过摄像头实际像素，不做无意义的放大
         if sourceWidth >= 360 { w = min(w, sourceWidth) }
         w = floor(w / 2) * 2
-        let h = (w / aspect.value / 2).rounded() * 2
+        let ratio = max(aspectRatio ?? aspect.value, 0.1)
+        let h = (w / ratio / 2).rounded() * 2
         return CGSize(width: w, height: h)
     }
 
@@ -26,7 +28,7 @@ enum Compositor {
     /// 小窗矩形。圆形强制 1:1，并保证整体落在画布内。
     static func pipRectNormalized(cfg: Config) -> CGRect {
         let ratio: CGFloat = cfg.pipShape == .circle ? 1 : cfg.pipRatio.value
-        let canvasAspect = cfg.aspect.value
+        let canvasAspect = cfg.aspectRatio
         var w = min(max(cfg.pipWidth, 0.1), 0.95)
         var h = w * canvasAspect / ratio
         if h > 0.95 {
