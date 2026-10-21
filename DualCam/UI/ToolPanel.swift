@@ -35,7 +35,7 @@ struct ToolPanel: View {
                     switch tab {
                     case .pip: PiPTab()
                     case .filter: FilterTab()
-                    case .params: ParamsTab()
+                    case .params: QuickParamsTab()
                     case .settings: SettingsTab()
                     }
                 }
@@ -509,6 +509,382 @@ struct SettingsTab: View {
             Toggle("前置镜像", isOn: $cam.cfg.mirrorFront).font(.system(size: 13))
             Toggle("三分参考线", isOn: $cam.cfg.showGrid).font(.system(size: 13))
 
+            Divider().overlay(Color.white.opacity(0.12))
+            QuickParameterPreferencesSection()
         }
+    }
+}
+
+// MARK: - 快捷参数栏（选择参数类型后即时显示调节器）
+
+private enum QuickParameter: String, CaseIterable, Identifiable {
+    case exposure = "曝光"
+    case iso = "ISO"
+    case shutter = "快门"
+    case focus = "对焦"
+    case whiteBalance = "白平衡"
+    case zoom = "变焦"
+    case resolution = "分辨率"
+    case frameRate = "帧率"
+    case timer = "定时器"
+    case stabilization = "防抖"
+
+    var id: String { rawValue }
+    var icon: String {
+        switch self {
+        case .exposure: return "sun.max"
+        case .iso: return "camera.aperture"
+        case .shutter: return "timer"
+        case .focus: return "scope"
+        case .whiteBalance: return "thermometer.medium"
+        case .zoom: return "plus.magnifyingglass"
+        case .resolution: return "viewfinder"
+        case .frameRate: return "speedometer"
+        case .timer: return "hourglass"
+        case .stabilization: return "viewfinder.circle"
+        }
+    }
+}
+
+struct QuickParamsTab: View {
+    @EnvironmentObject private var cam: CameraManager
+    @State private var selected: QuickParameter = .exposure
+    @AppStorage("dualcam.quickParameterOrder") private var parameterOrder = "曝光,ISO,快门,对焦,白平衡,变焦,分辨率,帧率,定时器,防抖"
+    @AppStorage("dualcam.quickParameterVisible") private var visibleParameters = "曝光,ISO,快门,对焦,白平衡,变焦,分辨率,帧率,定时器,防抖"
+
+    private var orderedParameters: [QuickParameter] {
+        let stored = parameterOrder.split(separator: ",").compactMap { QuickParameter(rawValue: String($0)) }
+        return stored + QuickParameter.allCases.filter { !stored.contains($0) }
+    }
+
+    private var visibleItems: [QuickParameter] {
+        let visible = Set(visibleParameters.split(separator: ",").map(String.init))
+        return orderedParameters.filter { visible.contains($0.rawValue) }
+    }
+
+    var body: some View {
+        let i = min(max(cam.paramTarget, 0), 1)
+        let activeSelection = visibleItems.contains(selected) ? selected : (visibleItems.first ?? .exposure)
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 6) {
+                Text("快捷控制").font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.65))
+                Spacer()
+                Picker("镜头", selection: $cam.paramTarget) {
+                    Text(cam.slotInfos[0].name).tag(0)
+                    Text(cam.slotInfos[1].name).tag(1)
+                }
+                .pickerStyle(.menu)
+                .tint(.yellow)
+                .frame(maxWidth: 150)
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 7) {
+                    ForEach(visibleItems) { item in
+                        Button {
+                            withAnimation(.easeOut(duration: 0.15)) { selected = item }
+                        } label: {
+                            VStack(spacing: 4) {
+                                Image(systemName: item.icon).font(.system(size: 16, weight: .semibold))
+                                Text(item.rawValue).font(.system(size: 10, weight: .medium))
+                            }
+                            .foregroundStyle(activeSelection == item ? Color.yellow : Color.white.opacity(0.8))
+                            .frame(width: 59, height: 49)
+                            .background(RoundedRectangle(cornerRadius: 10)
+                                .fill(activeSelection == item ? Color.yellow.opacity(0.14) : Color.white.opacity(0.065)))
+                            .overlay(RoundedRectangle(cornerRadius: 10)
+                                .stroke(activeSelection == item ? Color.yellow.opacity(0.75) : Color.clear, lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+
+            if visibleItems.isEmpty {
+                Text("没有启用的快捷参数。请在「设置 → 快捷栏优先显示」中开启至少一项。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.white.opacity(0.65))
+            } else {
+                controlBody(slot: i, parameter: activeSelection)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func controlBody(slot i: Int, parameter: QuickParameter) -> some View {
+        let st = cam.slotStates[i]
+        let info = cam.slotInfos[i]
+        let base = max(info.baseMultiplier, 0.01)
+
+        switch parameter {
+        case .exposure:
+            HStack {
+                Label("曝光补偿", systemImage: "sun.max").font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Text(String(format: "%+.1f EV", Double(st.exposureBias)))
+                    .font(.system(size: 11, design: .monospaced)).foregroundStyle(Color.yellow)
+                Button("归零") { cam.resetExposureBias(i) }
+                    .font(.system(size: 11, weight: .semibold)).tint(.yellow)
+            }
+            LabeledSlider(title: "EV", value: numberBinding(i, \.exposureBias) { cam.applyExposure($0) },
+                          range: Double(info.minBias)...Double(max(info.maxBias, info.minBias + 0.1)),
+                          valueText: String(format: "%+.1f", Double(st.exposureBias)),
+                          disabled: st.manualExposure || st.locked)
+        case .iso:
+            if !st.manualExposure {
+                Button {
+                    cam.slotStates[i].manualExposure = true
+                    cam.applyExposure(i)
+                } label: {
+                    Label("启用手动曝光以调节 ISO", systemImage: "lock.open")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(maxWidth: .infinity).frame(height: 32)
+                        .background(Capsule().fill(Color.yellow.opacity(0.16)))
+                }.buttonStyle(.plain)
+            } else {
+                LabeledSlider(icon: "camera.aperture", title: "ISO",
+                              value: numberBinding(i, \.iso) { cam.applyExposure($0) },
+                              range: Double(info.minISO)...Double(max(info.maxISO, info.minISO + 1)),
+                              valueText: "\(Int(st.iso))")
+            }
+        case .shutter:
+            if !st.manualExposure {
+                Button {
+                    cam.slotStates[i].manualExposure = true
+                    cam.applyExposure(i)
+                } label: {
+                    Label("启用手动曝光以调节快门", systemImage: "lock.open")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(maxWidth: .infinity).frame(height: 32)
+                        .background(Capsule().fill(Color.yellow.opacity(0.16)))
+                }.buttonStyle(.plain)
+            } else {
+                LabeledSlider(icon: "timer", title: "快门",
+                              value: numberBinding(i, \.shutter) { cam.applyExposure($0) },
+                              range: 0...1, valueText: shutterText(info: info, t: st.shutter))
+            }
+        case .focus:
+            HStack {
+                Toggle("手动对焦", isOn: boolBinding(i, \.manualFocus) { cam.applyFocus($0) })
+                    .font(.system(size: 12))
+                Spacer()
+                Button("自动对焦") { cam.setAutoFocus(i) }
+                    .font(.system(size: 11, weight: .semibold)).tint(.yellow)
+            }
+            if st.manualFocus {
+                LabeledSlider(icon: "scope", title: "对焦距离",
+                              value: numberBinding(i, \.lensPosition) { cam.applyFocus($0) },
+                              range: 0...1, valueText: String(format: "%.2f", Double(st.lensPosition)),
+                              disabled: !info.supportsManualFocus)
+            } else {
+                Text("点按预览对焦；焦点框右侧太阳滑杆可调节曝光。")
+                    .font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.62))
+            }
+        case .whiteBalance:
+            Toggle("手动白平衡", isOn: boolBinding(i, \.manualWB) { cam.applyWhiteBalance($0) })
+                .font(.system(size: 12))
+            if st.manualWB {
+                LabeledSlider(icon: "thermometer", title: "色温",
+                              value: numberBinding(i, \.temperature) { cam.applyWhiteBalance($0) },
+                              range: 2500...9000, valueText: "\(Int(st.temperature))K")
+                LabeledSlider(icon: "circle.lefthalf.filled", title: "色调",
+                              value: numberBinding(i, \.tint) { cam.applyWhiteBalance($0) },
+                              range: -150...150, valueText: "\(Int(st.tint))")
+            }
+            Button {
+                cam.slotStates[i].manualWB = false
+                cam.applyWhiteBalance(i)
+            } label: {
+                Label("恢复自动白平衡", systemImage: "sparkles")
+                    .font(.system(size: 11, weight: .medium))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 30)
+                    .background(Capsule().fill(Color.white.opacity(0.09)))
+            }
+            .buttonStyle(.plain)
+        case .zoom:
+            LabeledSlider(icon: "plus.magnifyingglass", title: "变焦",
+                          value: Binding(
+                            get: { Double(cam.displayZoom(slot: i)) },
+                            set: { cam.setZoom(slot: i, factor: CGFloat($0) / base) }),
+                          range: Double(base)...Double(max(base * info.maxZoom, base + 0.01)),
+                          valueText: String(format: "%.1f×", Double(cam.displayZoom(slot: i))))
+        case .resolution:
+            HStack {
+                Text("分辨率").font(.system(size: 12, weight: .semibold))
+                Picker("分辨率", selection: $cam.cfg.resolution) {
+                    ForEach(ResolutionOption.allCases) { option in Text(option.rawValue).tag(option) }
+                }
+                .pickerStyle(.segmented).disabled(cam.isRecording)
+            }
+        case .frameRate:
+            HStack {
+                Text("帧率").font(.system(size: 12, weight: .semibold))
+                Picker("帧率", selection: $cam.cfg.fps) {
+                    Text("30 fps").tag(30)
+                    Text("60 fps").tag(60)
+                }
+                .pickerStyle(.segmented).disabled(cam.isRecording)
+            }
+            Text("当前双摄格式不支持所选帧率时，会自动退到可用档位。")
+                .font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.6))
+        case .timer:
+            HStack {
+                Text("定时器").font(.system(size: 12, weight: .semibold))
+                Picker("定时器", selection: $cam.timerSeconds) {
+                    Text("关闭").tag(0)
+                    Text("3 秒").tag(3)
+                    Text("10 秒").tag(10)
+                }
+                .pickerStyle(.segmented)
+            }
+        case .stabilization:
+            Toggle("系统视频防抖", isOn: $cam.cfg.stabilization)
+                .font(.system(size: 12)).disabled(cam.isRecording)
+            Text("只在设备和当前双摄连接支持时生效。")
+                .font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.6))
+        }
+    }
+
+    private func numberBinding<T: BinaryFloatingPoint>(
+        _ i: Int, _ keyPath: WritableKeyPath<SlotState, T>,
+        apply: @escaping (Int) -> Void
+    ) -> Binding<Double> {
+        Binding(
+            get: { Double(cam.slotStates[i][keyPath: keyPath]) },
+            set: {
+                cam.slotStates[i][keyPath: keyPath] = T($0)
+                apply(i)
+            }
+        )
+    }
+
+    private func boolBinding(
+        _ i: Int, _ keyPath: WritableKeyPath<SlotState, Bool>,
+        apply: @escaping (Int) -> Void
+    ) -> Binding<Bool> {
+        Binding(
+            get: { cam.slotStates[i][keyPath: keyPath] },
+            set: {
+                cam.slotStates[i][keyPath: keyPath] = $0
+                apply(i)
+            }
+        )
+    }
+
+    private func shutterText(info: SlotInfo, t: Double) -> String {
+        let ratio = max(info.maxShutter / max(info.minShutter, 0.000001), 1)
+        let seconds = info.minShutter * pow(ratio, t)
+        if seconds >= 0.5 { return String(format: "%.1fs", seconds) }
+        return "1/\(Int((1 / max(seconds, 0.000001)).rounded()))"
+    }
+}
+
+
+// MARK: - 快捷栏优先显示（持久化）
+
+private struct QuickParameterPreferencesSection: View {
+    @AppStorage("dualcam.quickParameterOrder") private var parameterOrder = "曝光,ISO,快门,对焦,白平衡,变焦,分辨率,帧率,定时器,防抖"
+    @AppStorage("dualcam.quickParameterVisible") private var visibleParameters = "曝光,ISO,快门,对焦,白平衡,变焦,分辨率,帧率,定时器,防抖"
+
+    private var orderedItems: [QuickParameter] {
+        let stored = parameterOrder.split(separator: ",").compactMap { QuickParameter(rawValue: String($0)) }
+        return stored + QuickParameter.allCases.filter { !stored.contains($0) }
+    }
+
+    private var visibleSet: Set<String> {
+        Set(visibleParameters.split(separator: ",").map(String.init))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("快捷栏优先显示", systemImage: "slider.horizontal.3")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Text("\(visibleSet.count)/\(QuickParameter.allCases.count)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(Color.white.opacity(0.6))
+            }
+            Text("开关控制显示；↑↓调整快捷栏从左到右的优先顺序。设置会自动保存。")
+                .font(.system(size: 10))
+                .foregroundStyle(Color.white.opacity(0.6))
+                .fixedSize(horizontal: false, vertical: true)
+
+            ForEach(Array(orderedItems.enumerated()), id: \.element.id) { index, item in
+                HStack(spacing: 8) {
+                    Image(systemName: item.icon)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Color.yellow)
+                        .frame(width: 22)
+                    Text(item.rawValue)
+                        .font(.system(size: 12))
+                    Spacer()
+                    Toggle("显示", isOn: Binding(
+                        get: { visibleSet.contains(item.rawValue) },
+                        set: { setVisible(item, enabled: $0) }
+                    ))
+                    .labelsHidden()
+                    .tint(.yellow)
+                    .scaleEffect(0.85)
+
+                    Button { move(item, offset: -1) } label: {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 11, weight: .semibold))
+                            .frame(width: 26, height: 28)
+                            .background(Capsule().fill(Color.white.opacity(0.08)))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(index == 0)
+                    .opacity(index == 0 ? 0.25 : 1)
+                    .accessibilityLabel("将\(item.rawValue)提前")
+
+                    Button { move(item, offset: 1) } label: {
+                        Image(systemName: "arrow.down")
+                            .font(.system(size: 11, weight: .semibold))
+                            .frame(width: 26, height: 28)
+                            .background(Capsule().fill(Color.white.opacity(0.08)))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(index == orderedItems.count - 1)
+                    .opacity(index == orderedItems.count - 1 ? 0.25 : 1)
+                    .accessibilityLabel("将\(item.rawValue)后移")
+                }
+                .padding(.vertical, 2)
+            }
+
+            Button {
+                parameterOrder = QuickParameter.allCases.map(\.rawValue).joined(separator: ",")
+                visibleParameters = QuickParameter.allCases.map(\.rawValue).joined(separator: ",")
+            } label: {
+                Label("恢复默认快捷栏", systemImage: "arrow.uturn.backward")
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 32)
+                    .background(Capsule().fill(Color.white.opacity(0.08)))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.045)))
+    }
+
+    private func setVisible(_ item: QuickParameter, enabled: Bool) {
+        var selected = visibleSet
+        if enabled { selected.insert(item.rawValue) }
+        else { selected.remove(item.rawValue) }
+        visibleParameters = orderedItems.filter { selected.contains($0.rawValue) }
+            .map(\.rawValue).joined(separator: ",")
+    }
+
+    private func move(_ item: QuickParameter, offset: Int) {
+        var items = orderedItems
+        guard let index = items.firstIndex(of: item) else { return }
+        let target = index + offset
+        guard items.indices.contains(target) else { return }
+        items.swapAt(index, target)
+        parameterOrder = items.map(\.rawValue).joined(separator: ",")
     }
 }
