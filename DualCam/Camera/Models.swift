@@ -110,7 +110,7 @@ struct Config: Equatable {
     var resolution: ResolutionOption = .maximum
     var fps = 30
     var outputMode: OutputMode = .original
-    var livePhoto = true
+    var livePhoto = false
     var lowLight = true
     var stabilization = false   // 默认关闭：防抖会让预览多延迟几帧
     var showGrid = true
