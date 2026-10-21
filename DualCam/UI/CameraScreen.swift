@@ -36,7 +36,7 @@ struct CameraScreen: View {
                         ToolPanel(tab: $panelTab)
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
-                    BottomBar(showPanel: $showPanel)
+                    BottomBar(showPanel: $showPanel, panelTab: $panelTab)
                 }
 
                 OverlayLayer()
@@ -370,17 +370,7 @@ struct TopBar: View {
                 }
             }
 
-            HStack {
-                Spacer()
-                Text(cam.outputLabel.isEmpty ? "\(cam.effectiveFPS) fps" : "\(cam.outputLabel) · \(cam.effectiveFPS) fps")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundStyle(Color.white.opacity(0.78))
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 6)
-                    .background(Capsule().fill(Color.white.opacity(0.07)))
-                    .overlay(Capsule().stroke(Color.white.opacity(0.11), lineWidth: 0.6))
-                    .padding(.trailing, 12)
-            }
+            // Resolution and FPS readout intentionally omitted; keep the top edge visually clean.
         }
     }
 
@@ -410,10 +400,11 @@ struct TopBar: View {
 struct BottomBar: View {
     @EnvironmentObject private var cam: CameraManager
     @Binding var showPanel: Bool
+    @Binding var panelTab: PanelTab
 
     var body: some View {
         VStack(spacing: 16) {
-            // 快门行：左 = 布局（对应原生的微距键位置），右 = 更多
+            // 快门行：左 = 布局，右 = Build 39 的快捷参数入口
             HStack {
                 Button { cam.toggleLayout() } label: {
                     Image(systemName: cam.cfg.layout == .pip ? "rectangle.on.rectangle" : "rectangle.split.1x2")
@@ -429,14 +420,28 @@ struct BottomBar: View {
                 ShutterButton()
                 Spacer()
 
-                Button { showPanel.toggle() } label: {
-                    Image(systemName: "circle.grid.2x3.fill")
-                        .font(.system(size: 20))
-                        .foregroundStyle(showPanel ? Color.yellow : Color.white)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.22)) {
+                        if showPanel && panelTab == .params {
+                            showPanel = false
+                        } else {
+                            panelTab = .params
+                            showPanel = true
+                        }
+                    }
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(showPanel && panelTab == .params ? Color.yellow : Color.white)
                         .frame(width: 52, height: 52)
                         .background(Circle().fill(Color.white.opacity(0.12)))
+                        .overlay(Circle().stroke(
+                            showPanel && panelTab == .params ? Color.yellow.opacity(0.7) : Color.clear,
+                            lineWidth: 1.2
+                        ))
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("快捷参数")
             }
             .padding(.horizontal, 28)
 
