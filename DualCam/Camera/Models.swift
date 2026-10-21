@@ -36,6 +36,7 @@ enum CanvasAspect: String, CaseIterable, Identifiable {
     case r11 = "1:1"
     case r169 = "16:9"
     case r219 = "21:9"
+    case free = "全屏自由"
     var id: String { rawValue }
     /// 宽 / 高
     var value: CGFloat {
@@ -45,6 +46,7 @@ enum CanvasAspect: String, CaseIterable, Identifiable {
         case .r11: return 1.0
         case .r169: return 16.0 / 9.0
         case .r219: return 21.0 / 9.0
+        case .free: return 9.0 / 16.0
         }
     }
 }
@@ -97,6 +99,11 @@ struct Config: Equatable {
     var layout: LayoutMode = .pip
     var swapped = false
     var aspect: CanvasAspect = .r34
+    /// Updated from the available preview bounds when full-screen free aspect is selected.
+    var freeAspect: CGFloat = 9.0 / 16.0
+    var aspectRatio: CGFloat {
+        aspect == .free ? min(max(freeAspect, 0.2), 4.0) : aspect.value
+    }
     var pipCenter = CGPoint(x: 0.76, y: 0.20)   // 归一化，左上角为原点
     var pipWidth: CGFloat = 0.32                // 占画布宽度的比例
     var pipRatio: PiPRatio = .r34
