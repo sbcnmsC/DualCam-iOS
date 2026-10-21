@@ -456,6 +456,12 @@ struct SettingsTab: View {
                         .buttonStyle(.plain)
                     }
                 }
+                if cam.cfg.aspect == .free {
+                    Text("全屏自由会覆盖当前预览区域，并随屏幕方向与可用尺寸自动调整输出比例。")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color.white.opacity(0.62))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             HStack {
                 Text("分辨率").font(.system(size: 13)).frame(width: 64, alignment: .leading)
