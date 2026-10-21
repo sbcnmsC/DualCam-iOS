@@ -13,20 +13,26 @@ enum FilterKind: String, CaseIterable, Identifiable {
     case chrome = "铬黄"
     case mono = "黑白"
     case blackGold = "黑金"
+    case beach = "海边"
+    case landscape = "风光"
+    case humanity = "人文"
 
     var id: String { rawValue }
 
     /// 对合成后的整幅画面应用滤镜。intensity 为 0...1，1 为完全应用。
     func apply(to image: CIImage, intensity: CGFloat) -> CIImage {
         if self == .original { return image }
-        let filtered = rawApply(image)
-        let t = min(max(intensity, 0), 1)
+        let extent = image.extent
+        // Keep every preset inside the original frame; some Core Image effects can
+        // otherwise expand their extent and cause edge artifacts or inconsistent thumbnails.
+        let filtered = rawApply(image).cropped(to: extent)
+        let t = min(max(intensity.isFinite ? intensity : 1, 0), 1)
         if t >= 0.999 { return filtered }
         if t <= 0.001 { return image }
         return image.applyingFilter("CIDissolveTransition", parameters: [
             kCIInputTargetImageKey: filtered,
             kCIInputTimeKey: t
-        ])
+        ]).cropped(to: extent)
     }
 
     private func rawApply(_ image: CIImage) -> CIImage {
@@ -66,6 +72,20 @@ enum FilterKind: String, CaseIterable, Identifiable {
                 kCIInputIntensityKey: 1.0
             ])
             return colorControls(m, saturation: 1.0, brightness: -0.03, contrast: 1.25)
+        case .beach:
+            // Coastal look: aqua water and open highlights without an extreme cyan cast.
+            let balanced = colorMatrix(image, r: 1.015, g: 1.045, b: 1.075,
+                                       bias: CIVector(x: 0.006, y: 0.009, z: 0.012, w: 0))
+            let vivid = balanced.applyingFilter("CIVibrance", parameters: ["inputAmount": 0.22])
+            return colorControls(vivid, saturation: 1.10, brightness: 0.025, contrast: 1.035)
+        case .landscape:
+            let vivid = image.applyingFilter("CIVibrance", parameters: ["inputAmount": 0.48])
+            return colorControls(vivid, saturation: 1.12, brightness: 0.01, contrast: 1.10)
+        case .humanity:
+            // Documentary / street portrait look: quieter saturation and a restrained warm bias.
+            let balanced = colorMatrix(image, r: 1.035, g: 1.005, b: 0.965,
+                                       bias: CIVector(x: 0.012, y: 0.008, z: 0.004, w: 0))
+            return colorControls(balanced, saturation: 0.84, brightness: 0.012, contrast: 1.055)
         }
     }
 }
