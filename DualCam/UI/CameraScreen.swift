@@ -83,11 +83,29 @@ struct PreviewStage: View {
             }
 
             if let marker = cam.focusMarker {
-                FocusMarkerView(exposureBias: marker.exposureBias)
-                    .position(x: marker.point.x * size.width, y: marker.point.y * size.height)
-                    .allowsHitTesting(false)
-                    .id(marker.id)
-                    .transition(.opacity)
+                let slot = min(max(marker.slot ?? cam.mainSlot, 0), 1)
+                let focusX = min(max(marker.point.x * size.width, 36), max(36, size.width - 36))
+                let focusY = min(max(marker.point.y * size.height, 36), max(36, size.height - 36))
+                let railOnLeft = focusX > size.width * 0.64
+                let railHeight = min(124, max(76, size.height - 64))
+                let groupHeight = railHeight + 50
+                let groupCenterX = focusX + (railOnLeft ? -26 : 26)
+                let groupCenterY = min(max(focusY, groupHeight / 2), max(groupHeight / 2, size.height - groupHeight / 2))
+                FocusMarkerView(
+                    exposureBias: marker.exposureBias ?? cam.slotStates[slot].exposureBias,
+                    minBias: cam.slotInfos[slot].minBias,
+                    maxBias: cam.slotInfos[slot].maxBias,
+                    isDisabled: cam.slotStates[slot].manualExposure || cam.slotStates[slot].locked,
+                    railOnLeft: railOnLeft,
+                    trackHeight: railHeight,
+                    onExposureChanged: { cam.adjustExposureBias(slot: slot, value: $0) }
+                )
+                .position(
+                    x: min(max(groupCenterX, 61), max(61, size.width - 61)),
+                    y: groupCenterY
+                )
+                .id(marker.id)
+                .transition(.opacity)
             }
 
             VStack {
@@ -187,34 +205,172 @@ struct OutputModePill: View {
     }
 }
 
+/// Touch focus reticle with its own exposure rail. The transparent rail hit area is wider
+/// than its artwork, and the rail lives on the side with more free preview space.
 struct FocusMarkerView: View {
-    let exposureBias: Float?
+    let exposureBias: Float
+    let minBias: Float
+    let maxBias: Float
+    let isDisabled: Bool
+    let railOnLeft: Bool
+    let trackHeight: CGFloat
+    let onExposureChanged: (Float) -> Void
+
     @State private var appeared = false
+    @State private var isDragging = false
+    @State private var dragBias: Float?
+
+    private let reticleSize: CGFloat = 68
+    private let railWidth: CGFloat = 48
+
+    private var displayedBias: Float {
+        min(max(dragBias ?? exposureBias, minBias), maxBias)
+    }
+
+    private var handleOffset: CGFloat {
+        let span = max(maxBias - minBias, 0.1)
+        let fraction = CGFloat((maxBias - displayedBias) / span)
+        return (fraction - 0.5) * trackHeight
+    }
+
+    private var disabledTint: Color {
+        isDisabled ? Color.white.opacity(0.38) : Color.yellow
+    }
 
     var body: some View {
+        HStack(spacing: 10) {
+            if railOnLeft {
+                exposureRail
+                focusReticle
+            } else {
+                focusReticle
+                exposureRail
+            }
+        }
+        .frame(width: 126, height: max(reticleSize, trackHeight + 50))
+        .scaleEffect(appeared ? 1 : 1.04)
+        .onAppear { withAnimation(.easeOut(duration: 0.14)) { appeared = true } }
+        .accessibilityElement(children: .contain)
+    }
+
+    private var focusReticle: some View {
+        ZStack(alignment: .topTrailing) {
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color.yellow.opacity(0.98), lineWidth: 1.5)
+                .frame(width: reticleSize, height: reticleSize)
+                .overlay {
+                    FocusReticleCorners()
+                        .stroke(Color.yellow, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                        .frame(width: reticleSize, height: reticleSize)
+                }
+            Image(systemName: isDisabled ? "lock.fill" : "scope")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(Color.yellow)
+                .frame(width: 20, height: 20)
+                .background(Circle().fill(Color.black.opacity(0.82)))
+                .offset(x: 7, y: -7)
+        }
+        .frame(width: reticleSize, height: reticleSize)
+        // Keep the reticle visually present without stealing taps intended to refocus the preview.
+        .allowsHitTesting(false)
+        .shadow(color: Color.black.opacity(0.25), radius: 3, y: 1)
+    }
+
+    private var exposureRail: some View {
         VStack(spacing: 4) {
+            Text("EV")
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.72))
+
             ZStack {
-                RoundedRectangle(cornerRadius: 4)
-                    .stroke(Color.yellow, lineWidth: 1.5)
-                    .frame(width: 72, height: 72)
-                Image(systemName: exposureBias == nil ? "scope" : "sun.max.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.yellow)
-                    .offset(x: 36, y: -36)
+                Capsule()
+                    .fill(Color.white.opacity(isDisabled ? 0.16 : 0.22))
+                    .frame(width: 4, height: trackHeight)
+
+                ForEach(0..<5, id: \.self) { tick in
+                    Capsule()
+                        .fill(Color.white.opacity(tick == 2 ? 0.78 : 0.38))
+                        .frame(width: tick == 2 ? 13 : 7, height: 1)
+                        .offset(y: (CGFloat(tick) / 4 - 0.5) * trackHeight)
+                }
+
+                Circle()
+                    .fill(Color.black.opacity(0.8))
+                    .frame(width: 25, height: 25)
+                    .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 0.7))
+                    .overlay {
+                        Circle()
+                            .fill(disabledTint)
+                            .frame(width: 11, height: 11)
+                    }
+                    .overlay(Circle().stroke(Color.white.opacity(0.9), lineWidth: 1.2)
+                        .frame(width: 25, height: 25))
+                    .shadow(color: .black.opacity(0.45), radius: 4, y: 2)
+                    .offset(y: handleOffset)
+                    .allowsHitTesting(false)
             }
-            if let exposureBias {
-                Text(String(format: "EV %+.1f", Double(exposureBias)))
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(Color.yellow)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(Capsule().fill(Color.black.opacity(0.72)))
-            }
+            .frame(width: railWidth, height: trackHeight + 16)
+            .contentShape(Rectangle())
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                    .onChanged { value in
+                        guard !isDisabled else { return }
+                        if !isDragging {
+                            isDragging = true
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        }
+                        let y = min(max(value.location.y - 8, 0), trackHeight)
+                        let fraction = 1 - Float(y / max(trackHeight, 1))
+                        let next = minBias + fraction * (maxBias - minBias)
+                        dragBias = next
+                        onExposureChanged(next)
+                    }
+                    .onEnded { _ in
+                        isDragging = false
+                        dragBias = nil
+                    }
+            )
+            .accessibilityLabel("曝光补偿")
+            .accessibilityValue(String(format: "%+.1f EV", Double(displayedBias)))
+            .accessibilityHint(isDisabled ? "先关闭手动曝光或锁定状态" : "上下滑动调节曝光，双击数值可归零")
+
+            Text(String(format: "%+.1f", Double(displayedBias)))
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(isDisabled ? Color.white.opacity(0.45) : Color.yellow)
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) {
+                    guard !isDisabled else { return }
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    dragBias = 0
+                    onExposureChanged(0)
+                }
         }
-        .scaleEffect(appeared ? 1 : 1.12)
-        .onAppear {
-            withAnimation(.easeOut(duration: 0.16)) { appeared = true }
-        }
+        .padding(.horizontal, 2)
+        .padding(.vertical, 5)
+        .background(Capsule().fill(Color.black.opacity(0.58)))
+        .overlay(Capsule().stroke(Color.white.opacity(isDragging ? 0.36 : 0.13), lineWidth: 0.8))
+        .opacity(isDisabled ? 0.72 : 1)
+        .frame(width: railWidth, height: max(reticleSize, trackHeight + 50))
+    }
+}
+
+private struct FocusReticleCorners: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let length: CGFloat = 12
+        path.move(to: CGPoint(x: 1, y: length))
+        path.addLine(to: CGPoint(x: 1, y: 1))
+        path.addLine(to: CGPoint(x: length, y: 1))
+        path.move(to: CGPoint(x: rect.maxX - length, y: 1))
+        path.addLine(to: CGPoint(x: rect.maxX - 1, y: 1))
+        path.addLine(to: CGPoint(x: rect.maxX - 1, y: length))
+        path.move(to: CGPoint(x: 1, y: rect.maxY - length))
+        path.addLine(to: CGPoint(x: 1, y: rect.maxY - 1))
+        path.addLine(to: CGPoint(x: length, y: rect.maxY - 1))
+        path.move(to: CGPoint(x: rect.maxX - length, y: rect.maxY - 1))
+        path.addLine(to: CGPoint(x: rect.maxX - 1, y: rect.maxY - 1))
+        path.addLine(to: CGPoint(x: rect.maxX - 1, y: rect.maxY - length))
+        return path
     }
 }
 
