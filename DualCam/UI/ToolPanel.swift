@@ -219,7 +219,7 @@ struct ParamsTab: View {
                 iso: Double(st.iso),
                 minISO: Double(info.minISO),
                 maxISO: Double(info.maxISO),
-                shutter: st.shutter,
+                shutterLabel: shutterText(info: info, t: st.shutter),
                 temperature: Double(st.temperature),
                 tint: Double(st.tint),
                 focus: Double(st.lensPosition),
@@ -327,7 +327,7 @@ private struct ParameterChart: View {
     let iso: Double
     let minISO: Double
     let maxISO: Double
-    let shutter: Double
+    let shutterLabel: String
     let temperature: Double
     let tint: Double
     let focus: Double
@@ -340,15 +340,10 @@ private struct ParameterChart: View {
             ("变焦", String(format: "%.1f×", zoom), normalize(zoom, 1, maxZoom)),
             ("曝光", String(format: "%+.1f EV", exposureBias), normalize(exposureBias, minBias, maxBias)),
             ("ISO", manualExposure ? String(Int(iso)) : "自动", normalize(iso, minISO, maxISO)),
-            ("快门", manualExposure ? shutterLabel : "自动", min(max(shutter, 0), 1)),
+            ("快门", manualExposure ? shutterLabel : "自动", 0.5),
             ("白平衡", manualWB ? "\(Int(temperature))K" : "自动", normalize(temperature, 2500, 9000)),
             ("对焦", manualFocus ? String(format: "%.2f", focus) : "自动", min(max(focus, 0), 1))
         ]
-    }
-
-    private var shutterLabel: String {
-        let seconds = 1.0 / max(pow(max(maxZoom, 1), 1 - shutter) * 1000, 1)
-        return String(format: "1/%.0f", 1 / max(seconds, 0.0001))
     }
 
     private func normalize(_ value: Double, _ lower: Double, _ upper: Double) -> Double {
@@ -366,7 +361,8 @@ private struct ParameterChart: View {
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(Color.yellow)
             }
-            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+            ForEach(Array(rows.enumerated()), id: \.offset) { item in
+                let row = item.element
                 HStack(spacing: 8) {
                     Text(row.0)
                         .font(.system(size: 10))
