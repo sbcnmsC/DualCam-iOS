@@ -124,6 +124,11 @@ final class VideoRecorder {
         appendBuffer(buffer, time: time)
     }
 
+    /// Reuse the already-rendered composite buffer without a second CIContext render.
+    func appendPixelBuffer(_ buffer: CVPixelBuffer, time: CMTime) {
+        appendBuffer(buffer, time: time)
+    }
+
     /// 直接写入一路原始画面。
     func appendRaw(_ buffer: CVPixelBuffer, time: CMTime) {
         appendBuffer(buffer, time: time)
