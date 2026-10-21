@@ -24,7 +24,10 @@ struct CameraScreen: View {
                 .frame(maxWidth: .infinity)
 
                 VStack(spacing: 0) {
-                    TopBar()
+                    TopBar(onTimerTap: {
+                        timerDraft = cam.timerSeconds > 0 ? cam.timerSeconds : 5
+                        showTimerSettings = true
+                    })
                         .frame(height: topBarHeight)
                     Spacer(minLength: 0)
                     if showPanel {
@@ -35,6 +38,11 @@ struct CameraScreen: View {
                 }
 
                 OverlayLayer()
+
+                if showTimerSettings {
+                    TimerSettingsOverlay(timerDraft: $timerDraft, isPresented: $showTimerSettings)
+                        .zIndex(20)
+                }
             }
             .onAppear { updateFreeAspect(for: geo.size) }
             .onChange(of: geo.size) { _, newSize in updateFreeAspect(for: newSize) }
@@ -435,8 +443,10 @@ struct PiPOverlay: View {
         DragGesture(minimumDistance: 4, coordinateSpace: .local)
             .onChanged { value in
                 if dragOriginCenter == nil {
+                    guard !cam.isRecording && !cam.isCapturingPhoto else { return }
                     dragOriginCenter = cam.cfg.pipCenter
                     isDraggingPiP = true
+                    cam.setPiPDragPreviewActive(true)
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 }
                 guard let origin = dragOriginCenter else { return }
@@ -446,7 +456,7 @@ struct PiPOverlay: View {
                 )
                 // The render thread follows the live center; Config and parent view stay stable.
                 dragCenter = next
-                cam.updatePiPDragPreview(center: next)
+                // Only the frosted-glass placeholder moves; the camera render stays still until release.
             }
             .onEnded { _ in
                 if let finalCenter = dragCenter {
@@ -523,12 +533,71 @@ struct GridOverlay: Shape {
     }
 }
 
+
+/// The timer editor is presented by the full-screen camera canvas, not clipped to the top bar.
+struct TimerSettingsOverlay: View {
+    @EnvironmentObject private var cam: CameraManager
+    @Binding var timerDraft: Int
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.55)
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture { isPresented = false }
+            VStack(spacing: 16) {
+                HStack {
+                    Image(systemName: "timer").foregroundStyle(Color.yellow)
+                    Text("拍摄倒计时").font(.system(size: 17, weight: .semibold))
+                    Spacer()
+                    Button { isPresented = false } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.white.opacity(0.65))
+                    }
+                }
+                HStack(spacing: 14) {
+                    Button { timerDraft = max(1, timerDraft - 1) } label: {
+                        Image(systemName: "minus").frame(width: 40, height: 40)
+                    }
+                    Text("\(timerDraft) 秒")
+                        .font(.system(size: 28, weight: .semibold, design: .rounded))
+                        .monospacedDigit().frame(minWidth: 90)
+                    Button { timerDraft = min(60, timerDraft + 1) } label: {
+                        Image(systemName: "plus").frame(width: 40, height: 40)
+                    }
+                }
+                Slider(value: Binding(get: { Double(timerDraft) }, set: { timerDraft = Int($0.rounded()) }), in: 1...60, step: 1)
+                HStack(spacing: 10) {
+                    Button("关闭") {
+                        cam.timerSeconds = 0
+                        isPresented = false
+                    }
+                    .frame(maxWidth: .infinity).padding(.vertical, 11)
+                    .background(Color.white.opacity(0.10), in: Capsule())
+                    Button("确定") {
+                        cam.timerSeconds = timerDraft
+                        isPresented = false
+                    }
+                    .frame(maxWidth: .infinity).padding(.vertical, 11)
+                    .background(Color.yellow, in: Capsule())
+                    .foregroundStyle(Color.black)
+                }
+            }
+            .padding(20)
+            .frame(maxWidth: 310)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24))
+            .overlay(RoundedRectangle(cornerRadius: 24).stroke(Color.white.opacity(0.16), lineWidth: 1))
+            .padding(.horizontal, 28)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
 // MARK: - 顶部栏（闪光灯 / 实况 / 参数）
 
 struct TopBar: View {
     @EnvironmentObject private var cam: CameraManager
-    @State private var showTimerSettings = false
-    @State private var timerDraft = 5
+    let onTimerTap: () -> Void
 
     var body: some View {
         ZStack {
@@ -567,24 +636,7 @@ struct TopBar: View {
 
             // Resolution and FPS readout intentionally omitted; keep the top edge visually clean.
         }
-        .overlay {
-            if showTimerSettings {
-                Color.black.opacity(0.55).ignoresSafeArea().onTapGesture { showTimerSettings = false }
-                VStack(spacing: 16) {
-                    HStack { Image(systemName: "timer").foregroundStyle(Color.yellow); Text("拍摄倒计时").font(.system(size: 17, weight: .semibold)); Spacer(); Button { showTimerSettings = false } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.white.opacity(0.65)) } }
-                    HStack(spacing: 14) {
-                        Button { timerDraft = max(1, timerDraft - 1) } label: { Image(systemName: "minus").frame(width: 40, height: 40) }
-                        Text("\(timerDraft) 秒").font(.system(size: 28, weight: .semibold, design: .rounded)).monospacedDigit().frame(minWidth: 90)
-                        Button { timerDraft = min(60, timerDraft + 1) } label: { Image(systemName: "plus").frame(width: 40, height: 40) }
-                    }
-                    Slider(value: Binding(get: { Double(timerDraft) }, set: { timerDraft = Int($0.rounded()) }), in: 1...60, step: 1)
-                    HStack(spacing: 10) {
-                        Button("关闭") { cam.timerSeconds = 0; showTimerSettings = false }.frame(maxWidth: .infinity).padding(.vertical, 11).background(Color.white.opacity(0.10), in: Capsule())
-                        Button("确定") { cam.timerSeconds = timerDraft; showTimerSettings = false }.frame(maxWidth: .infinity).padding(.vertical, 11).background(Color.yellow, in: Capsule()).foregroundStyle(Color.black)
-                    }
-                }.padding(20).frame(maxWidth: 310).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24)).overlay(RoundedRectangle(cornerRadius: 24).stroke(Color.white.opacity(0.16), lineWidth: 1)).padding(.horizontal, 28)
-            }
-        }
+
     }
 
     private func iconButton(_ icon: String, active: Bool, dimmed: Bool = false,
