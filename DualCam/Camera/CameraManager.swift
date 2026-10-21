@@ -1133,7 +1133,10 @@ final class CameraManager: NSObject, ObservableObject {
         // Native still capture is used whenever Live Photo is off. Live Photos stay on the
         // existing still/movie pair path so their content identifiers and motion frames remain paired.
         let useHighResolutionCapture = !captureConfig.livePhoto
-        if useHighResolutionCapture { isCapturingPhoto = true }
+        if useHighResolutionCapture {
+            isCapturingPhoto = true
+            showToast("正在切换至单摄高清拍照，预览会短暂停顿")
+        }
         if useFlash { flash(on: true) }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + (useFlash ? 0.45 : 0)) { [weak self] in
@@ -1229,6 +1232,7 @@ final class CameraManager: NSObject, ObservableObject {
               var main = CIImage(data: mainPhotoData, options: [.applyOrientationProperty: true]) else {
             return nil
         }
+        main = orient(main)
 
         lock.lock()
         let front = slotFront
@@ -1239,6 +1243,7 @@ final class CameraManager: NSObject, ObservableObject {
 
         var sub: CIImage? = nil
         if let data = secondaryFrameData, var secondary = CIImage(data: data, options: [.applyOrientationProperty: true]) {
+            secondary = orient(secondary)
             let subSlot = 1 - mainSlot
             if front.indices.contains(subSlot), front[subSlot] && config.mirrorFront {
                 secondary = secondary.oriented(.upMirrored)
