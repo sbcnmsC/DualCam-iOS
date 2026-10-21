@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct CameraScreen: View {
     @EnvironmentObject private var cam: CameraManager
