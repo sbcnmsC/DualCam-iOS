@@ -328,7 +328,7 @@ final class CameraManager: NSObject, ObservableObject {
             self.slotInfos = infos
             self.effectiveFPS = usedFPS
             self.ready = running
-            self.statusText = running ? "双摄已启动" : "相机未能启动"
+            self.statusText = running ? "" : "相机未能启动"
             if resetStates { self.slotStates = [SlotState(), SlotState()] }
             for i in 0..<2 {
                 self.applyZoom(i)
