@@ -91,6 +91,8 @@ final class CameraManager: NSObject, ObservableObject {
     private var countdownTimer: Timer?
     private var dragSlot = 0
     private var dragStartBias: Float = 0
+    // sessionQueue-owned tokens coalesce rapid slider updates; taps remain immediate.
+    private var pendingDeviceUpdateTokens: [String: UUID] = [:]
 
     // MARK: - 启动
 
@@ -703,16 +705,37 @@ final class CameraManager: NSObject, ObservableObject {
         }
     }
 
+    /// Coalesce high-frequency slider changes so stale device-configuration work never piles up.
+    /// All token access and AVCaptureDevice configuration happen on sessionQueue.
+    private func withDeviceDebounced(_ slot: Int, key: String, delay: TimeInterval = 0.045,
+                                     _ body: @escaping (AVCaptureDevice) -> Void) {
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
+            let updateKey = "\(slot):\(key)"
+            let token = UUID()
+            self.pendingDeviceUpdateTokens[updateKey] = token
+            self.sessionQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self = self,
+                      self.pendingDeviceUpdateTokens[updateKey] == token else { return }
+                self.pendingDeviceUpdateTokens.removeValue(forKey: updateKey)
+                guard slot < self.devices.count, let device = self.devices[slot] else { return }
+                do { try device.lockForConfiguration() } catch { return }
+                body(device)
+                device.unlockForConfiguration()
+            }
+        }
+    }
+
     func applyZoom(_ slot: Int) {
         let z = slotStates[slot].zoom
-        withDevice(slot) { d in
+        withDeviceDebounced(slot, key: "zoom") { d in
             d.videoZoomFactor = min(max(z, 1), d.activeFormat.videoMaxZoomFactor)
         }
     }
 
     func applyFocus(_ slot: Int) {
         let s = slotStates[slot]
-        withDevice(slot) { d in
+        withDeviceDebounced(slot, key: "focus") { d in
             if s.manualFocus, d.isLockingFocusWithCustomLensPositionSupported {
                 d.setFocusModeLocked(lensPosition: s.lensPosition, completionHandler: nil)
             } else if s.locked, d.isFocusModeSupported(.locked) {
@@ -725,7 +748,7 @@ final class CameraManager: NSObject, ObservableObject {
 
     func applyExposure(_ slot: Int) {
         let s = slotStates[slot]
-        withDevice(slot) { d in
+        withDeviceDebounced(slot, key: "exposure") { d in
             if s.manualExposure {
                 let f = d.activeFormat
                 let iso = min(max(s.iso, f.minISO), f.maxISO)
@@ -748,7 +771,7 @@ final class CameraManager: NSObject, ObservableObject {
 
     func applyWhiteBalance(_ slot: Int) {
         let s = slotStates[slot]
-        withDevice(slot) { d in
+        withDeviceDebounced(slot, key: "white-balance") { d in
             if s.manualWB, d.isLockingWhiteBalanceWithCustomDeviceGainsSupported {
                 let tt = AVCaptureDevice.WhiteBalanceTemperatureAndTintValues(temperature: s.temperature, tint: s.tint)
                 var gains = d.deviceWhiteBalanceGains(for: tt)
