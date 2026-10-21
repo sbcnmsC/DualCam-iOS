@@ -592,7 +592,9 @@ struct ShutterButton: View {
             .animation(.easeInOut(duration: 0.2), value: cam.isRecording)
         }
         .buttonStyle(.plain)
-        .opacity(cam.ready ? 1 : 0.4)
+        .disabled(!cam.ready || cam.isCapturingPhoto)
+        .opacity(cam.ready && !cam.isCapturingPhoto ? 1 : 0.4)
+        .accessibilityLabel(cam.captureMode == .photo ? "拍照" : (cam.isRecording ? "停止录像" : "开始录像"))
     }
 }
 
