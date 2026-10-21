@@ -136,26 +136,60 @@ struct PiPTab: View {
 
 struct FilterTab: View {
     @EnvironmentObject private var cam: CameraManager
+    @State private var group: FilterGroup = .all
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 7) {
+                    ForEach(FilterGroup.allCases) { item in
+                        let selected = group == item
+                        Button {
+                            withAnimation(.easeOut(duration: 0.16)) { group = item }
+                        } label: {
+                            Text(item.rawValue)
+                                .font(.system(size: 11, weight: selected ? .semibold : .regular))
+                                .foregroundStyle(selected ? Color.black : Color.white.opacity(0.85))
+                                .padding(.horizontal, 12)
+                                .frame(height: 28)
+                                .background(Capsule().fill(selected ? Color.yellow : Color.white.opacity(0.10)))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
-                    ForEach(FilterKind.allCases) { kind in
+                    ForEach(group.filters) { kind in
                         cell(kind)
                     }
                 }
                 .padding(.vertical, 2)
             }
+
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(cam.cfg.filter.rawValue)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color.yellow)
+                    Text(cam.cfg.filter.subtitle)
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color.white.opacity(0.65))
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 4)
+                Text("\(Int(cam.cfg.filterIntensity * 100))%")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(Color.white.opacity(0.8))
+            }
+
             LabeledSlider(title: "强度",
                           value: Binding(get: { Double(cam.cfg.filterIntensity) },
                                          set: { cam.cfg.filterIntensity = CGFloat($0) }),
                           range: 0...1,
                           valueText: "\(Int(cam.cfg.filterIntensity * 100))%",
                           disabled: cam.cfg.filter == .original)
-            Text("滤镜作用在合成后的照片 / 视频上，「原片」不加滤镜。")
-                .font(.system(size: 11))
-                .foregroundStyle(Color.white.opacity(0.6))
         }
         .onAppear { cam.thumbsActive = true }
         .onDisappear { cam.thumbsActive = false }
@@ -175,7 +209,14 @@ struct FilterTab: View {
                             .frame(width: 62, height: 82)
                             .clipped()
                     } else {
-                        Rectangle().fill(Color.white.opacity(0.12)).frame(width: 62, height: 82)
+                        Rectangle()
+                            .fill(Color.white.opacity(0.12))
+                            .overlay {
+                                Image(systemName: "camera.filters")
+                                    .font(.system(size: 17))
+                                    .foregroundStyle(Color.white.opacity(0.35))
+                            }
+                            .frame(width: 62, height: 82)
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 8))
