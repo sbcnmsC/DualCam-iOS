@@ -398,7 +398,7 @@ struct BottomBar: View {
                 Spacer()
 
                 Button { showPanel.toggle() } label: {
-                    Image(systemName: "circle.grid.2x3.fill")
+                    Image(systemName: "slider.horizontal.3")
                         .font(.system(size: 20))
                         .foregroundStyle(showPanel ? Color.yellow : Color.white)
                         .frame(width: 52, height: 52)
