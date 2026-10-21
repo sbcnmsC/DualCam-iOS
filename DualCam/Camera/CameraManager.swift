@@ -59,11 +59,15 @@ final class CameraManager: NSObject, ObservableObject {
     private let audioQueue = DispatchQueue(label: "dualcam.audio")
     private let outputA = AVCaptureVideoDataOutput()
     private let outputB = AVCaptureVideoDataOutput()
-    /// Each camera gets its own still-photo output, matching the two video capture slots.
-    private let photoOutputs: [AVCapturePhotoOutput] = [
-        AVCapturePhotoOutput(),
-        AVCapturePhotoOutput()
-    ]
+    /// High-resolution still capture temporarily switches to a regular single-camera session,
+    /// allowing formats unavailable to AVCaptureMultiCamSession to be selected.
+    private var highResolutionSession: AVCaptureSession?
+    private var highResolutionPhotoOutput: AVCapturePhotoOutput?
+    private var highResolutionPhotoInput: AVCaptureDeviceInput?
+    private var highResolutionBatchSlots: [Int] = []
+    private var highResolutionBatchIndex = 0
+    private var highResolutionBatchData: [Int: Data] = [:]
+    private var highResolutionBatchCompletion: (([Int: Data]) -> Void)?
     private let audioOutput = AVCaptureAudioDataOutput()
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
     /// 缩略图专用，和实时渲染互不干扰。
@@ -72,8 +76,6 @@ final class CameraManager: NSObject, ObservableObject {
 
     // sessionQueue 独占
     private var devices: [AVCaptureDevice?] = [nil, nil]
-    private var videoInputs: [AVCaptureDeviceInput?] = [nil, nil]
-    private var highResolutionPhotoReady = [false, false]
     private var pendingPhotoDelegates: [Int64: HighResolutionPhotoCaptureDelegate] = [:]
     // 高频滑块只保留最新参数，约 30 次/秒锁定一次设备配置。
     private var pendingDeviceUpdateTokens: [String: UUID] = [:]
@@ -241,8 +243,6 @@ final class CameraManager: NSObject, ObservableObject {
         for input in session.inputs { session.removeInput(input) }
         for output in session.outputs { session.removeOutput(output) }
         devices = [nil, nil]
-        videoInputs = [nil, nil]
-        highResolutionPhotoReady = [false, false]
         audioActive = false
 
         let specs = [combo.a, combo.b]
@@ -263,7 +263,6 @@ final class CameraManager: NSObject, ObservableObject {
                 break
             }
             session.addInputWithNoConnections(input)
-            videoInputs[i] = input
             usedFPS = min(usedFPS, configureFormat(dev, targetHeight: height, fps: wantFPS))
 
             let out = outputs[i]
@@ -297,11 +296,6 @@ final class CameraManager: NSObject, ObservableObject {
             infos[i] = makeInfo(device: dev, spec: spec)
         }
 
-        if failure == nil {
-            for slot in 0..<2 {
-                highResolutionPhotoReady[slot] = configureHighResolutionPhotoOutput(slot: slot)
-            }
-        }
         if failure == nil, audioGranted {
             addAudio()
         }
@@ -342,51 +336,7 @@ final class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    /// Configure one native still-photo output per camera before startRunning. Each output uses
-    /// the largest dimensions supported by that camera's active MultiCam-compatible format.
-    private func configureHighResolutionPhotoOutput(slot: Int) -> Bool {
-        guard videoInputs.indices.contains(slot),
-              photoOutputs.indices.contains(slot),
-              let input = videoInputs[slot],
-              let device = devices[slot] else {
-            return false
-        }
-        let output = photoOutputs[slot]
-        guard session.canAddOutput(output) else { return false }
 
-        session.addOutputWithNoConnections(output)
-        guard let port = input.ports(for: .video,
-                                     sourceDeviceType: device.deviceType,
-                                     sourceDevicePosition: device.position).first else {
-            session.removeOutput(output)
-            return false
-        }
-        let connection = AVCaptureConnection(inputPorts: [port], output: output)
-        guard session.canAddConnection(connection) else {
-            session.removeOutput(output)
-            return false
-        }
-        session.addConnection(connection)
-        if connection.isVideoRotationAngleSupported(90) {
-            connection.videoRotationAngle = 90
-        }
-        if connection.isVideoMirroringSupported {
-            connection.automaticallyAdjustsVideoMirroring = false
-            connection.isVideoMirrored = false
-        }
-
-        let dimensions = device.activeFormat.supportedMaxPhotoDimensions.max { lhs, rhs in
-            Int64(lhs.width) * Int64(lhs.height) < Int64(rhs.width) * Int64(rhs.height)
-        }
-        guard let dimensions = dimensions else {
-            session.removeConnection(connection)
-            session.removeOutput(output)
-            return false
-        }
-        output.maxPhotoDimensions = dimensions
-        output.maxPhotoQualityPrioritization = .quality
-        return true
-    }
 
     private func addAudio() {
         guard let mic = AVCaptureDevice.default(for: .audio),
@@ -1318,75 +1268,208 @@ final class CameraManager: NSObject, ObservableObject {
         return (primary, secondary)
     }
 
-    /// Capture one camera's native still image. Returned data keeps the photo output's real
-    /// dimensions and metadata instead of being upscaled from a video frame.
-    private func captureHighResolutionPhoto(slot: Int, completion: @escaping (Data?) -> Void) {
+    /// Capture stills using a regular AVCaptureSession rather than the restricted MultiCam formats.
+    /// The live dual-camera preview is temporarily interrupted and rebuilt once the batch finishes.
+    private func captureHighResolutionPhotos(
+        slots: [Int],
+        completion: @escaping ([Int: Data]) -> Void
+    ) {
         sessionQueue.async { [weak self] in
-            guard let self = self,
-                  self.session.isRunning,
-                  self.highResolutionPhotoReady.indices.contains(slot),
-                  self.highResolutionPhotoReady[slot],
-                  self.devices.indices.contains(slot),
-                  let device = self.devices[slot] else {
-                DispatchQueue.main.async { completion(nil) }
-                return
-            }
-            let output = self.photoOutputs[slot]
-            guard let dimensions = device.activeFormat.supportedMaxPhotoDimensions.max(by: { lhs, rhs in
-                Int64(lhs.width) * Int64(lhs.height) < Int64(rhs.width) * Int64(rhs.height)
-            }) else {
-                DispatchQueue.main.async { completion(nil) }
+            guard let self = self, !slots.isEmpty, self.currentCombo != nil, self.session.isRunning else {
+                DispatchQueue.main.async { completion([:]) }
                 return
             }
 
-            let settings: AVCapturePhotoSettings
-            if output.availablePhotoCodecTypes.contains(.jpeg) {
-                settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
-            } else {
-                settings = AVCapturePhotoSettings()
-            }
-            settings.maxPhotoDimensions = dimensions
-            settings.photoQualityPrioritization = .quality
+            // Drain coalesced device writes and release the MultiCam inputs before opening the
+            // single-camera session. The previous video frames were already snapshotted for fallback.
+            self.deviceConfigGeneration &+= 1
+            self.pendingDeviceUpdateTokens.removeAll()
+            self.pendingDeviceUpdateBodies.removeAll()
+            self.lastDeviceUpdateAt.removeAll()
+            self.session.stopRunning()
+            self.session.beginConfiguration()
+            for output in self.session.outputs { self.session.removeOutput(output) }
+            for input in self.session.inputs { self.session.removeInput(input) }
+            self.session.commitConfiguration()
 
-            let uniqueID = settings.uniqueID
-            let delegate = HighResolutionPhotoCaptureDelegate(
-                onPhoto: { [weak self] data, _ in
-                    guard self != nil else { return }
-                    DispatchQueue.main.async { completion(data) }
-                },
-                onFinished: { [weak self] finishedID in
-                    guard let self = self else { return }
-                    self.sessionQueue.async {
-                        self.pendingPhotoDelegates.removeValue(forKey: finishedID)
-                    }
-                }
-            )
-            self.pendingPhotoDelegates[uniqueID] = delegate
-            output.capturePhoto(with: settings, delegate: delegate)
+            self.devices = [nil, nil]
+            self.highResolutionSession = AVCaptureSession()
+            self.highResolutionPhotoOutput = AVCapturePhotoOutput()
+            self.highResolutionPhotoInput = nil
+            self.highResolutionBatchSlots = slots
+            self.highResolutionBatchIndex = 0
+            self.highResolutionBatchData = [:]
+            self.highResolutionBatchCompletion = completion
+            self.advanceHighResolutionCaptureBatch()
         }
     }
 
-    /// Capture sequentially in the requested order to reduce still-capture pipeline contention.
-    private func captureHighResolutionPhotos(
-        slots: [Int],
-        index: Int = 0,
-        captured: [Int: Data] = [:],
-        completion: @escaping ([Int: Data]) -> Void
-    ) {
-        guard index < slots.count else {
-            completion(captured)
+    private func advanceHighResolutionCaptureBatch() {
+        guard highResolutionBatchIndex < highResolutionBatchSlots.count else {
+            finishHighResolutionCaptureBatch()
             return
         }
-        let slot = slots[index]
-        captureHighResolutionPhoto(slot: slot) { data in
-            var next = captured
-            if let data = data { next[slot] = data }
-            self.captureHighResolutionPhotos(
-                slots: slots,
-                index: index + 1,
-                captured: next,
-                completion: completion
-            )
+
+        let slot = highResolutionBatchSlots[highResolutionBatchIndex]
+        guard prepareSingleCameraPhotoSession(slot: slot),
+              let output = highResolutionPhotoOutput,
+              let device = highResolutionPhotoInput?.device else {
+            // Continue with the next camera if one lens can't provide a still-photo format.
+            highResolutionBatchIndex += 1
+            advanceHighResolutionCaptureBatch()
+            return
+        }
+
+        guard let dimensions = bestPhotoDimensions(in: device.activeFormat) else {
+            highResolutionBatchIndex += 1
+            advanceHighResolutionCaptureBatch()
+            return
+        }
+
+        let settings: AVCapturePhotoSettings
+        if output.availablePhotoCodecTypes.contains(.jpeg) {
+            settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
+        } else {
+            settings = AVCapturePhotoSettings()
+        }
+        settings.maxPhotoDimensions = dimensions
+        settings.photoQualityPrioritization = .quality
+
+        let uniqueID = settings.uniqueID
+        let delegate = HighResolutionPhotoCaptureDelegate { [weak self] finishedID, data, _ in
+            guard let self = self else { return }
+            self.sessionQueue.async {
+                self.pendingPhotoDelegates.removeValue(forKey: finishedID)
+                if let data = data {
+                    self.highResolutionBatchData[slot] = data
+                }
+                self.highResolutionBatchIndex += 1
+                self.advanceHighResolutionCaptureBatch()
+            }
+        }
+        pendingPhotoDelegates[uniqueID] = delegate
+        output.capturePhoto(with: settings, delegate: delegate)
+    }
+
+    /// Select the format with the largest supported still-image dimensions, even if that format
+    /// cannot run in MultiCam. Ties prefer a larger video format and 30-fps compatibility.
+    private func bestSingleCameraPhotoFormat(for device: AVCaptureDevice) -> AVCaptureDevice.Format? {
+        let formats = device.formats.filter { !$0.supportedMaxPhotoDimensions.isEmpty }
+        return formats.max { lhs, rhs in
+            let lhsStill = bestPhotoDimensions(in: lhs)
+            let rhsStill = bestPhotoDimensions(in: rhs)
+            let lhsArea = lhsStill.map { Int64($0.width) * Int64($0.height) } ?? 0
+            let rhsArea = rhsStill.map { Int64($0.width) * Int64($0.height) } ?? 0
+            if lhsArea != rhsArea { return lhsArea < rhsArea }
+
+            let lhsVideo = CMVideoFormatDescriptionGetDimensions(lhs.formatDescription)
+            let rhsVideo = CMVideoFormatDescriptionGetDimensions(rhs.formatDescription)
+            let lhsVideoArea = Int64(lhsVideo.width) * Int64(lhsVideo.height)
+            let rhsVideoArea = Int64(rhsVideo.width) * Int64(rhsVideo.height)
+            if lhsVideoArea != rhsVideoArea { return lhsVideoArea < rhsVideoArea }
+
+            let lhsHas30 = lhs.videoSupportedFrameRateRanges.contains {
+                $0.minFrameRate <= 30 && 30 <= $0.maxFrameRate
+            }
+            let rhsHas30 = rhs.videoSupportedFrameRateRanges.contains {
+                $0.minFrameRate <= 30 && 30 <= $0.maxFrameRate
+            }
+            return !lhsHas30 && rhsHas30
+        }
+    }
+
+    private func bestPhotoDimensions(in format: AVCaptureDevice.Format) -> CMVideoDimensions? {
+        return format.supportedMaxPhotoDimensions.max { lhs, rhs in
+            Int64(lhs.width) * Int64(lhs.height) < Int64(rhs.width) * Int64(rhs.height)
+        }
+    }
+
+    private func prepareSingleCameraPhotoSession(slot: Int) -> Bool {
+        guard slot == 0 || slot == 1,
+              let combo = currentCombo,
+              let singleSession = highResolutionSession,
+              let output = highResolutionPhotoOutput else { return false }
+
+        let spec = slot == 0 ? combo.a : combo.b
+        guard let device = AVCaptureDevice.default(spec.deviceType, for: .video, position: spec.position),
+              let format = bestSingleCameraPhotoFormat(for: device),
+              let dimensions = bestPhotoDimensions(in: format) else { return false }
+
+        singleSession.stopRunning()
+        do {
+            try device.lockForConfiguration()
+            device.activeFormat = format
+
+            let ranges = format.videoSupportedFrameRateRanges
+            let range = ranges.first(where: { $0.minFrameRate <= 30 && 30 <= $0.maxFrameRate })
+                ?? ranges.max(by: { $0.maxFrameRate < $1.maxFrameRate })
+            if let range = range {
+                let low = Int(ceil(range.minFrameRate))
+                let high = max(low, Int(floor(range.maxFrameRate)))
+                let fps = min(max(30, low), high)
+                let duration = CMTime(value: 1, timescale: CMTimeScale(max(fps, 1)))
+                device.activeVideoMinFrameDuration = duration
+                device.activeVideoMaxFrameDuration = duration
+            }
+            device.unlockForConfiguration()
+        } catch {
+            return false
+        }
+
+        singleSession.beginConfiguration()
+        singleSession.sessionPreset = .inputPriority
+
+        if let oldInput = highResolutionPhotoInput {
+            singleSession.removeInput(oldInput)
+        }
+        guard let newInput = try? AVCaptureDeviceInput(device: device),
+              singleSession.canAddInput(newInput) else {
+            singleSession.commitConfiguration()
+            return false
+        }
+        singleSession.addInput(newInput)
+
+        if !singleSession.outputs.contains(where: { $0 === output }) {
+            guard singleSession.canAddOutput(output) else {
+                singleSession.removeInput(newInput)
+                singleSession.commitConfiguration()
+                return false
+            }
+            singleSession.addOutput(output)
+        }
+        output.maxPhotoDimensions = dimensions
+        output.maxPhotoQualityPrioritization = .quality
+        singleSession.commitConfiguration()
+
+        highResolutionPhotoInput = newInput
+        if let connection = output.connection(with: .video) {
+            if connection.isVideoRotationAngleSupported(90) { connection.videoRotationAngle = 90 }
+            if connection.isVideoMirroringSupported {
+                connection.automaticallyAdjustsVideoMirroring = false
+                connection.isVideoMirrored = false
+            }
+        }
+        singleSession.startRunning()
+        return singleSession.isRunning
+    }
+
+    private func finishHighResolutionCaptureBatch() {
+        highResolutionSession?.stopRunning()
+        highResolutionSession = nil
+        highResolutionPhotoOutput = nil
+        highResolutionPhotoInput = nil
+
+        let captured = highResolutionBatchData
+        let completion = highResolutionBatchCompletion
+        highResolutionBatchSlots = []
+        highResolutionBatchIndex = 0
+        highResolutionBatchData = [:]
+        highResolutionBatchCompletion = nil
+
+        // Restore the original MultiCam graph before returning data to the UI/save pipeline.
+        rebuild(resetStates: false)
+        DispatchQueue.main.async {
+            completion?(captured)
         }
     }
 
@@ -1778,14 +1861,13 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate, AVCapture
     }
 }
 
-/// Retained until AVCapturePhotoOutput reports that the capture request has finished.
+/// Retained until the single-camera still request fully completes, including final JPEG delivery.
 private final class HighResolutionPhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
-    private let onPhoto: (Data?, Error?) -> Void
-    private let onFinished: (Int64) -> Void
+    private let stateLock = NSLock()
+    private let onFinished: (Int64, Data?, Error?) -> Void
+    private var photoData: Data?
 
-    init(onPhoto: @escaping (Data?, Error?) -> Void,
-         onFinished: @escaping (Int64) -> Void) {
-        self.onPhoto = onPhoto
+    init(onFinished: @escaping (Int64, Data?, Error?) -> Void) {
         self.onFinished = onFinished
         super.init()
     }
@@ -1793,13 +1875,19 @@ private final class HighResolutionPhotoCaptureDelegate: NSObject, AVCapturePhoto
     func photoOutput(_ output: AVCapturePhotoOutput,
                      didFinishProcessingPhoto photo: AVCapturePhoto,
                      error: Error?) {
-        onPhoto(error == nil ? photo.fileDataRepresentation() : nil, error)
+        let data = error == nil ? photo.fileDataRepresentation() : nil
+        stateLock.lock()
+        photoData = data
+        stateLock.unlock()
     }
 
     func photoOutput(_ output: AVCapturePhotoOutput,
                      didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings,
                      error: Error?) {
-        onFinished(resolvedSettings.uniqueID)
+        stateLock.lock()
+        let data = photoData
+        stateLock.unlock()
+        onFinished(resolvedSettings.uniqueID, error == nil ? data : nil, error)
     }
 }
 
