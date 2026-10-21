@@ -96,6 +96,8 @@ final class CameraManager: NSObject, ObservableObject {
     private var pendingDeviceUpdateBodies: [String: (AVCaptureDevice) -> Void] = [:]
     private var lastDeviceUpdateAt: [String: UInt64] = [:]
     private var sessionGeneration: UInt64 = 0
+    // sessionQueue-owned: coalesces rapid lens-chip changes into one reconfiguration.
+    private var pendingLensSwitchToken: UUID?
 
     // MARK: - 启动
 
@@ -218,6 +220,7 @@ final class CameraManager: NSObject, ObservableObject {
         pendingDeviceUpdateTokens.removeAll()
         pendingDeviceUpdateBodies.removeAll()
         lastDeviceUpdateAt.removeAll()
+        pendingLensSwitchToken = nil
 
         session.beginConfiguration()
         for input in session.inputs { session.removeInput(input) }
@@ -672,7 +675,27 @@ final class CameraManager: NSObject, ObservableObject {
 
     // MARK: - 变焦 / 参数
 
-    /// 点 0.5 / 1 / 2 / 5：同一颗镜头只改变焦，换镜头则重建会话。
+    /// Debounce only lens-combination changes. A rapid sweep across zoom chips should
+    /// rebuild the multi-camera graph once for the final requested lens, not once per tap.
+    private func scheduleLensSwitch(to combo: LensCombo, resetStates: Bool) {
+        let token = UUID()
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
+            self.pendingLensSwitchToken = token
+            self.sessionQueue.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                guard let self = self, self.pendingLensSwitchToken == token else { return }
+                self.pendingLensSwitchToken = nil
+                self.currentCombo = combo
+                DispatchQueue.main.async {
+                    self.ready = false
+                    self.statusText = "正在切换镜头…"
+                }
+                self.rebuild(resetStates: resetStates)
+            }
+        }
+    }
+
+    /// 点 0.5 / 1 / 2 / 5：同一颗镜头使用平滑硬件变焦，跨镜头切换合并重建请求。
     func selectStop(_ stop: ZoomStop) {
         guard comboIndex < combos.count else { return }
         let current = combos[comboIndex]
@@ -693,11 +716,7 @@ final class CameraManager: NSObject, ObservableObject {
         let combo = combos[idx]
         slotStates[0] = SlotState(zoom: stop.zoom)
         if combo.b != current.b { slotStates[1] = SlotState() }
-        ready = false
-        sessionQueue.async {
-            self.currentCombo = combo
-            self.rebuild(resetStates: false)
-        }
+        scheduleLensSwitch(to: combo, resetStates: false)
     }
 
     func displayZoom(slot: Int) -> CGFloat {
@@ -775,12 +794,12 @@ final class CameraManager: NSObject, ObservableObject {
 
     func applyZoom(_ slot: Int, animated: Bool = false) {
         let z = slotStates[slot].zoom
-        withDeviceThrottled(slot, key: "zoom") { d in
+        withDeviceThrottled(slot, key: "zoom", minimumInterval: 1.0 / 60.0) { d in
             let target = min(max(z, 1), d.activeFormat.videoMaxZoomFactor)
             if animated {
                 if d.isRampingVideoZoom { d.cancelVideoZoomRamp() }
                 if abs(d.videoZoomFactor - target) > 0.01 {
-                    d.ramp(toVideoZoomFactor: target, withRate: 4.5)
+                    d.ramp(toVideoZoomFactor: target, withRate: 8.0)
                 }
             } else {
                 if d.isRampingVideoZoom { d.cancelVideoZoomRamp() }
@@ -974,11 +993,7 @@ final class CameraManager: NSObject, ObservableObject {
         slotStates = [SlotState(), SlotState()]
         paramTarget = 0
         if cfg.swapped { cfg.swapped = false }
-        ready = false
-        sessionQueue.async {
-            self.currentCombo = combo
-            self.rebuild(resetStates: true)
-        }
+        scheduleLensSwitch(to: combo, resetStates: true)
     }
 
     // MARK: - 拍照 / 录像

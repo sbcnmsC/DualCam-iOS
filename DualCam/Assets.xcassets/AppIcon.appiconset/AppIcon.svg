@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <radialGradient id="paper" cx="50%" cy="45%" r="72%">
+      <stop offset="0" stop-color="#fff"/>
+      <stop offset=".72" stop-color="#fafafa"/>
+      <stop offset="1" stop-color="#e8e8e8"/>
+    </radialGradient>
+    <radialGradient id="halo" cx="45%" cy="40%" r="66%">
+      <stop offset="0" stop-color="#fff" stop-opacity="0"/>
+      <stop offset=".72" stop-color="#dcdcdc" stop-opacity=".2"/>
+      <stop offset="1" stop-color="#cfcfcf" stop-opacity=".28"/>
+    </radialGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#paper)"/>
+  <circle cx="512" cy="512" r="475" fill="url(#halo)"/>
+  <g fill="none" stroke="#050505" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="512" cy="512" r="357" stroke-width="9"/>
+    <circle cx="512" cy="512" r="216" stroke-width="9"/>
+    <circle cx="512" cy="512" r="179" stroke-width="5"/>
+    <path d="M369 508 430 393 552 367 647 438 655 555 587 646 469 655 378 585Z" stroke-width="4"/>
+    <path d="M429 383 553 452 M555 367 555 440 M647 438 577 478 M655 555 579 542 M587 646 535 572 M469 655 469 583 M378 585 449 545 M369 508 444 518" stroke-width="4"/>
+    <circle cx="512" cy="512" r="66" stroke-width="8"/>
+  </g>
+  <path d="M485 492a43 43 0 0 1 22-23" fill="none" stroke="#fff" stroke-width="8" stroke-linecap="round"/>
+</svg>

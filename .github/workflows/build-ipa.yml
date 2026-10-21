@@ -1,6 +1,6 @@
 name: Build IPA
 
-# 推送到 main，或在 Actions 页面手动 Run workflow，都会编译并发布一个 Release。
+# 推送到 main 或优化分支，或在 Actions 页面手动 Run workflow，都会编译并发布一个 Release。
 # - 仓库里配置了签名密钥（见 README）→ 产出「已签名」IPA，可直接安装到登记过的设备
 # - 没配置 → 产出「未签名」IPA，用 Sideloadly / AltStore 用自己的 Apple ID 签名后安装
 on:
@@ -23,7 +23,15 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install XcodeGen
-        run: brew install xcodegen
+        run: brew install xcodegen librsvg
+
+      - name: Generate app icon
+        run: |
+          ICON_DIR="DualCam/Assets.xcassets/AppIcon.appiconset"
+          test -s "$ICON_DIR/AppIcon.svg"
+          test -s "$ICON_DIR/Contents.json"
+          rsvg-convert --width 1024 --height 1024 "$ICON_DIR/AppIcon.svg" --output "$ICON_DIR/AppIcon.png"
+          sips -g pixelWidth -g pixelHeight "$ICON_DIR/AppIcon.png"
 
       - name: Generate Xcode project
         run: |
