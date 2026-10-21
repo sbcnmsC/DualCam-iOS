@@ -854,6 +854,19 @@ final class CameraManager: NSObject, ObservableObject {
         }
     }
 
+    /// Copy the selected camera's white-balance settings to the other camera.
+    /// This can reduce color-temperature mismatch in dual-camera layouts.
+    func copyWhiteBalanceToOtherSlot(_ slot: Int) {
+        guard slotStates.indices.contains(slot), slotStates.count >= 2 else { return }
+        let other = slot == 0 ? 1 : 0
+        let source = slotStates[slot]
+        slotStates[other].manualWB = source.manualWB
+        slotStates[other].temperature = source.temperature
+        slotStates[other].tint = source.tint
+        applyWhiteBalance(other)
+        toast = "已同步白平衡"
+    }
+
     func toggleLock(_ slot: Int) {
         guard slotStates.indices.contains(slot) else { return }
         slotStates[slot].locked.toggle()
