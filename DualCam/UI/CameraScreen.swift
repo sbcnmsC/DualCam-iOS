@@ -352,16 +352,19 @@ struct TopBar: View {
                 .frame(height: 30)
                 .background(Capsule().fill(Color.red.opacity(0.85)))
             } else {
-                HStack(spacing: 38) {
-                    iconButton(cam.flashEnabled ? "bolt.fill" : "bolt.slash", active: cam.flashEnabled) {
+                HStack(spacing: 22) {
+                    iconButton(cam.flashEnabled ? "bolt.fill" : "bolt.slash",
+                               active: cam.flashEnabled,
+                               label: cam.flashEnabled ? "关闭闪光灯" : "开启闪光灯") {
                         cam.flashEnabled.toggle()
                     }
                     iconButton(cam.cfg.livePhoto ? "livephoto" : "livephoto.slash",
                                active: cam.cfg.livePhoto && cam.captureMode == .photo,
-                               dimmed: cam.captureMode == .video) {
+                               dimmed: cam.captureMode == .video,
+                               label: "实况照片") {
                         cam.cfg.livePhoto.toggle()
                     }
-                    iconButton("slider.horizontal.3", active: paramsActive) {
+                    iconButton("slider.horizontal.3", active: paramsActive, label: "相机参数设置") {
                         onParams()
                     }
                 }
@@ -369,23 +372,31 @@ struct TopBar: View {
 
             HStack {
                 Spacer()
-                Text("\(cam.outputLabel) · \(cam.effectiveFPS)")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(Color.white.opacity(0.55))
-                    .padding(.trailing, 14)
+                Text(cam.outputLabel.isEmpty ? "\(cam.effectiveFPS) fps" : "\(cam.outputLabel) · \(cam.effectiveFPS) fps")
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(Color.white.opacity(0.78))
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 6)
+                    .background(Capsule().fill(Color.white.opacity(0.07)))
+                    .overlay(Capsule().stroke(Color.white.opacity(0.11), lineWidth: 0.6))
+                    .padding(.trailing, 12)
             }
         }
     }
 
     private func iconButton(_ icon: String, active: Bool, dimmed: Bool = false,
-                            action: @escaping () -> Void) -> some View {
+                            label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 19, weight: .semibold))
+                .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(active ? Color.yellow : Color.white)
                 .frame(width: 40, height: 40)
+                .background(Circle().fill(active ? Color.yellow.opacity(0.14) : Color.white.opacity(0.07)))
+                .overlay(Circle().stroke(Color.white.opacity(active ? 0.2 : 0.1), lineWidth: 0.6))
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(label)
         .opacity(dimmed ? 0.4 : 1)
     }
 

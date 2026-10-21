@@ -75,6 +75,8 @@ struct LabeledSlider: View {
             }
             .frame(width: icon == nil ? 64 : 84, alignment: .leading)
             Slider(value: $value, in: range)
+                .accessibilityLabel(title)
+                .accessibilityValue(valueText)
             Text(valueText)
                 .font(.system(size: 12, design: .monospaced))
                 .frame(width: 56, alignment: .trailing)
@@ -457,9 +459,12 @@ struct SettingsTab: View {
                 .pickerStyle(.segmented)
                 .disabled(cam.isRecording)
             }
-            Text("最高分辨率不会超过摄像头实际像素；60 帧更吃性能，部分镜头组合会自动退回 30 帧。")
+            Text(cam.cfg.resolution == .maximum
+                 ? "高画质已开启：优先使用双摄兼容的最高采集格式；负载过高时自动降级。双摄照片不等同于单摄 48MP / ProRAW。"
+                 : "切换到「最高」可提升照片和合成画面的像素数；双摄照片受采集格式限制。60 帧会增加性能负担。")
                 .font(.system(size: 11))
-                .foregroundStyle(Color.white.opacity(0.6))
+                .foregroundStyle(Color.white.opacity(0.66))
+                .fixedSize(horizontal: false, vertical: true)
 
             HStack {
                 Text("保存").font(.system(size: 13)).frame(width: 64, alignment: .leading)

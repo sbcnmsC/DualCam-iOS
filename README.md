@@ -72,8 +72,11 @@ base64 转换：macOS 用 `base64 -i 文件 | pbcopy`；Windows 用 `certutil -e
 
 ## 本地构建
 
+先生成 iOS 要求的 1024×1024 PNG 图标（矢量母版保留在 `scripts/DualCam-AppIcon.svg`）：
+
 ```bash
-brew install xcodegen
+brew install xcodegen librsvg
+./scripts/generate-app-icon.sh
 xcodegen generate
 open DualCam.xcodeproj
 ```
@@ -85,4 +88,5 @@ open DualCam.xcodeproj
 - `DualCam/Camera/`：相机会话（`CameraManager`）、画面合成（`Compositor`）、视频 / 实况写入（`VideoRecorder`）、滤镜、数据模型
 - `DualCam/UI/`：取景界面、工具面板、预览层
 - `project.yml`：XcodeGen 工程描述
+- `scripts/DualCam-AppIcon.svg`：应用图标矢量母版；构建前生成至 `DualCam/Assets.xcassets/AppIcon.appiconset/AppIcon.png`
 - `.github/workflows/build-ipa.yml`：云端编译、签名、发布

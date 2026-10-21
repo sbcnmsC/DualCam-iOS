@@ -107,7 +107,7 @@ struct Config: Equatable {
     var filter: FilterKind = .original
     var filterIntensity: CGFloat = 1
     // 采集
-    var resolution: ResolutionOption = .p1080
+    var resolution: ResolutionOption = .maximum
     var fps = 30
     var outputMode: OutputMode = .original
     var livePhoto = true

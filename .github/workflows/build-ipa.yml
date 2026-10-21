@@ -22,8 +22,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: Install build tools
+        run: brew install xcodegen librsvg
+
+      - name: Render App Icon
+        run: ./scripts/generate-app-icon.sh
 
       - name: Generate Xcode project
         run: |

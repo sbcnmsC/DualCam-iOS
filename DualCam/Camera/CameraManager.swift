@@ -568,43 +568,59 @@ final class CameraManager: NSObject, ObservableObject {
             subImage = imgB
         }
 
+        // The capture canvas remains full resolution. Only downscale the idle preview render graph.
+        // Composite video and Live Photo motion still use the full-resolution canvas.
         let canvas = Compositor.canvasSize(aspect: c.aspect, resolution: c.resolution, sourceWidth: mainImage.extent.width)
-        let full = CGRect(origin: .zero, size: canvas)
-        let composed = Compositor.compose(main: mainImage, sub: subImage, cfg: c, canvas: canvas)
-        let finalImage = c.filter.apply(to: composed, intensity: c.filterIntensity).cropped(to: full)
+        recLock.lock()
+        let rec = recorder
+        let live = liveComposite
+        recLock.unlock()
+        let needsFullResolution = rec != nil || live != nil
+        let renderCanvas: CGSize
+        if needsFullResolution {
+            renderCanvas = canvas
+        } else {
+            let scale = min(1, 1280 / max(canvas.width, canvas.height))
+            renderCanvas = CGSize(
+                width: max(2, floor(canvas.width * scale / 2) * 2),
+                height: max(2, floor(canvas.height * scale / 2) * 2)
+            )
+        }
+        let renderBounds = CGRect(origin: .zero, size: renderCanvas)
+        let composed = Compositor.compose(main: mainImage, sub: subImage, cfg: c, canvas: renderCanvas)
+        let finalImage = c.filter.apply(to: composed, intensity: c.filterIntensity).cropped(to: renderBounds)
 
         lock.lock()
         let canvasChanged = canvas != lastCanvas
         if canvasChanged { lastCanvas = canvas }
         lock.unlock()
         if canvasChanged {
+            // Report the actual still/video output dimensions, not the smaller idle-preview render.
             let label = "\(Int(canvas.width))×\(Int(canvas.height))"
             DispatchQueue.main.async { self.outputLabel = label }
         }
 
-        // 录像
-        recLock.lock()
-        let rec = recorder
-        let live = liveComposite
-        recLock.unlock()
         rec?.appendComposite(finalImage, context: ciContext, time: pts)
         live?.appendComposite(finalImage, context: ciContext, time: pts)
 
-        // 预览：GPU 直接渲染进像素缓冲，立即送显示层（无 CPU 回读、无主线程中转）
-        let scale = min(1, 1280 / max(canvas.width, canvas.height))
-        let pw = max(2, ((canvas.width * scale) / 2).rounded() * 2)
-        let ph = max(2, ((canvas.height * scale) / 2).rounded() * 2)
-        let previewImage = finalImage.transformed(by: CGAffineTransform(scaleX: pw / canvas.width,
-                                                                        y: ph / canvas.height))
+        // The display layer only needs up to 1280px on its long edge. During composite recording,
+        // the full-size render above is scaled once here; while idle, no large intermediate is built.
+        let scale = min(1, 1280 / max(renderCanvas.width, renderCanvas.height))
+        let pw = max(2, (renderCanvas.width * scale / 2).rounded() * 2)
+        let ph = max(2, (renderCanvas.height * scale / 2).rounded() * 2)
+        let previewImage = finalImage.transformed(by: CGAffineTransform(
+            scaleX: pw / renderCanvas.width,
+            y: ph / renderCanvas.height
+        ))
         if let buffer = renderPreviewBuffer(previewImage, width: Int(pw), height: Int(ph)) {
             display(buffer)
         }
 
-        // 滤镜缩略图：每次打开面板只渲染一批，不再每隔 0.7 秒重复计算全部滤镜。
+        // Filter thumbnails are generated once per panel opening, on a separate low-priority queue.
         if beginThumbs() {
             thumbQueue.async { [weak self] in
                 guard let self = self else { return }
-                self.makeThumbnails(from: composed, canvas: canvas)
+                self.makeThumbnails(from: composed, canvas: renderCanvas)
                 self.endThumbs()
             }
         }
@@ -1242,7 +1258,7 @@ final class CameraManager: NSObject, ObservableObject {
 
     private func jpeg(_ image: CIImage) -> Data? {
         let key = CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String)
-        return ciContext.jpegRepresentation(of: image, colorSpace: srgb, options: [key: 0.95])
+        return ciContext.jpegRepresentation(of: image, colorSpace: srgb, options: [key: 0.97])
     }
 
     /// 实况照片的静态图：JPEG 的 Apple MakerNote 里写入与视频相同的 content identifier。
@@ -1255,7 +1271,7 @@ final class CameraManager: NSObject, ObservableObject {
             return nil
         }
         let props: [CFString: Any] = [
-            kCGImageDestinationLossyCompressionQuality: 0.95,
+            kCGImageDestinationLossyCompressionQuality: 0.97,
             kCGImagePropertyMakerAppleDictionary: ["17": id]
         ]
         CGImageDestinationAddImage(dest, cg, props as CFDictionary)
