@@ -35,7 +35,8 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var zoomStops: [ZoomStop] = []
     @Published var lastThumb: UIImage? = nil
 
-    weak var previewView: PreviewUIView?
+    /// Direct sample-buffer preview path. Frames are rendered into IOSurface-backed buffers.
+    let displayLayer = AVSampleBufferDisplayLayer()
 
     var mainSlot: Int { cfg.swapped ? 1 : 0 }
 
@@ -43,7 +44,8 @@ final class CameraManager: NSObject, ObservableObject {
 
     private let session = AVCaptureMultiCamSession()
     private let sessionQueue = DispatchQueue(label: "dualcam.session")
-    private let videoQueue = DispatchQueue(label: "dualcam.video", qos: .userInitiated)
+    private let videoQueue = DispatchQueue(label: "dualcam.video", qos: .userInteractive)
+    private let thumbnailQueue = DispatchQueue(label: "dualcam.thumbnails", qos: .utility)
     private let audioQueue = DispatchQueue(label: "dualcam.audio")
     private let outputA = AVCaptureVideoDataOutput()
     private let outputB = AVCaptureVideoDataOutput()
@@ -67,9 +69,14 @@ final class CameraManager: NSObject, ObservableObject {
     private var bufferSizes: [CGSize] = [.zero, .zero]
     private var slotFront: [Bool] = [false, false]
     private var lastCanvas = CGSize(width: 1080, height: 1920)
-    private var displayBusy = false
     private var lastThumbTime: Double = 0
     private var sharedFPS = 30
+
+    // Reusable IOSurface buffers for low-latency preview; allocation is bounded.
+    private var canvasPool: CVPixelBufferPool?
+    private var poolSize = CGSize.zero
+    private var displayFormatDescription: CMVideoFormatDescription?
+    private var displayFormatSize: CGSize?
 
     // 录制状态（用 recLock 保护）
     private let recLock = NSLock()
@@ -89,6 +96,8 @@ final class CameraManager: NSObject, ObservableObject {
 
     override init() {
         super.init()
+        displayLayer.videoGravity = .resizeAspect
+        displayLayer.backgroundColor = UIColor.black.cgColor
         observeNotifications()
         requestPermissionsAndStart()
     }
@@ -536,53 +545,99 @@ final class CameraManager: NSObject, ObservableObject {
         if canvasChanged {
             let label = "\(Int(canvas.width))×\(Int(canvas.height))"
             DispatchQueue.main.async { self.outputLabel = label }
+            // Recreate the pool and sample format only when output dimensions change.
+            canvasPool = nil
+            poolSize = .zero
+            displayFormatDescription = nil
+            displayFormatSize = nil
         }
 
-        // 录像
-        recLock.lock()
-        let rec = recorder
-        let live = liveComposite
-        recLock.unlock()
-        rec?.appendComposite(finalImage, context: ciContext, time: pts)
-        live?.appendComposite(finalImage, context: ciContext, time: pts)
-
-        // 预览
-        if beginDisplay() {
-            let scale = min(1, 1280 / max(canvas.width, canvas.height))
-            let pw = max(2, (canvas.width * scale).rounded())
-            let ph = max(2, (canvas.height * scale).rounded())
-            let scaled = finalImage.transformed(by: CGAffineTransform(scaleX: pw / canvas.width, y: ph / canvas.height))
-            if let cg = ciContext.createCGImage(scaled, from: CGRect(x: 0, y: 0, width: pw, height: ph),
-                                                format: .RGBA8, colorSpace: srgb) {
-                DispatchQueue.main.async { [weak self] in
-                    self?.previewView?.show(cg)
-                    self?.endDisplay()
-                }
-            } else {
-                endDisplay()
-            }
+        // Render once into an IOSurface-backed buffer and reuse that exact frame for
+        // recording and preview. This removes per-frame CGImage creation and main-thread uploads.
+        if let canvasBuffer = renderToPool(finalImage, size: canvas) {
+            recLock.lock()
+            let rec = recorder
+            let live = liveComposite
+            recLock.unlock()
+            rec?.appendPixelBuffer(canvasBuffer, time: pts)
+            live?.appendPixelBuffer(canvasBuffer, time: pts)
+            display(canvasBuffer, pts: pts)
         }
 
-        // 滤镜缩略图
+        // Thumbnail generation must not block the capture/render queue.
         let now = CMTimeGetSeconds(pts)
         if thumbsOn && now - lastThumbTime > 0.7 {
             lastThumbTime = now
-            makeThumbnails(from: composed, canvas: canvas)
+            thumbnailQueue.async { [weak self] in
+                self?.makeThumbnails(from: composed, canvas: canvas)
+            }
         }
     }
 
-    private func beginDisplay() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        if displayBusy { return false }
-        displayBusy = true
-        return true
+    /// Render into a reusable IOSurface-backed pool with a hard allocation threshold.
+    private func renderToPool(_ image: CIImage, size: CGSize) -> CVPixelBuffer? {
+        if canvasPool == nil || poolSize != size {
+            var pool: CVPixelBufferPool?
+            let attrs: [String: Any] = [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferWidthKey as String: Int(size.width),
+                kCVPixelBufferHeightKey as String: Int(size.height),
+                kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any](),
+                kCVPixelBufferMetalCompatibilityKey as String: true
+            ]
+            let poolAttrs: [String: Any] = [kCVPixelBufferPoolMinimumBufferCountKey as String: 4]
+            guard CVPixelBufferPoolCreate(kCFAllocatorDefault, poolAttrs as CFDictionary,
+                                          attrs as CFDictionary, &pool) == kCVReturnSuccess,
+                  let createdPool = pool else { return nil }
+            canvasPool = createdPool
+            poolSize = size
+        }
+        guard let pool = canvasPool else { return nil }
+        var pixelBuffer: CVPixelBuffer?
+        let limits: [String: Any] = [kCVPixelBufferPoolAllocationThresholdKey as String: 6]
+        guard CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(
+            kCFAllocatorDefault, pool, limits as CFDictionary, &pixelBuffer
+        ) == kCVReturnSuccess, let output = pixelBuffer else { return nil }
+        ciContext.render(image, to: output, bounds: CGRect(origin: .zero, size: size), colorSpace: nil)
+        return output
     }
 
-    private func endDisplay() {
-        lock.lock()
-        displayBusy = false
-        lock.unlock()
+    /// Wrap the buffer as a sample buffer and enqueue it for immediate display.
+    private func display(_ pixelBuffer: CVPixelBuffer, pts: CMTime) {
+        if displayLayer.status == .failed { displayLayer.flush() }
+        guard displayLayer.isReadyForMoreMediaData else { return }
+
+        let size = CGSize(width: CVPixelBufferGetWidth(pixelBuffer),
+                          height: CVPixelBufferGetHeight(pixelBuffer))
+        if displayFormatDescription == nil || displayFormatSize != size {
+            var format: CMVideoFormatDescription?
+            guard CMVideoFormatDescriptionCreateForImageBuffer(
+                allocator: kCFAllocatorDefault, imageBuffer: pixelBuffer,
+                formatDescriptionOut: &format
+            ) == noErr else { return }
+            displayFormatDescription = format
+            displayFormatSize = size
+        }
+        guard let format = displayFormatDescription else { return }
+
+        var timing = CMSampleTimingInfo(duration: .invalid,
+                                        presentationTimeStamp: pts,
+                                        decodeTimeStamp: .invalid)
+        var sample: CMSampleBuffer?
+        guard CMSampleBufferCreateReadyWithImageBuffer(
+            allocator: kCFAllocatorDefault, imageBuffer: pixelBuffer,
+            formatDescription: format, sampleTiming: &timing,
+            sampleBufferOut: &sample
+        ) == noErr, let sampleBuffer = sample else { return }
+
+        if let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: true),
+           CFArrayGetCount(attachments) > 0 {
+            let dictionary = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
+            CFDictionarySetValue(dictionary,
+                                 Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
+                                 Unmanaged.passUnretained(kCFBooleanTrue).toOpaque())
+        }
+        displayLayer.enqueue(sampleBuffer)
     }
 
     private func makeThumbnails(from image: CIImage, canvas: CGSize) {
