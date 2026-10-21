@@ -25,7 +25,8 @@ struct CameraScreen: View {
 
                 VStack(spacing: 0) {
                     TopBar(onTimerTap: {
-                        onTimerTap()
+                        timerDraft = cam.timerSeconds > 0 ? cam.timerSeconds : 5
+                        showTimerSettings = true
                     })
                         .frame(height: topBarHeight)
                     Spacer(minLength: 0)
