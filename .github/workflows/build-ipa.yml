@@ -5,7 +5,7 @@ name: Build IPA
 # - 没配置 → 产出「未签名」IPA，用 Sideloadly / AltStore 用自己的 Apple ID 签名后安装
 on:
   push:
-    branches: [main]
+    branches: [main, improve-camera-ui-color]
   workflow_dispatch:
 
 permissions:
@@ -22,8 +22,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: Install build tools
+        run: brew install xcodegen librsvg
+
+      - name: Generate app icon
+        run: |
+          ICON_DIR="DualCam/Assets.xcassets/AppIcon.appiconset"
+          mkdir -p "$ICON_DIR"
+          rsvg-convert -w 1024 -h 1024 "$ICON_DIR/AppIcon.svg" -o "$ICON_DIR/AppIcon.png"
+
 
       - name: Generate Xcode project
         run: |
