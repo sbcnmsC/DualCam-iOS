@@ -435,12 +435,27 @@ struct SettingsTab: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("画幅").font(.system(size: 13)).frame(width: 64, alignment: .leading)
-                Picker("", selection: $cam.cfg.aspect) {
-                    ForEach(CanvasAspect.allCases) { a in Text(a.rawValue).tag(a) }
+            VStack(alignment: .leading, spacing: 7) {
+                Text("画幅").font(.system(size: 13, weight: .medium))
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
+                    ForEach(CanvasAspect.allCases) { aspect in
+                        let selected = cam.cfg.aspect == aspect
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.16)) {
+                                cam.cfg.aspect = aspect
+                            }
+                        } label: {
+                            Text(aspect.rawValue)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(selected ? Color.yellow : Color.white.opacity(0.86))
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 32)
+                                .background(Capsule().fill(selected ? Color.yellow.opacity(0.15) : Color.white.opacity(0.07)))
+                                .overlay(Capsule().stroke(selected ? Color.yellow.opacity(0.55) : Color.clear, lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
-                .pickerStyle(.segmented)
             }
             HStack {
                 Text("分辨率").font(.system(size: 13)).frame(width: 64, alignment: .leading)
