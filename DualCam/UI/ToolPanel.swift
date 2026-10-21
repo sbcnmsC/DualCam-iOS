@@ -384,6 +384,33 @@ struct ParamsTab: View {
                                   valueText: "\(Int(st.tint))")
                 }
             }
+                HStack(spacing: 8) {
+                    Button {
+                        cam.copyWhiteBalanceToOtherSlot(i)
+                    } label: {
+                        Label("同步到另一镜头", systemImage: "arrow.left.arrow.right")
+                            .font(.system(size: 11, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 32)
+                            .background(Capsule().fill(Color.yellow.opacity(0.18)))
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        cam.slotStates[i].manualWB = false
+                        cam.applyWhiteBalance(i)
+                    } label: {
+                        Label("自动白平衡", systemImage: "sparkles")
+                            .font(.system(size: 11, weight: .medium))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 32)
+                            .background(Capsule().fill(Color.white.opacity(0.10)))
+                    }
+                    .buttonStyle(.plain)
+                }
+                Text("两颗镜头色温可能不同；先在一侧调好，再同步到另一侧，可减少分屏色差。")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.white.opacity(0.58))
             .padding(10)
             .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.055)))
 
