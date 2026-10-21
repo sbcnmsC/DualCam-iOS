@@ -22,15 +22,8 @@ struct CameraScreen: View {
                 .frame(maxWidth: .infinity)
 
                 VStack(spacing: 0) {
-                    TopBar(paramsActive: showPanel && panelTab == .params) {
-                        if showPanel && panelTab == .params {
-                            showPanel = false
-                        } else {
-                            panelTab = .params
-                            showPanel = true
-                        }
-                    }
-                    .frame(height: topBarHeight)
+                    TopBar()
+                        .frame(height: topBarHeight)
                     Spacer(minLength: 0)
                     if showPanel {
                         ToolPanel(tab: $panelTab)
@@ -336,8 +329,6 @@ struct GridOverlay: Shape {
 
 struct TopBar: View {
     @EnvironmentObject private var cam: CameraManager
-    var paramsActive = false
-    var onParams: () -> Void = {}
 
     var body: some View {
         ZStack {
@@ -363,9 +354,6 @@ struct TopBar: View {
                                dimmed: cam.captureMode == .video,
                                label: "实况照片") {
                         cam.cfg.livePhoto.toggle()
-                    }
-                    iconButton("slider.horizontal.3", active: paramsActive, label: "相机参数设置") {
-                        onParams()
                     }
                 }
             }
