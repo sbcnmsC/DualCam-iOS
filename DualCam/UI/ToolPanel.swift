@@ -194,17 +194,38 @@ struct FilterTab: View {
 
 // MARK: - 参数
 
+private enum ParameterSection: String, CaseIterable, Identifiable {
+    case lens = "镜头"
+    case exposure = "曝光"
+    case color = "色彩"
+    case focus = "对焦"
+    var id: String { rawValue }
+}
+
 struct ParamsTab: View {
     @EnvironmentObject private var cam: CameraManager
+    @State private var section: ParameterSection = .exposure
 
     var body: some View {
         let i = min(max(cam.paramTarget, 0), 1)
         let info = cam.slotInfos[i]
         let st = cam.slotStates[i]
         let base = max(info.baseMultiplier, 0.01)
+        let maxZoom = max(base * info.maxZoom, base + 0.01)
 
-        VStack(alignment: .leading, spacing: 12) {
-            Picker("", selection: $cam.paramTarget) {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "camera.aperture")
+                    .foregroundStyle(Color.yellow)
+                Text("控制镜头")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Text("独立参数")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.white.opacity(0.55))
+            }
+
+            Picker("镜头", selection: $cam.paramTarget) {
                 Text(cam.slotInfos[0].name).tag(0)
                 Text(cam.slotInfos[1].name).tag(1)
             }
@@ -212,7 +233,7 @@ struct ParamsTab: View {
 
             ParameterChart(
                 zoom: Double(cam.displayZoom(slot: i)),
-                maxZoom: Double(max(base * info.maxZoom, base + 0.01)),
+                maxZoom: Double(maxZoom),
                 exposureBias: Double(st.exposureBias),
                 minBias: Double(info.minBias),
                 maxBias: Double(info.maxBias),
@@ -228,62 +249,108 @@ struct ParamsTab: View {
                 manualFocus: st.manualFocus
             )
 
-            LabeledSlider(title: "变焦",
-                          value: Binding(
+            Picker("参数分类", selection: $section) {
+                ForEach(ParameterSection.allCases) { item in
+                    Text(item.rawValue).tag(item)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            VStack(alignment: .leading, spacing: 10) {
+                switch section {
+                case .lens:
+                    sectionHeading("镜头与变焦", subtitle: "控制当前镜头的视角")
+                    LabeledSlider(
+                        title: "变焦",
+                        value: Binding(
                             get: { Double(cam.displayZoom(slot: i)) },
-                            set: { cam.setZoom(slot: i, factor: CGFloat($0) / base) }),
-                          range: Double(base)...Double(max(base * info.maxZoom, base + 0.01)),
-                          valueText: String(format: "%.1f×", Double(cam.displayZoom(slot: i))))
+                            set: { cam.setZoom(slot: i, factor: CGFloat($0) / base) }
+                        ),
+                        range: Double(base)...Double(maxZoom),
+                        valueText: String(format: "%.1f×", Double(cam.displayZoom(slot: i)))
+                    )
 
-            LabeledSlider(title: "曝光补偿",
-                          value: dbl(i, \.exposureBias) { cam.applyExposure($0) },
-                          range: Double(info.minBias)...Double(max(info.maxBias, info.minBias + 0.1)),
-                          valueText: String(format: "%+.1f EV", Double(st.exposureBias)),
-                          disabled: st.manualExposure || st.locked)
+                case .exposure:
+                    sectionHeading("明暗与快门", subtitle: "自动曝光与手动曝光二选一")
+                    LabeledSlider(
+                        title: "曝光补偿",
+                        value: dbl(i, \.exposureBias) { cam.applyExposure($0) },
+                        range: Double(info.minBias)...Double(max(info.maxBias, info.minBias + 0.1)),
+                        valueText: String(format: "%+.1f EV", Double(st.exposureBias)),
+                        disabled: st.manualExposure || st.locked
+                    )
+                    Toggle("手动 ISO / 快门", isOn: flag(i, \.manualExposure) { cam.applyExposure($0) })
+                        .font(.system(size: 12))
+                    if st.manualExposure {
+                        LabeledSlider(
+                            title: "ISO",
+                            value: dbl(i, \.iso) { cam.applyExposure($0) },
+                            range: Double(info.minISO)...Double(max(info.maxISO, info.minISO + 1)),
+                            valueText: "\(Int(st.iso))"
+                        )
+                        LabeledSlider(
+                            title: "快门",
+                            value: dbl(i, \.shutter) { cam.applyExposure($0) },
+                            range: 0...1,
+                            valueText: shutterText(info: info, t: st.shutter)
+                        )
+                    }
 
-            Toggle("手动 ISO / 快门", isOn: flag(i, \.manualExposure) { cam.applyExposure($0) })
-                .font(.system(size: 13))
-            if st.manualExposure {
-                LabeledSlider(title: "ISO",
-                              value: dbl(i, \.iso) { cam.applyExposure($0) },
-                              range: Double(info.minISO)...Double(max(info.maxISO, info.minISO + 1)),
-                              valueText: "\(Int(st.iso))")
-                LabeledSlider(title: "快门",
-                              value: dbl(i, \.shutter) { cam.applyExposure($0) },
-                              range: 0...1,
-                              valueText: shutterText(info: info, t: st.shutter))
+                case .color:
+                    sectionHeading("白平衡", subtitle: "调整画面的冷暖与色偏")
+                    Toggle("手动白平衡", isOn: flag(i, \.manualWB) { cam.applyWhiteBalance($0) })
+                        .font(.system(size: 12))
+                    if st.manualWB {
+                        LabeledSlider(
+                            title: "色温",
+                            value: dbl(i, \.temperature) { cam.applyWhiteBalance($0) },
+                            range: 2500...9000,
+                            valueText: "\(Int(st.temperature))K"
+                        )
+                        LabeledSlider(
+                            title: "色调",
+                            value: dbl(i, \.tint) { cam.applyWhiteBalance($0) },
+                            range: -150...150,
+                            valueText: "\(Int(st.tint))"
+                        )
+                    }
+
+                case .focus:
+                    sectionHeading("焦点与锁定", subtitle: "精确对焦，避免自动参数变化")
+                    Toggle("手动对焦", isOn: flag(i, \.manualFocus) { cam.applyFocus($0) })
+                        .font(.system(size: 12))
+                        .disabled(!info.supportsManualFocus)
+                        .opacity(info.supportsManualFocus ? 1 : 0.4)
+                    if st.manualFocus {
+                        LabeledSlider(
+                            title: "对焦距离",
+                            value: dbl(i, \.lensPosition) { cam.applyFocus($0) },
+                            range: 0...1,
+                            valueText: String(format: "%.2f", Double(st.lensPosition))
+                        )
+                        .disabled(!info.supportsManualFocus)
+                    }
+                    Toggle("锁定对焦 / 曝光", isOn: Binding(
+                        get: { cam.slotStates[i].locked },
+                        set: { newValue in
+                            if cam.slotStates[i].locked != newValue { cam.toggleLock(i) }
+                        }
+                    ))
+                    .font(.system(size: 12))
+                }
             }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color.black.opacity(0.20)))
+        }
+    }
 
-            Toggle("手动白平衡", isOn: flag(i, \.manualWB) { cam.applyWhiteBalance($0) })
-                .font(.system(size: 13))
-            if st.manualWB {
-                LabeledSlider(title: "色温",
-                              value: dbl(i, \.temperature) { cam.applyWhiteBalance($0) },
-                              range: 2500...9000,
-                              valueText: "\(Int(st.temperature))K")
-                LabeledSlider(title: "色调",
-                              value: dbl(i, \.tint) { cam.applyWhiteBalance($0) },
-                              range: -150...150,
-                              valueText: "\(Int(st.tint))")
-            }
-
-            Toggle("手动对焦", isOn: flag(i, \.manualFocus) { cam.applyFocus($0) })
-                .font(.system(size: 13))
-                .disabled(!info.supportsManualFocus)
-                .opacity(info.supportsManualFocus ? 1 : 0.4)
-            if st.manualFocus {
-                LabeledSlider(title: "对焦距离",
-                              value: dbl(i, \.lensPosition) { cam.applyFocus($0) },
-                              range: 0...1,
-                              valueText: String(format: "%.2f", Double(st.lensPosition)))
-            }
-
-            Toggle("锁定对焦 / 曝光", isOn: Binding(
-                get: { cam.slotStates[i].locked },
-                set: { newValue in
-                    if cam.slotStates[i].locked != newValue { cam.toggleLock(i) }
-                }))
-                .font(.system(size: 13))
+    private func sectionHeading(_ title: String, subtitle: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+            Text(subtitle)
+                .font(.system(size: 10))
+                .foregroundStyle(Color.white.opacity(0.55))
         }
     }
 
@@ -317,7 +384,7 @@ struct ParamsTab: View {
     }
 }
 
-/// Compact live chart of the selected camera's current capture parameters.
+/// At-a-glance parameter chart in two columns to keep controls visible in the compact panel.
 private struct ParameterChart: View {
     let zoom: Double
     let maxZoom: Double
@@ -339,10 +406,10 @@ private struct ParameterChart: View {
         [
             ("变焦", String(format: "%.1f×", zoom), normalize(zoom, 1, maxZoom)),
             ("曝光", String(format: "%+.1f EV", exposureBias), normalize(exposureBias, minBias, maxBias)),
-            ("ISO", manualExposure ? String(Int(iso)) : "自动", normalize(iso, minISO, maxISO)),
-            ("快门", manualExposure ? shutterLabel : "自动", 0.5),
-            ("白平衡", manualWB ? "\(Int(temperature))K" : "自动", normalize(temperature, 2500, 9000)),
-            ("对焦", manualFocus ? String(format: "%.2f", focus) : "自动", min(max(focus, 0), 1))
+            ("ISO", manualExposure ? String(Int(iso)) : "自动", manualExposure ? normalize(iso, minISO, maxISO) : 0.45),
+            ("快门", manualExposure ? shutterLabel : "自动", manualExposure ? 0.65 : 0.45),
+            ("色温", manualWB ? "\(Int(temperature))K" : "自动", manualWB ? normalize(temperature, 2500, 9000) : 0.45),
+            ("对焦", manualFocus ? String(format: "%.2f", focus) : "自动", manualFocus ? min(max(focus, 0), 1) : 0.45)
         ]
     }
 
@@ -352,39 +419,44 @@ private struct ParameterChart: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("参数概览")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 11, weight: .semibold))
                 Spacer()
-                Text("实时")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(Color.yellow)
+                Circle().fill(Color.green).frame(width: 5, height: 5)
+                Text("当前状态")
+                    .font(.system(size: 9))
+                    .foregroundStyle(Color.white.opacity(0.55))
             }
-            ForEach(Array(rows.enumerated()), id: \.offset) { item in
-                let row = item.element
-                HStack(spacing: 8) {
-                    Text(row.0)
-                        .font(.system(size: 10))
-                        .foregroundStyle(Color.white.opacity(0.72))
-                        .frame(width: 38, alignment: .leading)
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            Capsule().fill(Color.white.opacity(0.10))
-                            Capsule().fill(Color.yellow.opacity(0.9))
-                                .frame(width: geo.size.width * row.2)
+
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
+                      alignment: .leading, spacing: 8) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { item in
+                    let row = item.element
+                    HStack(spacing: 5) {
+                        Text(row.0)
+                            .font(.system(size: 9))
+                            .foregroundStyle(Color.white.opacity(0.62))
+                            .frame(width: 26, alignment: .leading)
+                        GeometryReader { geo in
+                            ZStack(alignment: .leading) {
+                                Capsule().fill(Color.white.opacity(0.10))
+                                Capsule().fill(Color.yellow.opacity(0.9))
+                                    .frame(width: geo.size.width * row.2)
+                            }
                         }
+                        .frame(height: 4)
+                        Text(row.1)
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(Color.white.opacity(0.90))
+                            .frame(minWidth: 30, alignment: .trailing)
                     }
-                    .frame(height: 5)
-                    Text(row.1)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(Color.white.opacity(0.9))
-                        .frame(width: 58, alignment: .trailing)
+                    .frame(height: 12)
                 }
-                .frame(height: 12)
             }
         }
-        .padding(10)
+        .padding(9)
         .background(RoundedRectangle(cornerRadius: 12).fill(Color.black.opacity(0.22)))
     }
 }
