@@ -163,35 +163,85 @@ struct PiPTab: View {
 
 struct FilterTab: View {
     @EnvironmentObject private var cam: CameraManager
+    @State private var pendingFilter: FilterKind = .original
+    @State private var pendingIntensity: Double = 1
+
+    private var hasPendingChanges: Bool {
+        pendingFilter != cam.cfg.filter || abs(pendingIntensity - Double(cam.cfg.filterIntensity)) > 0.005
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
-                    ForEach(FilterKind.allCases) { kind in
-                        cell(kind)
-                    }
+                    ForEach(FilterKind.allCases) { kind in cell(kind) }
                 }
                 .padding(.vertical, 2)
             }
+
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(pendingFilter.rawValue)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color.yellow)
+                    Text("先选择风格和强度，再点击应用；调整过程中不会改变实时画面。")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color.white.opacity(0.62))
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 8)
+                Text("\(Int(pendingIntensity * 100))%")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(Color.white.opacity(0.82))
+            }
+
             LabeledSlider(title: "强度",
-                          value: Binding(get: { Double(cam.cfg.filterIntensity) },
-                                         set: { cam.cfg.filterIntensity = CGFloat($0) }),
+                          value: $pendingIntensity,
                           range: 0...1,
-                          valueText: "\(Int(cam.cfg.filterIntensity * 100))%",
-                          disabled: cam.cfg.filter == .original)
-            Text("滤镜作用在合成后的照片 / 视频上，「原片」不加滤镜。")
-                .font(.system(size: 11))
-                .foregroundStyle(Color.white.opacity(0.6))
+                          valueText: "\(Int(pendingIntensity * 100))%",
+                          disabled: pendingFilter == .original)
+
+            HStack(spacing: 8) {
+                Button {
+                    pendingFilter = cam.cfg.filter
+                    pendingIntensity = Double(cam.cfg.filterIntensity)
+                } label: {
+                    Label("还原", systemImage: "arrow.uturn.backward")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color.white.opacity(0.9))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 36)
+                        .background(Capsule().fill(Color.white.opacity(0.10)))
+                }
+                .buttonStyle(.plain)
+                .disabled(!hasPendingChanges)
+
+                Button {
+                    cam.applyFilter(pendingFilter, intensity: CGFloat(pendingIntensity))
+                } label: {
+                    Label("应用到画面", systemImage: "checkmark")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(hasPendingChanges ? Color.black : Color.white.opacity(0.55))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 36)
+                        .background(Capsule().fill(hasPendingChanges ? Color.yellow : Color.white.opacity(0.10)))
+                }
+                .buttonStyle(.plain)
+                .disabled(!hasPendingChanges)
+            }
         }
-        .onAppear { cam.thumbsActive = true }
+        .onAppear {
+            pendingFilter = cam.cfg.filter
+            pendingIntensity = Double(cam.cfg.filterIntensity)
+            cam.thumbsActive = true
+        }
         .onDisappear { cam.thumbsActive = false }
     }
 
     private func cell(_ kind: FilterKind) -> some View {
-        let selected = cam.cfg.filter == kind
+        let selected = pendingFilter == kind
         return Button {
-            cam.cfg.filter = kind
+            pendingFilter = kind
         } label: {
             VStack(spacing: 5) {
                 ZStack {
@@ -202,7 +252,14 @@ struct FilterTab: View {
                             .frame(width: 62, height: 82)
                             .clipped()
                     } else {
-                        Rectangle().fill(Color.white.opacity(0.12)).frame(width: 62, height: 82)
+                        Rectangle()
+                            .fill(Color.white.opacity(0.12))
+                            .overlay {
+                                Image(systemName: "camera.aperture")
+                                    .font(.system(size: 17))
+                                    .foregroundStyle(Color.white.opacity(0.35))
+                            }
+                            .frame(width: 62, height: 82)
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -231,11 +288,104 @@ struct ParamsTab: View {
         let base = max(info.baseMultiplier, 0.01)
 
         VStack(alignment: .leading, spacing: 12) {
-            Picker("", selection: $cam.paramTarget) {
+            Picker("当前镜头", selection: $cam.paramTarget) {
                 Text(cam.slotInfos[0].name).tag(0)
                 Text(cam.slotInfos[1].name).tag(1)
             }
             .pickerStyle(.segmented)
+
+            VStack(alignment: .leading, spacing: 9) {
+                HStack {
+                    Label("曝光与测光", systemImage: "sun.max")
+                        .font(.system(size: 12, weight: .semibold))
+                    Spacer()
+                    Button("归零") { cam.resetExposureBias(i) }
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color.yellow)
+                        .disabled(st.manualExposure || st.locked)
+                        .opacity(st.manualExposure || st.locked ? 0.4 : 1)
+                }
+
+                LabeledSlider(icon: "plusminus.circle", title: "曝光补偿",
+                              value: dbl(i, \.exposureBias) { cam.applyExposure($0) },
+                              range: Double(info.minBias)...Double(max(info.maxBias, info.minBias + 0.1)),
+                              valueText: String(format: "%+.1f EV", Double(st.exposureBias)),
+                              disabled: st.manualExposure || st.locked)
+
+                Text("预览画面上下滑动也可以调曝光；点按画面会重新测光与对焦。")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.white.opacity(0.58))
+
+                Toggle("手动 ISO / 快门", isOn: flag(i, \.manualExposure) { cam.applyExposure($0) })
+                    .font(.system(size: 12))
+                if st.manualExposure {
+                    LabeledSlider(icon: "camera.aperture", title: "ISO",
+                                  value: dbl(i, \.iso) { cam.applyExposure($0) },
+                                  range: Double(info.minISO)...Double(max(info.maxISO, info.minISO + 1)),
+                                  valueText: "\(Int(st.iso))")
+                    LabeledSlider(icon: "timer", title: "快门",
+                                  value: dbl(i, \.shutter) { cam.applyExposure($0) },
+                                  range: 0...1,
+                                  valueText: shutterText(info: info, t: st.shutter))
+                }
+            }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.055)))
+
+            VStack(alignment: .leading, spacing: 9) {
+                HStack {
+                    Label("对焦", systemImage: "scope")
+                        .font(.system(size: 12, weight: .semibold))
+                    Spacer()
+                    Button("自动对焦") { cam.setAutoFocus(i) }
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color.yellow)
+                }
+
+                Toggle("手动对焦", isOn: flag(i, \.manualFocus) { cam.applyFocus($0) })
+                    .font(.system(size: 12))
+                    .disabled(!info.supportsManualFocus)
+                    .opacity(info.supportsManualFocus ? 1 : 0.4)
+                if st.manualFocus {
+                    LabeledSlider(icon: "scope", title: "对焦距离",
+                                  value: dbl(i, \.lensPosition) { cam.applyFocus($0) },
+                                  range: 0...1,
+                                  valueText: String(format: "%.2f", Double(st.lensPosition)))
+                        .disabled(!info.supportsManualFocus)
+                }
+
+                Toggle("锁定对焦 / 曝光", isOn: Binding(
+                    get: { cam.slotStates[i].locked },
+                    set: { newValue in
+                        if cam.slotStates[i].locked != newValue { cam.toggleLock(i) }
+                    }))
+                    .font(.system(size: 12))
+
+                Text("轻点预览对焦，黄色框旁显示当前曝光值。")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.white.opacity(0.58))
+            }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.055)))
+
+            VStack(alignment: .leading, spacing: 9) {
+                Label("白平衡", systemImage: "thermometer.medium")
+                    .font(.system(size: 12, weight: .semibold))
+                Toggle("手动白平衡", isOn: flag(i, \.manualWB) { cam.applyWhiteBalance($0) })
+                    .font(.system(size: 12))
+                if st.manualWB {
+                    LabeledSlider(icon: "thermometer", title: "色温",
+                                  value: dbl(i, \.temperature) { cam.applyWhiteBalance($0) },
+                                  range: 2500...9000,
+                                  valueText: "\(Int(st.temperature))K")
+                    LabeledSlider(icon: "circle.lefthalf.filled", title: "色调",
+                                  value: dbl(i, \.tint) { cam.applyWhiteBalance($0) },
+                                  range: -150...150,
+                                  valueText: "\(Int(st.tint))")
+                }
+            }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.055)))
 
             LabeledSlider(icon: "plus.magnifyingglass", title: "变焦",
                           value: Binding(
@@ -243,56 +393,6 @@ struct ParamsTab: View {
                             set: { cam.setZoom(slot: i, factor: CGFloat($0) / base) }),
                           range: Double(base)...Double(max(base * info.maxZoom, base + 0.01)),
                           valueText: String(format: "%.1f×", Double(cam.displayZoom(slot: i))))
-
-            LabeledSlider(icon: "plusminus.circle", title: "曝光补偿",
-                          value: dbl(i, \.exposureBias) { cam.applyExposure($0) },
-                          range: Double(info.minBias)...Double(max(info.maxBias, info.minBias + 0.1)),
-                          valueText: String(format: "%+.1f EV", Double(st.exposureBias)),
-                          disabled: st.manualExposure || st.locked)
-
-            Toggle("手动 ISO / 快门", isOn: flag(i, \.manualExposure) { cam.applyExposure($0) })
-                .font(.system(size: 13))
-            if st.manualExposure {
-                LabeledSlider(icon: "camera.aperture", title: "ISO",
-                              value: dbl(i, \.iso) { cam.applyExposure($0) },
-                              range: Double(info.minISO)...Double(max(info.maxISO, info.minISO + 1)),
-                              valueText: "\(Int(st.iso))")
-                LabeledSlider(icon: "timer", title: "快门",
-                              value: dbl(i, \.shutter) { cam.applyExposure($0) },
-                              range: 0...1,
-                              valueText: shutterText(info: info, t: st.shutter))
-            }
-
-            Toggle("手动白平衡", isOn: flag(i, \.manualWB) { cam.applyWhiteBalance($0) })
-                .font(.system(size: 13))
-            if st.manualWB {
-                LabeledSlider(icon: "thermometer", title: "色温",
-                              value: dbl(i, \.temperature) { cam.applyWhiteBalance($0) },
-                              range: 2500...9000,
-                              valueText: "\(Int(st.temperature))K")
-                LabeledSlider(icon: "circle.lefthalf.filled", title: "色调",
-                              value: dbl(i, \.tint) { cam.applyWhiteBalance($0) },
-                              range: -150...150,
-                              valueText: "\(Int(st.tint))")
-            }
-
-            Toggle("手动对焦", isOn: flag(i, \.manualFocus) { cam.applyFocus($0) })
-                .font(.system(size: 13))
-                .disabled(!info.supportsManualFocus)
-                .opacity(info.supportsManualFocus ? 1 : 0.4)
-            if st.manualFocus {
-                LabeledSlider(icon: "scope", title: "对焦距离",
-                              value: dbl(i, \.lensPosition) { cam.applyFocus($0) },
-                              range: 0...1,
-                              valueText: String(format: "%.2f", Double(st.lensPosition)))
-            }
-
-            Toggle("锁定对焦 / 曝光", isOn: Binding(
-                get: { cam.slotStates[i].locked },
-                set: { newValue in
-                    if cam.slotStates[i].locked != newValue { cam.toggleLock(i) }
-                }))
-                .font(.system(size: 13))
         }
     }
 

@@ -66,6 +66,11 @@ final class CameraManager: NSObject, ObservableObject {
 
     // sessionQueue 独占
     private var devices: [AVCaptureDevice?] = [nil, nil]
+    // 高频滑块只保留最新参数，约 30 次/秒锁定一次设备配置。
+    private var pendingDeviceUpdateTokens: [String: UUID] = [:]
+    private var pendingDeviceUpdateBodies: [String: (AVCaptureDevice) -> Void] = [:]
+    private var lastDeviceUpdateAt: [String: UInt64] = [:]
+    private var deviceConfigGeneration: UInt64 = 0
     private var currentCombo: LensCombo?
     private var audioGranted = false
     private var audioActive = false
@@ -76,6 +81,7 @@ final class CameraManager: NSObject, ObservableObject {
     private let lock = NSLock()
     private var sharedCfg = Config()
     private var sharedThumbs = false
+    private var thumbsNeedRefresh = false
     private var latest: [CVPixelBuffer?] = [nil, nil]
     private var bufferSizes: [CGSize] = [.zero, .zero]
     private var slotFront: [Bool] = [false, false]
@@ -86,8 +92,8 @@ final class CameraManager: NSObject, ObservableObject {
     private var previewPoolSize = CGSize.zero
     private var displayFormat: CMVideoFormatDescription?
     private var displayFormatSize = CGSize.zero
-    private var lastThumbTime: Double = 0
     private var sharedFPS = 30
+    private var exposureMarkerID: UUID?
 
     // 录制状态（用 recLock 保护）
     private let recLock = NSLock()
@@ -215,6 +221,11 @@ final class CameraManager: NSObject, ObservableObject {
 
     private func rebuild(attempt: Int = 0, resetStates: Bool = false) {
         guard let combo = currentCombo else { return }
+        // Discard delayed device writes from the previous camera graph.
+        deviceConfigGeneration &+= 1
+        pendingDeviceUpdateTokens.removeAll()
+        pendingDeviceUpdateBodies.removeAll()
+        lastDeviceUpdateAt.removeAll()
         if session.isRunning { session.stopRunning() }
 
         session.beginConfiguration()
@@ -437,8 +448,24 @@ final class CameraManager: NSObject, ObservableObject {
 
     private func setSharedThumbs(_ on: Bool) {
         lock.lock()
+        if on && !sharedThumbs {
+            // Generate the filter strip once when the panel opens.
+            thumbsNeedRefresh = true
+        } else if !on {
+            thumbsNeedRefresh = false
+        }
         sharedThumbs = on
         lock.unlock()
+    }
+
+    /// Atomically claim one thumbnail-generation request.
+    private func beginThumbs() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard sharedThumbs, thumbsNeedRefresh, !thumbsBusy else { return false }
+        thumbsBusy = true
+        thumbsNeedRefresh = false
+        return true
     }
 
     private func cfgDidChange(_ old: Config) {
@@ -519,7 +546,6 @@ final class CameraManager: NSObject, ObservableObject {
         let a = latest[0]
         let b = latest[1]
         let front = slotFront
-        let thumbsOn = sharedThumbs
         lock.unlock()
         guard let bufA = a else { return }
 
@@ -574,10 +600,8 @@ final class CameraManager: NSObject, ObservableObject {
             display(buffer)
         }
 
-        // 滤镜缩略图（放到独立队列，最多同时一份）
-        let now = CMTimeGetSeconds(pts)
-        if thumbsOn && now - lastThumbTime > 0.7 && beginThumbs() {
-            lastThumbTime = now
+        // 滤镜缩略图：每次打开面板只渲染一批，不再每隔 0.7 秒重复计算全部滤镜。
+        if beginThumbs() {
             thumbQueue.async { [weak self] in
                 guard let self = self else { return }
                 self.makeThumbnails(from: composed, canvas: canvas)
@@ -654,14 +678,6 @@ final class CameraManager: NSObject, ObservableObject {
         displayLayer.enqueue(sample)
     }
 
-    private func beginThumbs() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        if thumbsBusy { return false }
-        thumbsBusy = true
-        return true
-    }
-
     private func endThumbs() {
         lock.lock()
         thumbsBusy = false
@@ -731,16 +747,63 @@ final class CameraManager: NSObject, ObservableObject {
         }
     }
 
+    /// Coalesce rapid slider updates so only the newest parameter value reaches the device.
+    private func withDeviceCoalesced(
+        _ slot: Int,
+        key: String,
+        minimumInterval: TimeInterval = 1.0 / 30.0,
+        _ body: @escaping (AVCaptureDevice) -> Void
+    ) {
+        sessionQueue.async { [weak self] in
+            guard let self = self, slot < self.devices.count,
+                  self.devices[slot] != nil else { return }
+            let updateKey = "\(slot):\(key)"
+            let generation = self.deviceConfigGeneration
+            self.pendingDeviceUpdateBodies[updateKey] = body
+
+            let now = DispatchTime.now().uptimeNanoseconds
+            let intervalNanos = UInt64(max(minimumInterval, 0.001) * 1_000_000_000)
+            let last = self.lastDeviceUpdateAt[updateKey] ?? 0
+            if last == 0 || now >= last + intervalNanos {
+                self.pendingDeviceUpdateTokens.removeValue(forKey: updateKey)
+                let newest = self.pendingDeviceUpdateBodies.removeValue(forKey: updateKey) ?? body
+                self.performDeviceUpdate(slot, key: updateKey, body: newest)
+                return
+            }
+
+            guard self.pendingDeviceUpdateTokens[updateKey] == nil else { return }
+            let token = UUID()
+            self.pendingDeviceUpdateTokens[updateKey] = token
+            let waitNanos = max(1, last + intervalNanos - now)
+            self.sessionQueue.asyncAfter(deadline: .now() + Double(waitNanos) / 1_000_000_000) { [weak self] in
+                guard let self = self,
+                      self.deviceConfigGeneration == generation,
+                      self.pendingDeviceUpdateTokens[updateKey] == token else { return }
+                self.pendingDeviceUpdateTokens.removeValue(forKey: updateKey)
+                guard let newest = self.pendingDeviceUpdateBodies.removeValue(forKey: updateKey) else { return }
+                self.performDeviceUpdate(slot, key: updateKey, body: newest)
+            }
+        }
+    }
+
+    private func performDeviceUpdate(_ slot: Int, key: String, body: (AVCaptureDevice) -> Void) {
+        guard slot < devices.count, let device = devices[slot] else { return }
+        do { try device.lockForConfiguration() } catch { return }
+        body(device)
+        device.unlockForConfiguration()
+        lastDeviceUpdateAt[key] = DispatchTime.now().uptimeNanoseconds
+    }
+
     func applyZoom(_ slot: Int) {
         let z = slotStates[slot].zoom
-        withDevice(slot) { d in
+        withDeviceCoalesced(slot, key: "zoom", minimumInterval: 1.0 / 60.0) { d in
             d.videoZoomFactor = min(max(z, 1), d.activeFormat.videoMaxZoomFactor)
         }
     }
 
     func applyFocus(_ slot: Int) {
         let s = slotStates[slot]
-        withDevice(slot) { d in
+        withDeviceCoalesced(slot, key: "focus") { d in
             if s.manualFocus, d.isLockingFocusWithCustomLensPositionSupported {
                 d.setFocusModeLocked(lensPosition: s.lensPosition, completionHandler: nil)
             } else if s.locked, d.isFocusModeSupported(.locked) {
@@ -753,7 +816,7 @@ final class CameraManager: NSObject, ObservableObject {
 
     func applyExposure(_ slot: Int) {
         let s = slotStates[slot]
-        withDevice(slot) { d in
+        withDeviceCoalesced(slot, key: "exposure") { d in
             if s.manualExposure {
                 let f = d.activeFormat
                 let iso = min(max(s.iso, f.minISO), f.maxISO)
@@ -776,7 +839,7 @@ final class CameraManager: NSObject, ObservableObject {
 
     func applyWhiteBalance(_ slot: Int) {
         let s = slotStates[slot]
-        withDevice(slot) { d in
+        withDeviceCoalesced(slot, key: "white-balance") { d in
             if s.manualWB, d.isLockingWhiteBalanceWithCustomDeviceGainsSupported {
                 let tt = AVCaptureDevice.WhiteBalanceTemperatureAndTintValues(temperature: s.temperature, tint: s.tint)
                 var gains = d.deviceWhiteBalanceGains(for: tt)
@@ -792,9 +855,32 @@ final class CameraManager: NSObject, ObservableObject {
     }
 
     func toggleLock(_ slot: Int) {
+        guard slotStates.indices.contains(slot) else { return }
         slotStates[slot].locked.toggle()
         applyFocus(slot)
         applyExposure(slot)
+    }
+
+    func resetExposureBias(_ slot: Int) {
+        guard slotStates.indices.contains(slot) else { return }
+        slotStates[slot].exposureBias = 0
+        applyExposure(slot)
+    }
+
+    func setAutoFocus(_ slot: Int) {
+        guard slotStates.indices.contains(slot) else { return }
+        slotStates[slot].manualFocus = false
+        slotStates[slot].locked = false
+        applyFocus(slot)
+        applyExposure(slot)
+    }
+
+    /// Apply filter controls as one config transaction, only after the user confirms.
+    func applyFilter(_ kind: FilterKind, intensity: CGFloat) {
+        var next = cfg
+        next.filter = kind
+        next.filterIntensity = intensity.isFinite ? min(max(intensity, 0), 1) : 1
+        cfg = next
     }
 
     // MARK: - 点按对焦 / 曝光
@@ -833,10 +919,25 @@ final class CameraManager: NSObject, ObservableObject {
     }
 
     func showMarker(at p: CGPoint) {
+        exposureMarkerID = nil
         let marker = FocusMarker(point: p)
         focusMarker = marker
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
             if self.focusMarker == marker { self.focusMarker = nil }
+        }
+    }
+
+    private func showExposureMarker(at p: CGPoint, bias: Float) {
+        let isFirst = exposureMarkerID == nil
+        let id = exposureMarkerID ?? UUID()
+        exposureMarkerID = id
+        focusMarker = FocusMarker(point: p, exposureBias: bias, id: id)
+        if isFirst {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { [weak self] in
+                guard let self = self, self.focusMarker?.id == id else { return }
+                self.focusMarker = nil
+                self.exposureMarkerID = nil
+            }
         }
     }
 
@@ -848,14 +949,15 @@ final class CameraManager: NSObject, ObservableObject {
         dragStartBias = slotStates[dragSlot].exposureBias
     }
 
-    func exposureDragChanged(dy: CGFloat) {
+    func exposureDragChanged(dy: CGFloat, at point: CGPoint) {
         let slot = dragSlot
         let s = slotStates[slot]
         guard !s.manualExposure, !s.locked else { return }
         let info = slotInfos[slot]
-        let bias = dragStartBias - Float(dy / 70)
-        slotStates[slot].exposureBias = min(max(bias, info.minBias), info.maxBias)
+        let bias = min(max(dragStartBias - Float(dy / 70), info.minBias), info.maxBias)
+        slotStates[slot].exposureBias = bias
         applyExposure(slot)
+        showExposureMarker(at: point, bias: bias)
     }
 
     private func subjectAreaChanged() {

@@ -196,6 +196,13 @@ struct ZoomStop: Equatable, Identifiable {
 }
 
 struct FocusMarker: Equatable {
-    let id = UUID()
+    let id: UUID
     var point: CGPoint   // 归一化，相对预览区域
+    var exposureBias: Float?
+
+    init(point: CGPoint, exposureBias: Float? = nil, id: UUID = UUID()) {
+        self.id = id
+        self.point = point
+        self.exposureBias = exposureBias
+    }
 }

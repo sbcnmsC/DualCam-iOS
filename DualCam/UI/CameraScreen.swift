@@ -90,7 +90,7 @@ struct PreviewStage: View {
             }
 
             if let marker = cam.focusMarker {
-                FocusMarkerView()
+                FocusMarkerView(exposureBias: marker.exposureBias)
                     .position(x: marker.point.x * size.width, y: marker.point.y * size.height)
                     .allowsHitTesting(false)
                     .id(marker.id)
@@ -139,7 +139,7 @@ struct PreviewStage: View {
                 }
                 if abs(v.translation.height) > 10 || adjusting {
                     adjusting = true
-                    cam.exposureDragChanged(dy: v.translation.height)
+                    cam.exposureDragChanged(dy: v.translation.height, at: normalized(v.location))
                 }
             }
             .onEnded { v in
@@ -195,21 +195,32 @@ struct OutputModePill: View {
 }
 
 struct FocusMarkerView: View {
+    let exposureBias: Float?
     @State private var appeared = false
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 4)
-                .stroke(Color.yellow, lineWidth: 1.5)
-                .frame(width: 72, height: 72)
-            Image(systemName: "sun.max.fill")
-                .font(.system(size: 12))
-                .foregroundStyle(Color.yellow)
-                .offset(x: 46, y: 0)
+        VStack(spacing: 4) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(Color.yellow, lineWidth: 1.5)
+                    .frame(width: 72, height: 72)
+                Image(systemName: exposureBias == nil ? "scope" : "sun.max.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.yellow)
+                    .offset(x: 36, y: -36)
+            }
+            if let exposureBias {
+                Text(String(format: "EV %+.1f", Double(exposureBias)))
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Color.yellow)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(Color.black.opacity(0.72)))
+            }
         }
-        .scaleEffect(appeared ? 1 : 1.35)
+        .scaleEffect(appeared ? 1 : 1.12)
         .onAppear {
-            withAnimation(.easeOut(duration: 0.2)) { appeared = true }
+            withAnimation(.easeOut(duration: 0.16)) { appeared = true }
         }
     }
 }

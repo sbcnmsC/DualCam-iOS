@@ -18,15 +18,19 @@ enum FilterKind: String, CaseIterable, Identifiable {
 
     /// 对合成后的整幅画面应用滤镜。intensity 为 0...1，1 为完全应用。
     func apply(to image: CIImage, intensity: CGFloat) -> CIImage {
-        if self == .original { return image }
-        let filtered = rawApply(image)
-        let t = min(max(intensity, 0), 1)
+        guard self != .original else { return image }
+        let extent = image.extent
+        guard extent.width > 0, extent.height > 0, extent.isInfinite == false else { return image }
+        let t = intensity.isFinite ? min(max(intensity, 0), 1) : 1
+        guard t > 0.001 else { return image }
+
+        // Keep Core Image effects inside the original frame to prevent edge expansion.
+        let filtered = rawApply(image).cropped(to: extent)
         if t >= 0.999 { return filtered }
-        if t <= 0.001 { return image }
         return image.applyingFilter("CIDissolveTransition", parameters: [
             kCIInputTargetImageKey: filtered,
             kCIInputTimeKey: t
-        ])
+        ]).cropped(to: extent)
     }
 
     private func rawApply(_ image: CIImage) -> CIImage {
@@ -34,26 +38,27 @@ enum FilterKind: String, CaseIterable, Identifiable {
         case .original:
             return image
         case .vivid:
-            let v = image.applyingFilter("CIVibrance", parameters: ["inputAmount": 0.6])
-            return colorControls(v, saturation: 1.22, brightness: 0, contrast: 1.08)
+            // Favor vibrance over global saturation to protect skin and bright colors.
+            let v = image.applyingFilter("CIVibrance", parameters: ["inputAmount": 0.32])
+            return colorControls(v, saturation: 1.08, brightness: 0, contrast: 1.035)
         case .warm:
-            let m = colorMatrix(image, r: 1.10, g: 1.02, b: 0.86)
-            return colorControls(m, saturation: 1.08, brightness: 0.02, contrast: 1.0)
+            let m = colorMatrix(image, r: 1.035, g: 1.005, b: 0.965)
+            return colorControls(m, saturation: 1.02, brightness: 0.005, contrast: 1.015)
         case .cool:
-            let m = colorMatrix(image, r: 0.90, g: 1.0, b: 1.13)
-            return colorControls(m, saturation: 1.0, brightness: 0, contrast: 1.04)
+            let m = colorMatrix(image, r: 0.97, g: 1.0, b: 1.035)
+            return colorControls(m, saturation: 0.99, brightness: 0, contrast: 1.02)
         case .fresh:
-            let c = colorControls(image, saturation: 1.12, brightness: 0.07, contrast: 0.94)
-            return colorMatrix(c, r: 0.98, g: 1.04, b: 1.04)
+            let c = colorControls(image, saturation: 1.07, brightness: 0.015, contrast: 0.98)
+            return colorMatrix(c, r: 0.99, g: 1.02, b: 1.02)
         case .cinema:
-            let c = colorControls(image, saturation: 0.88, brightness: -0.02, contrast: 1.16)
-            return colorMatrix(c, r: 1.06, g: 1.0, b: 0.95)
+            let c = colorControls(image, saturation: 0.91, brightness: -0.005, contrast: 1.08)
+            return colorMatrix(c, r: 1.025, g: 1.005, b: 0.98)
         case .film:
-            let c = colorControls(image, saturation: 0.86, brightness: 0.01, contrast: 1.1)
-            return colorMatrix(c, r: 1.05, g: 1.0, b: 0.94, bias: CIVector(x: 0.025, y: 0.02, z: 0.012, w: 0))
+            let c = colorControls(image, saturation: 0.91, brightness: 0, contrast: 1.045)
+            return colorMatrix(c, r: 1.025, g: 1.0, b: 0.975, bias: CIVector(x: 0.008, y: 0.005, z: 0.003, w: 0))
         case .retro:
-            let s = image.applyingFilter("CISepiaTone", parameters: [kCIInputIntensityKey: 0.55])
-            return colorControls(s, saturation: 0.95, brightness: 0, contrast: 1.05)
+            let s = image.applyingFilter("CISepiaTone", parameters: [kCIInputIntensityKey: 0.32])
+            return colorControls(s, saturation: 0.98, brightness: 0, contrast: 1.025)
         case .faded:
             return image.applyingFilter("CIPhotoEffectFade")
         case .chrome:
@@ -65,7 +70,7 @@ enum FilterKind: String, CaseIterable, Identifiable {
                 kCIInputColorKey: CIColor(red: 1.0, green: 0.80, blue: 0.40),
                 kCIInputIntensityKey: 1.0
             ])
-            return colorControls(m, saturation: 1.0, brightness: -0.03, contrast: 1.25)
+            return colorControls(m, saturation: 1.0, brightness: -0.01, contrast: 1.15)
         }
     }
 }
