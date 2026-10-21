@@ -20,6 +20,7 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var permissionDenied = false
     @Published var captureMode: CaptureMode = .photo
     @Published var isRecording = false
+    @Published var isCapturingPhoto = false
     @Published var recordSeconds = 0
     @Published var countdown: Int? = nil
     @Published var screenFlash = false
@@ -58,6 +59,9 @@ final class CameraManager: NSObject, ObservableObject {
     private let audioQueue = DispatchQueue(label: "dualcam.audio")
     private let outputA = AVCaptureVideoDataOutput()
     private let outputB = AVCaptureVideoDataOutput()
+    /// One still-photo output is attached to camera slot A; MultiCam supports several video outputs,
+    /// but keeping one still output avoids depending on multiple photo-output support.
+    private let photoOutput = AVCapturePhotoOutput()
     private let audioOutput = AVCaptureAudioDataOutput()
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
     /// 缩略图专用，和实时渲染互不干扰。
@@ -66,6 +70,9 @@ final class CameraManager: NSObject, ObservableObject {
 
     // sessionQueue 独占
     private var devices: [AVCaptureDevice?] = [nil, nil]
+    private var videoInputs: [AVCaptureDeviceInput?] = [nil, nil]
+    private var highResolutionPhotoReady = false
+    private var pendingPhotoDelegates: [Int64: HighResolutionPhotoCaptureDelegate] = [:]
     // 高频滑块只保留最新参数，约 30 次/秒锁定一次设备配置。
     private var pendingDeviceUpdateTokens: [String: UUID] = [:]
     private var pendingDeviceUpdateBodies: [String: (AVCaptureDevice) -> Void] = [:]
@@ -232,6 +239,8 @@ final class CameraManager: NSObject, ObservableObject {
         for input in session.inputs { session.removeInput(input) }
         for output in session.outputs { session.removeOutput(output) }
         devices = [nil, nil]
+        videoInputs = [nil, nil]
+        highResolutionPhotoReady = false
         audioActive = false
 
         let specs = [combo.a, combo.b]
@@ -252,6 +261,7 @@ final class CameraManager: NSObject, ObservableObject {
                 break
             }
             session.addInputWithNoConnections(input)
+            videoInputs[i] = input
             usedFPS = min(usedFPS, configureFormat(dev, targetHeight: height, fps: wantFPS))
 
             let out = outputs[i]
@@ -285,6 +295,9 @@ final class CameraManager: NSObject, ObservableObject {
             infos[i] = makeInfo(device: dev, spec: spec)
         }
 
+        if failure == nil {
+            highResolutionPhotoReady = configureHighResolutionPhotoOutput()
+        }
         if failure == nil, audioGranted {
             addAudio()
         }
@@ -323,6 +336,48 @@ final class CameraManager: NSObject, ObservableObject {
                 self.applyWhiteBalance(i)
             }
         }
+    }
+
+    /// Configure the native still-photo path before startRunning so the device can use its
+    /// largest photo dimensions for the currently selected MultiCam-compatible camera format.
+    private func configureHighResolutionPhotoOutput() -> Bool {
+        guard let input = videoInputs[0], let device = devices[0],
+              session.canAddOutput(photoOutput) else {
+            return false
+        }
+
+        session.addOutputWithNoConnections(photoOutput)
+        guard let port = input.ports(for: .video,
+                                     sourceDeviceType: device.deviceType,
+                                     sourceDevicePosition: device.position).first else {
+            session.removeOutput(photoOutput)
+            return false
+        }
+        let connection = AVCaptureConnection(inputPorts: [port], output: photoOutput)
+        guard session.canAddConnection(connection) else {
+            session.removeOutput(photoOutput)
+            return false
+        }
+        session.addConnection(connection)
+        if connection.isVideoRotationAngleSupported(90) {
+            connection.videoRotationAngle = 90
+        }
+        if connection.isVideoMirroringSupported {
+            connection.automaticallyAdjustsVideoMirroring = false
+            connection.isVideoMirrored = false
+        }
+
+        let dimensions = device.activeFormat.supportedMaxPhotoDimensions.max { lhs, rhs in
+            Int64(lhs.width) * Int64(lhs.height) < Int64(rhs.width) * Int64(rhs.height)
+        }
+        guard let dimensions = dimensions else {
+            session.removeConnection(connection)
+            session.removeOutput(photoOutput)
+            return false
+        }
+        photoOutput.maxPhotoDimensions = dimensions
+        photoOutput.maxPhotoQualityPrioritization = .quality
+        return true
     }
 
     private func addAudio() {
@@ -1114,18 +1169,118 @@ final class CameraManager: NSObject, ObservableObject {
     }
 
     func takePhoto() {
+        guard !isCapturingPhoto else { return }
         let useFlash = flashEnabled
+        let captureConfig = cfg
+        // The dedicated photo output is used for stills when Live Photo is off. Live Photo keeps
+        // the existing paired still/movie pipeline because its movie must carry matching metadata.
+        let useHighResolutionOriginals = !captureConfig.livePhoto && captureConfig.outputMode.savesOriginal
+        if useHighResolutionOriginals { isCapturingPhoto = true }
         if useFlash { flash(on: true) }
+
         DispatchQueue.main.asyncAfter(deadline: .now() + (useFlash ? 0.45 : 0)) { [weak self] in
             guard let self = self else { return }
-            self.videoQueue.async { self.captureStill() }
-            if useFlash {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { self.flash(on: false) }
+            if useHighResolutionOriginals {
+                self.videoQueue.async {
+                    let fallback = self.fallbackOriginalData()
+                    if captureConfig.outputMode.savesComposite {
+                        self.captureStill(includeOriginals: false, silentSave: true)
+                    }
+                    self.captureHighResolutionPrimaryPhoto { highResolutionData in
+                        var datas: [Data] = []
+                        if let highResolutionData = highResolutionData {
+                            datas.append(highResolutionData)
+                        } else if let primary = fallback.primary {
+                            datas.append(primary)
+                        }
+                        if let secondary = fallback.secondary { datas.append(secondary) }
+
+                        DispatchQueue.main.async {
+                            self.flash(on: false)
+                            guard !datas.isEmpty else {
+                                self.showToast("拍照失败：没有可保存的画面")
+                                self.isCapturingPhoto = false
+                                return
+                            }
+                            let message: String
+                            if highResolutionData != nil {
+                                message = captureConfig.outputMode.savesComposite
+                                    ? "高清主镜头原片已保存，合成画面另行保存"
+                                    : "高清主镜头原片已保存"
+                            } else {
+                                message = "高清静态拍照不可用，已保存兼容分辨率原片"
+                            }
+                            self.saveImages(datas, successMessage: message)
+                            self.isCapturingPhoto = false
+                        }
+                    }
+                }
+            } else {
+                self.videoQueue.async { self.captureStill() }
+                if useFlash {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { self.flash(on: false) }
+                }
             }
         }
     }
 
-    private func captureStill() {
+    /// Fallback frames preserve the previous behavior if a camera/format cannot supply a native still.
+    private func fallbackOriginalData() -> (primary: Data?, secondary: Data?) {
+        lock.lock()
+        let a = latest[0]
+        let b = latest[1]
+        lock.unlock()
+        let primary = a.flatMap { jpeg(orient(CIImage(cvPixelBuffer: $0))) }
+        let secondary = b.flatMap { jpeg(orient(CIImage(cvPixelBuffer: $0))) }
+        return (primary, secondary)
+    }
+
+    /// Capture from the dedicated AVCapturePhotoOutput. The callback's Data contains the original
+    /// still-image dimensions and metadata; it is not upscaled from a video frame.
+    private func captureHighResolutionPrimaryPhoto(completion: @escaping (Data?) -> Void) {
+        sessionQueue.async { [weak self] in
+            guard let self = self,
+                  self.session.isRunning,
+                  self.highResolutionPhotoReady,
+                  let device = self.devices[0] else {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+            guard let dimensions = device.activeFormat.supportedMaxPhotoDimensions.max(by: { lhs, rhs in
+                Int64(lhs.width) * Int64(lhs.height) < Int64(rhs.width) * Int64(rhs.height)
+            }) else {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+
+            let settings: AVCapturePhotoSettings
+            if self.photoOutput.availablePhotoCodecTypes.contains(.jpeg) {
+                settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
+            } else {
+                settings = AVCapturePhotoSettings()
+            }
+            settings.maxPhotoDimensions = dimensions
+            settings.photoQualityPrioritization = .quality
+
+            let uniqueID = settings.uniqueID
+            let delegate = HighResolutionPhotoCaptureDelegate(
+                onPhoto: { [weak self] data, _ in
+                    guard self != nil else { return }
+                    DispatchQueue.main.async { completion(data) }
+                },
+                onFinished: { [weak self] finishedID in
+                    guard let self = self else { return }
+                    self.sessionQueue.async {
+                        self.pendingPhotoDelegates.removeValue(forKey: finishedID)
+                    }
+                }
+            )
+            self.pendingPhotoDelegates[uniqueID] = delegate
+            self.photoOutput.capturePhoto(with: settings, delegate: delegate)
+        }
+    }
+
+    private func captureStill(includeOriginals: Bool = true, silentSave: Bool = false) {
         lock.lock()
         let c = sharedCfg
         let a = latest[0]
@@ -1167,7 +1322,7 @@ final class CameraManager: NSObject, ObservableObject {
         // 原图直出：每颗镜头各存一张未镜像、未加滤镜、未裁切、未合成的画面；合成图是预览里看到的样子
         var shots: [StillShot] = []
         if c.outputMode.savesComposite { shots.append(StillShot(image: finalImage, slot: nil)) }
-        if c.outputMode.savesOriginal {
+        if c.outputMode.savesOriginal && includeOriginals {
             shots.append(StillShot(image: rawA, slot: 0))
             if let rb = rawB { shots.append(StillShot(image: rb, slot: 1)) }
         }
@@ -1214,7 +1369,7 @@ final class CameraManager: NSObject, ObservableObject {
                 showToast("生成照片失败")
                 return
             }
-            saveImages(datas)
+            saveImages(datas, successMessage: silentSave ? "" : nil)
             return
         }
 
@@ -1322,7 +1477,7 @@ final class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    private func saveImages(_ datas: [Data]) {
+    private func saveImages(_ datas: [Data], successMessage: String? = nil) {
         PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self] status in
             guard let self = self else { return }
             guard status == .authorized || status == .limited else {
@@ -1335,7 +1490,15 @@ final class CameraManager: NSObject, ObservableObject {
                     req.addResource(with: .photo, data: d, options: nil)
                 }
             }, completionHandler: { ok, error in
-                self.showToast(ok ? "照片已保存（\(datas.count) 张）" : "保存失败：\(error?.localizedDescription ?? "未知错误")")
+                if ok {
+                    if let message = successMessage {
+                        if !message.isEmpty { self.showToast(message) }
+                    } else {
+                        self.showToast("照片已保存（\(datas.count) 张）")
+                    }
+                } else {
+                    self.showToast("保存失败：\(error?.localizedDescription ?? "未知错误")")
+                }
             })
             if let first = datas.first { self.setThumb(data: first) }
         }
@@ -1502,6 +1665,31 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate, AVCapture
         liveRawRec?.appendRaw(pixel, time: pts)
 
         if slot == 0 { processFrame(pts) }
+    }
+}
+
+/// Retained until AVCapturePhotoOutput reports that the capture request has finished.
+private final class HighResolutionPhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
+    private let onPhoto: (Data?, Error?) -> Void
+    private let onFinished: (Int64) -> Void
+
+    init(onPhoto: @escaping (Data?, Error?) -> Void,
+         onFinished: @escaping (Int64) -> Void) {
+        self.onPhoto = onPhoto
+        self.onFinished = onFinished
+        super.init()
+    }
+
+    func photoOutput(_ output: AVCapturePhotoOutput,
+                     didFinishProcessingPhoto photo: AVCapturePhoto,
+                     error: Error?) {
+        onPhoto(error == nil ? photo.fileDataRepresentation() : nil, error)
+    }
+
+    func photoOutput(_ output: AVCapturePhotoOutput,
+                     didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings,
+                     error: Error?) {
+        onFinished(resolvedSettings.uniqueID)
     }
 }
 
