@@ -460,8 +460,8 @@ struct SettingsTab: View {
                 .disabled(cam.isRecording)
             }
             Text(cam.cfg.resolution == .maximum
-                 ? "高画质已开启：优先使用双摄兼容的最高采集格式；负载过高时自动降级。双摄照片不等同于单摄 48MP / ProRAW。"
-                 : "切换到「最高」可提升照片和合成画面的像素数；双摄照片受采集格式限制。60 帧会增加性能负担。")
+                 ? "录像与实时预览优先使用设备支持的最高双摄兼容格式；关闭实况照片时，静态照片会单独切换至单摄高清格式。"
+                 : "此选项控制双摄预览和录像规格。关闭实况照片时，静态照片另走独立单摄高清通道；60 帧会增加性能负担。")
                 .font(.system(size: 11))
                 .foregroundStyle(Color.white.opacity(0.66))
                 .fixedSize(horizontal: false, vertical: true)
@@ -475,8 +475,8 @@ struct SettingsTab: View {
                 .disabled(cam.isRecording)
             }
             Text(cam.cfg.livePhoto
-                 ? "实况照片已开启：为保持静态图与动态片段配对，照片使用兼容采集帧。关闭实况后，原图模式会分别用两个静态照片输出获取当前格式支持的最大尺寸。"
-                 : "高像素模式：原图模式分别获取两路原片；合成模式以主镜头静态照片为底图，副画面使用双摄实时流，因此副画面细节受视频规格限制。")
+                 ? "实况照片已开启：为保持静态图与动态片段配对，照片使用双摄兼容采集帧。关闭实况后，会暂时切换到单摄静态拍摄，再自动恢复双摄预览。"
+                 : "高像素模式：原图模式分别拍摄两路静态原片；合成模式以主镜头高清照片为底图，副画面使用双摄实时流，因此副画面细节受视频规格限制。")
                 .font(.system(size: 11))
                 .foregroundStyle(Color.white.opacity(0.66))
                 .fixedSize(horizontal: false, vertical: true)
