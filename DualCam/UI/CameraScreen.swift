@@ -39,6 +39,9 @@ struct CameraScreen: View {
             .onAppear { updateFreeAspect(for: geo.size) }
             .onChange(of: geo.size) { _, newSize in updateFreeAspect(for: newSize) }
         }
+        // Extend the GeometryReader itself edge-to-edge so geo.size represents the full device canvas,
+        // not the safe-area region between the top and bottom system/tool bars.
+        .ignoresSafeArea(.container, edges: .all)
         .background(Color.black.ignoresSafeArea())
         .statusBarHidden(true)
         .animation(.easeInOut(duration: 0.22), value: showPanel)
