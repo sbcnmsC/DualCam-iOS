@@ -76,6 +76,15 @@ enum PanelTab: String, CaseIterable, Identifiable {
     case params = "参数"
     case settings = "设置"
     var id: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .pip: return "pip"
+        case .filter: return "camera.filters"
+        case .params: return "slider.horizontal.3"
+        case .settings: return "gearshape"
+        }
+    }
 }
 
 /// 所有会影响合成画面和采集的设置。UI 修改它，渲染线程读取它的快照。
@@ -103,7 +112,7 @@ struct Config: Equatable {
     var outputMode: OutputMode = .original
     var livePhoto = true
     var lowLight = true
-    var stabilization = true
+    var stabilization = false   // 默认关闭：防抖会让预览多延迟几帧
     var showGrid = true
 }
 

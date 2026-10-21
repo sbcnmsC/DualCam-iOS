@@ -35,7 +35,13 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var zoomStops: [ZoomStop] = []
     @Published var lastThumb: UIImage? = nil
 
-    weak var previewView: PreviewUIView?
+    /// 合成后的预览画面直接送进这个显示层（GPU 渲染 → 像素缓冲 → 显示层，不经过 CPU 回读和主线程）。
+    let displayLayer: AVSampleBufferDisplayLayer = {
+        let l = AVSampleBufferDisplayLayer()
+        l.videoGravity = .resizeAspectFill
+        l.backgroundColor = UIColor.black.cgColor
+        return l
+    }()
 
     var mainSlot: Int { cfg.swapped ? 1 : 0 }
 
@@ -43,12 +49,19 @@ final class CameraManager: NSObject, ObservableObject {
 
     private let session = AVCaptureMultiCamSession()
     private let sessionQueue = DispatchQueue(label: "dualcam.session")
-    private let videoQueue = DispatchQueue(label: "dualcam.video", qos: .userInitiated)
+    /// A 路（主渲染）队列：合成、预览、写录都在这里。
+    private let videoQueue = DispatchQueue(label: "dualcam.video", qos: .userInteractive)
+    /// B 路独立队列：只更新「最新帧」和写原片，不再排在 A 路合成后面。
+    private let videoQueueB = DispatchQueue(label: "dualcam.video.b", qos: .userInteractive)
+    /// 滤镜缩略图队列：缩略图渲染不再堵住实时预览。
+    private let thumbQueue = DispatchQueue(label: "dualcam.thumbs", qos: .utility)
     private let audioQueue = DispatchQueue(label: "dualcam.audio")
     private let outputA = AVCaptureVideoDataOutput()
     private let outputB = AVCaptureVideoDataOutput()
     private let audioOutput = AVCaptureAudioDataOutput()
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
+    /// 缩略图专用，和实时渲染互不干扰。
+    private let thumbContext = CIContext(options: [.cacheIntermediates: false])
     private let srgb = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
 
     // sessionQueue 独占
@@ -67,7 +80,12 @@ final class CameraManager: NSObject, ObservableObject {
     private var bufferSizes: [CGSize] = [.zero, .zero]
     private var slotFront: [Bool] = [false, false]
     private var lastCanvas = CGSize(width: 1080, height: 1920)
-    private var displayBusy = false
+    private var thumbsBusy = false
+    // 只在 videoQueue 上访问：预览像素缓冲池与显示格式缓存
+    private var previewPool: CVPixelBufferPool?
+    private var previewPoolSize = CGSize.zero
+    private var displayFormat: CMVideoFormatDescription?
+    private var displayFormatSize = CGSize.zero
     private var lastThumbTime: Double = 0
     private var sharedFPS = 30
 
@@ -228,7 +246,7 @@ final class CameraManager: NSObject, ObservableObject {
             let out = outputs[i]
             out.alwaysDiscardsLateVideoFrames = true
             out.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
-            out.setSampleBufferDelegate(self, queue: videoQueue)
+            out.setSampleBufferDelegate(self, queue: i == 0 ? videoQueue : videoQueueB)
             guard session.canAddOutput(out) else {
                 failure = "无法创建视频输出"
                 break
@@ -546,42 +564,107 @@ final class CameraManager: NSObject, ObservableObject {
         rec?.appendComposite(finalImage, context: ciContext, time: pts)
         live?.appendComposite(finalImage, context: ciContext, time: pts)
 
-        // 预览
-        if beginDisplay() {
-            let scale = min(1, 1280 / max(canvas.width, canvas.height))
-            let pw = max(2, (canvas.width * scale).rounded())
-            let ph = max(2, (canvas.height * scale).rounded())
-            let scaled = finalImage.transformed(by: CGAffineTransform(scaleX: pw / canvas.width, y: ph / canvas.height))
-            if let cg = ciContext.createCGImage(scaled, from: CGRect(x: 0, y: 0, width: pw, height: ph),
-                                                format: .RGBA8, colorSpace: srgb) {
-                DispatchQueue.main.async { [weak self] in
-                    self?.previewView?.show(cg)
-                    self?.endDisplay()
-                }
-            } else {
-                endDisplay()
-            }
+        // 预览：GPU 直接渲染进像素缓冲，立即送显示层（无 CPU 回读、无主线程中转）
+        let scale = min(1, 1280 / max(canvas.width, canvas.height))
+        let pw = max(2, ((canvas.width * scale) / 2).rounded() * 2)
+        let ph = max(2, ((canvas.height * scale) / 2).rounded() * 2)
+        let previewImage = finalImage.transformed(by: CGAffineTransform(scaleX: pw / canvas.width,
+                                                                        y: ph / canvas.height))
+        if let buffer = renderPreviewBuffer(previewImage, width: Int(pw), height: Int(ph)) {
+            display(buffer)
         }
 
-        // 滤镜缩略图
+        // 滤镜缩略图（放到独立队列，最多同时一份）
         let now = CMTimeGetSeconds(pts)
-        if thumbsOn && now - lastThumbTime > 0.7 {
+        if thumbsOn && now - lastThumbTime > 0.7 && beginThumbs() {
             lastThumbTime = now
-            makeThumbnails(from: composed, canvas: canvas)
+            thumbQueue.async { [weak self] in
+                guard let self = self else { return }
+                self.makeThumbnails(from: composed, canvas: canvas)
+                self.endThumbs()
+            }
         }
     }
 
-    private func beginDisplay() -> Bool {
+    // MARK: 预览显示
+
+    private func rebuildPreviewPool(width: Int, height: Int) {
+        var pool: CVPixelBufferPool?
+        let attrs: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey as String: width,
+            kCVPixelBufferHeightKey as String: height,
+            kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any](),
+            kCVPixelBufferMetalCompatibilityKey as String: true
+        ]
+        let poolAttrs: [String: Any] = [kCVPixelBufferPoolMinimumBufferCountKey as String: 4]
+        CVPixelBufferPoolCreate(nil, poolAttrs as CFDictionary, attrs as CFDictionary, &pool)
+        previewPool = pool
+        previewPoolSize = CGSize(width: width, height: height)
+    }
+
+    private func renderPreviewBuffer(_ image: CIImage, width: Int, height: Int) -> CVPixelBuffer? {
+        if previewPool == nil || previewPoolSize != CGSize(width: width, height: height) {
+            rebuildPreviewPool(width: width, height: height)
+        }
+        guard let pool = previewPool else { return nil }
+        var pb: CVPixelBuffer?
+        // 池上限 6 个：显示积压时直接丢这一帧，不让缓冲无限增长拖慢管线。
+        let limits: [String: Any] = [kCVPixelBufferPoolAllocationThresholdKey as String: 6]
+        guard CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(
+            kCFAllocatorDefault, pool, limits as CFDictionary, &pb
+        ) == kCVReturnSuccess, let out = pb else { return nil }
+        ciContext.render(image, to: out,
+                         bounds: CGRect(x: 0, y: 0, width: width, height: height),
+                         colorSpace: srgb)
+        return out
+    }
+
+    /// 立即显示（不排队、不等时间戳）。必须在 videoQueue 上调用。
+    private func display(_ pixelBuffer: CVPixelBuffer) {
+        if displayLayer.status == .failed { displayLayer.flush() }
+        guard displayLayer.isReadyForMoreMediaData else { return }
+
+        let size = CGSize(width: CVPixelBufferGetWidth(pixelBuffer), height: CVPixelBufferGetHeight(pixelBuffer))
+        if displayFormat == nil || displayFormatSize != size {
+            var format: CMVideoFormatDescription?
+            CMVideoFormatDescriptionCreateForImageBuffer(allocator: kCFAllocatorDefault,
+                                                         imageBuffer: pixelBuffer,
+                                                         formatDescriptionOut: &format)
+            displayFormat = format
+            displayFormatSize = size
+        }
+        guard let format = displayFormat else { return }
+
+        var timing = CMSampleTimingInfo(duration: .invalid,
+                                        presentationTimeStamp: CMClockGetTime(CMClockGetHostTimeClock()),
+                                        decodeTimeStamp: .invalid)
+        var sample: CMSampleBuffer?
+        CMSampleBufferCreateReadyWithImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: pixelBuffer,
+                                                 formatDescription: format, sampleTiming: &timing,
+                                                 sampleBufferOut: &sample)
+        guard let sample = sample else { return }
+        if let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: true),
+           CFArrayGetCount(attachments) > 0 {
+            let dict = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
+            CFDictionarySetValue(dict,
+                                 Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
+                                 Unmanaged.passUnretained(kCFBooleanTrue).toOpaque())
+        }
+        displayLayer.enqueue(sample)
+    }
+
+    private func beginThumbs() -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        if displayBusy { return false }
-        displayBusy = true
+        if thumbsBusy { return false }
+        thumbsBusy = true
         return true
     }
 
-    private func endDisplay() {
+    private func endThumbs() {
         lock.lock()
-        displayBusy = false
+        thumbsBusy = false
         lock.unlock()
     }
 
@@ -593,7 +676,7 @@ final class CameraManager: NSObject, ObservableObject {
         var result: [String: UIImage] = [:]
         for kind in FilterKind.allCases {
             let out = kind.apply(to: small, intensity: 1).cropped(to: rect)
-            if let cg = ciContext.createCGImage(out, from: rect, format: .RGBA8, colorSpace: srgb) {
+            if let cg = thumbContext.createCGImage(out, from: rect, format: .RGBA8, colorSpace: srgb) {
                 result[kind.rawValue] = UIImage(cgImage: cg)
             }
         }

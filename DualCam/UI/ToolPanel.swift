@@ -5,13 +5,29 @@ struct ToolPanel: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            Picker("", selection: $tab) {
+            HStack(spacing: 4) {
                 ForEach(PanelTab.allCases) { t in
-                    Text(t.rawValue).tag(t)
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { tab = t }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: t.icon)
+                                .font(.system(size: 16, weight: .semibold))
+                            if tab == t {
+                                Text(t.rawValue).font(.system(size: 14, weight: .semibold))
+                            }
+                        }
+                        .foregroundStyle(tab == t ? Color.yellow : Color.white.opacity(0.7))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background {
+                            if tab == t { Capsule().fill(Color.white.opacity(0.16)) }
+                        }
+                    }
+                    .buttonStyle(.plain)
                 }
             }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 12)
             .padding(.top, 10)
 
             ScrollView {
@@ -36,6 +52,7 @@ struct ToolPanel: View {
 }
 
 struct LabeledSlider: View {
+    var icon: String? = nil
     let title: String
     @Binding var value: Double
     let range: ClosedRange<Double>
@@ -44,9 +61,19 @@ struct LabeledSlider: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Text(title)
-                .font(.system(size: 13))
-                .frame(width: 64, alignment: .leading)
+            HStack(spacing: 4) {
+                if let icon {
+                    Image(systemName: icon)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color.yellow)
+                        .frame(width: 16)
+                }
+                Text(title)
+                    .font(.system(size: 13))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .frame(width: icon == nil ? 64 : 84, alignment: .leading)
             Slider(value: $value, in: range)
             Text(valueText)
                 .font(.system(size: 12, design: .monospaced))
@@ -210,14 +237,14 @@ struct ParamsTab: View {
             }
             .pickerStyle(.segmented)
 
-            LabeledSlider(title: "变焦",
+            LabeledSlider(icon: "plus.magnifyingglass", title: "变焦",
                           value: Binding(
                             get: { Double(cam.displayZoom(slot: i)) },
                             set: { cam.setZoom(slot: i, factor: CGFloat($0) / base) }),
                           range: Double(base)...Double(max(base * info.maxZoom, base + 0.01)),
                           valueText: String(format: "%.1f×", Double(cam.displayZoom(slot: i))))
 
-            LabeledSlider(title: "曝光补偿",
+            LabeledSlider(icon: "plusminus.circle", title: "曝光补偿",
                           value: dbl(i, \.exposureBias) { cam.applyExposure($0) },
                           range: Double(info.minBias)...Double(max(info.maxBias, info.minBias + 0.1)),
                           valueText: String(format: "%+.1f EV", Double(st.exposureBias)),
@@ -226,11 +253,11 @@ struct ParamsTab: View {
             Toggle("手动 ISO / 快门", isOn: flag(i, \.manualExposure) { cam.applyExposure($0) })
                 .font(.system(size: 13))
             if st.manualExposure {
-                LabeledSlider(title: "ISO",
+                LabeledSlider(icon: "camera.aperture", title: "ISO",
                               value: dbl(i, \.iso) { cam.applyExposure($0) },
                               range: Double(info.minISO)...Double(max(info.maxISO, info.minISO + 1)),
                               valueText: "\(Int(st.iso))")
-                LabeledSlider(title: "快门",
+                LabeledSlider(icon: "timer", title: "快门",
                               value: dbl(i, \.shutter) { cam.applyExposure($0) },
                               range: 0...1,
                               valueText: shutterText(info: info, t: st.shutter))
@@ -239,11 +266,11 @@ struct ParamsTab: View {
             Toggle("手动白平衡", isOn: flag(i, \.manualWB) { cam.applyWhiteBalance($0) })
                 .font(.system(size: 13))
             if st.manualWB {
-                LabeledSlider(title: "色温",
+                LabeledSlider(icon: "thermometer", title: "色温",
                               value: dbl(i, \.temperature) { cam.applyWhiteBalance($0) },
                               range: 2500...9000,
                               valueText: "\(Int(st.temperature))K")
-                LabeledSlider(title: "色调",
+                LabeledSlider(icon: "circle.lefthalf.filled", title: "色调",
                               value: dbl(i, \.tint) { cam.applyWhiteBalance($0) },
                               range: -150...150,
                               valueText: "\(Int(st.tint))")
@@ -254,7 +281,7 @@ struct ParamsTab: View {
                 .disabled(!info.supportsManualFocus)
                 .opacity(info.supportsManualFocus ? 1 : 0.4)
             if st.manualFocus {
-                LabeledSlider(title: "对焦距离",
+                LabeledSlider(icon: "scope", title: "对焦距离",
                               value: dbl(i, \.lensPosition) { cam.applyFocus($0) },
                               range: 0...1,
                               valueText: String(format: "%.2f", Double(st.lensPosition)))
@@ -370,7 +397,7 @@ struct SettingsTab: View {
                 }
             }
             Toggle("弱光增亮", isOn: $cam.cfg.lowLight).font(.system(size: 13))
-            Toggle("视频防抖", isOn: $cam.cfg.stabilization).font(.system(size: 13))
+            Toggle("视频防抖（开启会增加预览延迟）", isOn: $cam.cfg.stabilization).font(.system(size: 13))
             Toggle("前置镜像", isOn: $cam.cfg.mirrorFront).font(.system(size: 13))
             Toggle("三分参考线", isOn: $cam.cfg.showGrid).font(.system(size: 13))
 
