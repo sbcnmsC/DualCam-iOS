@@ -90,11 +90,20 @@ struct PreviewStage: View {
             }
 
             if let marker = cam.focusMarker {
-                FocusMarkerView(exposureBias: marker.exposureBias)
-                    .position(x: marker.point.x * size.width, y: marker.point.y * size.height)
-                    .allowsHitTesting(false)
-                    .id(marker.id)
-                    .transition(.opacity)
+                let slot = min(max(marker.slot ?? cam.mainSlot, 0), 1)
+                FocusMarkerView(
+                    exposureBias: marker.exposureBias,
+                    minBias: cam.slotInfos[slot].minBias,
+                    maxBias: cam.slotInfos[slot].maxBias,
+                    isDisabled: cam.slotStates[slot].manualExposure || cam.slotStates[slot].locked,
+                    onExposureChanged: { cam.adjustExposureBias(slot: slot, value: $0) }
+                )
+                .position(
+                    x: min(max(marker.point.x * size.width, 60), max(60, size.width - 60)),
+                    y: min(max(marker.point.y * size.height, 120), max(120, size.height - 120))
+                )
+                .id(marker.id)
+                .transition(.opacity)
             }
 
             VStack {
@@ -194,34 +203,96 @@ struct OutputModePill: View {
     }
 }
 
+/// 对焦框与曝光控制分离：方框定位焦点，右侧竖轨单独调节 EV。
 struct FocusMarkerView: View {
     let exposureBias: Float?
+    let minBias: Float
+    let maxBias: Float
+    let isDisabled: Bool
+    let onExposureChanged: (Float) -> Void
+
     @State private var appeared = false
+    @State private var dragBias: Float?
+
+    private let trackHeight: CGFloat = 190
+
+    private var displayedBias: Float {
+        min(max(dragBias ?? exposureBias ?? 0, minBias), maxBias)
+    }
+
+    private var handleOffset: CGFloat {
+        let span = max(maxBias - minBias, 0.1)
+        let fraction = CGFloat((maxBias - displayedBias) / span)
+        return (fraction - 0.5) * trackHeight
+    }
 
     var body: some View {
-        VStack(spacing: 4) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 4)
-                    .stroke(Color.yellow, lineWidth: 1.5)
-                    .frame(width: 72, height: 72)
-                Image(systemName: exposureBias == nil ? "scope" : "sun.max.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.yellow)
-                    .offset(x: 36, y: -36)
-            }
+        ZStack {
+            RoundedRectangle(cornerRadius: 5)
+                .stroke(Color.yellow.opacity(0.95), lineWidth: 1.6)
+                .frame(width: 70, height: 70)
+                .overlay {
+                    FocusCornerMarks()
+                        .stroke(Color.yellow, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                        .frame(width: 70, height: 70)
+                }
+                .offset(x: -40)
+
+            Capsule()
+                .fill(Color.white.opacity(isDisabled ? 0.3 : 0.62))
+                .frame(width: 1.5, height: trackHeight)
+                .offset(x: 45)
+
+            Image(systemName: "sun.max.fill")
+                .font(.system(size: 22, weight: .medium))
+                .foregroundStyle(isDisabled ? Color.white.opacity(0.38) : Color.yellow)
+                .shadow(color: .black.opacity(0.7), radius: 3)
+                .offset(x: 45, y: handleOffset)
+                .allowsHitTesting(false)
+
+            Rectangle()
+                .fill(Color.white.opacity(0.001))
+                .frame(width: 42, height: trackHeight + 24)
+                .offset(x: 45)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            guard !isDisabled else { return }
+                            let y = min(max(value.location.y - 12, 0), trackHeight)
+                            let fraction = 1 - Float(y / trackHeight)
+                            onExposureChanged(minBias + fraction * (maxBias - minBias))
+                        }
+                )
+                .allowsHitTesting(!isDisabled)
+
             if let exposureBias {
                 Text(String(format: "EV %+.1f", Double(exposureBias)))
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundStyle(Color.yellow)
-                    .padding(.horizontal, 7)
+                    .padding(.horizontal, 6)
                     .padding(.vertical, 3)
                     .background(Capsule().fill(Color.black.opacity(0.72)))
+                    .offset(x: 45, y: handleOffset + 20)
+                    .allowsHitTesting(false)
             }
         }
-        .scaleEffect(appeared ? 1 : 1.12)
-        .onAppear {
-            withAnimation(.easeOut(duration: 0.16)) { appeared = true }
-        }
+        .frame(width: 100, height: 230)
+        .offset(x: 40)
+        .scaleEffect(appeared ? 1 : 1.06)
+        .onAppear { withAnimation(.easeOut(duration: 0.16)) { appeared = true } }
+    }
+}
+
+private struct FocusCornerMarks: Shape {
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        let l: CGFloat = 13
+        p.move(to: CGPoint(x: 1, y: l)); p.addLine(to: CGPoint(x: 1, y: 1)); p.addLine(to: CGPoint(x: l, y: 1))
+        p.move(to: CGPoint(x: rect.maxX-l, y: 1)); p.addLine(to: CGPoint(x: rect.maxX-1, y: 1)); p.addLine(to: CGPoint(x: rect.maxX-1, y: l))
+        p.move(to: CGPoint(x: 1, y: rect.maxY-l)); p.addLine(to: CGPoint(x: 1, y: rect.maxY-1)); p.addLine(to: CGPoint(x: l, y: rect.maxY-1))
+        p.move(to: CGPoint(x: rect.maxX-l, y: rect.maxY-1)); p.addLine(to: CGPoint(x: rect.maxX-1, y: rect.maxY-1)); p.addLine(to: CGPoint(x: rect.maxX-1, y: rect.maxY-l))
+        return p
     }
 }
 
