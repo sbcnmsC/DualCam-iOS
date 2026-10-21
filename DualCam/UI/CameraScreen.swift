@@ -135,7 +135,6 @@ struct PreviewStage: View {
             if !cam.ready {
                 VStack(spacing: 10) {
                     Image(systemName: "camera.aperture").font(.system(size: 44))
-                    Text(cam.statusText).multilineTextAlignment(.center).font(.callout)
                     if cam.permissionDenied {
                         Button("打开系统设置") {
                             if let url = URL(string: UIApplication.openSettingsURLString) {
