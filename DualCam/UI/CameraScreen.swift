@@ -5,6 +5,8 @@ struct CameraScreen: View {
     @EnvironmentObject private var cam: CameraManager
     @State private var showPanel = false
     @State private var panelTab: PanelTab = .pip
+    @State private var showTimerSettings = false
+    @State private var timerDraft = 5
 
     private let topBarHeight: CGFloat = 56
 
@@ -15,7 +17,6 @@ struct CameraScreen: View {
                 Color.black.ignoresSafeArea()
 
                 VStack(spacing: 0) {
-                    Color.clear.frame(height: topBarHeight)
                     PreviewStage(size: previewSize)
                         .frame(width: previewSize.width, height: previewSize.height)
                     Spacer(minLength: 0)
@@ -44,9 +45,9 @@ struct CameraScreen: View {
     }
 
     private func fitSize(in size: CGSize) -> CGSize {
-        let availableHeight = max(size.height - topBarHeight, 100)
+        let availableHeight = max(size.height, 100)
         if cam.cfg.aspect == .free {
-            // Fill the available preview area, adapting to rotation and window size.
+            // Full device canvas; user can crop the saved image later.
             return CGSize(width: size.width, height: availableHeight)
         }
         let aspect = cam.cfg.aspectRatio
@@ -55,7 +56,7 @@ struct CameraScreen: View {
     }
 
     private func updateFreeAspect(for size: CGSize) {
-        cam.updateFreeAspect(width: size.width, height: max(size.height - topBarHeight, 100))
+        cam.updateFreeAspect(width: size.width, height: max(size.height, 100))
     }
 }
 
@@ -390,6 +391,7 @@ struct PiPOverlay: View {
 
     @State private var dragOriginCenter: CGPoint? = nil
     @State private var dragCenter: CGPoint? = nil
+    @State private var isDraggingPiP = false
     @State private var pinchStart: CGFloat? = nil
     @State private var resizeStart: CGFloat? = nil
 
@@ -404,11 +406,15 @@ struct PiPOverlay: View {
         let rect = CGRect(x: n.minX * size.width, y: n.minY * size.height,
                           width: n.width * size.width, height: n.height * size.height)
         ZStack(alignment: .bottomTrailing) {
-            Color.clear
-                .contentShape(Rectangle())
-                .onTapGesture { cam.swapCameras() }
-                .gesture(moveGesture)
-                .simultaneousGesture(pinchGesture)
+            if isDraggingPiP {
+                RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.ultraThinMaterial)
+                    .overlay(RoundedRectangle(cornerRadius: 16).fill(Color.white.opacity(0.12)))
+                    .overlay(Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 18)).foregroundStyle(.white.opacity(0.85)))
+                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.35), lineWidth: 1))
+            } else {
+                Color.clear.contentShape(Rectangle()).onTapGesture { cam.swapCameras() }
+            }
+            Color.clear.contentShape(Rectangle()).gesture(moveGesture).simultaneousGesture(pinchGesture)
 
             Image(systemName: "arrow.up.left.and.arrow.down.right")
                 .font(.system(size: 10, weight: .bold))
@@ -428,6 +434,7 @@ struct PiPOverlay: View {
             .onChanged { value in
                 if dragOriginCenter == nil {
                     dragOriginCenter = cam.cfg.pipCenter
+                    isDraggingPiP = true
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 }
                 guard let origin = dragOriginCenter else { return }
@@ -449,6 +456,7 @@ struct PiPOverlay: View {
                 cam.clearPiPDragPreview()
                 dragCenter = nil
                 dragOriginCenter = nil
+                isDraggingPiP = false
             }
     }
 
@@ -545,14 +553,33 @@ struct TopBar: View {
                     }
                     iconButton(cam.timerSeconds == 0 ? "timer" : "timer.circle.fill",
                                active: cam.timerSeconds > 0,
-                               label: cam.timerSeconds == 0 ? "定时器：关闭" : "定时器：\(cam.timerSeconds) 秒",
+                               label: cam.timerSeconds == 0 ? "设置倒计时" : "倒计时：\(cam.timerSeconds) 秒",
                                badge: cam.timerSeconds == 0 ? nil : "\(cam.timerSeconds)") {
-                        cam.cycleTimer()
+                        timerDraft = cam.timerSeconds > 0 ? cam.timerSeconds : 5
+                        showTimerSettings = true
                     }
                 }
             }
 
             // Resolution and FPS readout intentionally omitted; keep the top edge visually clean.
+        }
+        .overlay {
+            if showTimerSettings {
+                Color.black.opacity(0.55).ignoresSafeArea().onTapGesture { showTimerSettings = false }
+                VStack(spacing: 16) {
+                    HStack { Image(systemName: "timer").foregroundStyle(Color.yellow); Text("拍摄倒计时").font(.system(size: 17, weight: .semibold)); Spacer(); Button { showTimerSettings = false } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.white.opacity(0.65)) } }
+                    HStack(spacing: 14) {
+                        Button { timerDraft = max(1, timerDraft - 1) } label: { Image(systemName: "minus").frame(width: 40, height: 40) }
+                        Text("\(timerDraft) 秒").font(.system(size: 28, weight: .semibold, design: .rounded)).monospacedDigit().frame(minWidth: 90)
+                        Button { timerDraft = min(60, timerDraft + 1) } label: { Image(systemName: "plus").frame(width: 40, height: 40) }
+                    }
+                    Slider(value: Binding(get: { Double(timerDraft) }, set: { timerDraft = Int($0.rounded()) }), in: 1...60, step: 1)
+                    HStack(spacing: 10) {
+                        Button("关闭") { cam.timerSeconds = 0; showTimerSettings = false }.frame(maxWidth: .infinity).padding(.vertical, 11).background(Color.white.opacity(0.10), in: Capsule())
+                        Button("确定") { cam.timerSeconds = timerDraft; showTimerSettings = false }.frame(maxWidth: .infinity).padding(.vertical, 11).background(Color.yellow, in: Capsule()).foregroundStyle(Color.black)
+                    }
+                }.padding(20).frame(maxWidth: 310).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24)).overlay(RoundedRectangle(cornerRadius: 24).stroke(Color.white.opacity(0.16), lineWidth: 1)).padding(.horizontal, 28)
+            }
         }
     }
 
@@ -731,43 +758,41 @@ struct ModePill: View {
 /// 焦段条：.5  1×  2  5。选中那一档是黄色数字 + 深色圆底；捏合变焦到两档之间时，选中档显示当前倍率。
 struct ZoomChips: View {
     @EnvironmentObject private var cam: CameraManager
-    private let targets: [CGFloat] = [0.5, 1, 2, 5]
-
     var body: some View {
         let stops = cam.zoomStops
         let current = cam.displayZoom(slot: 0)
-        let activeTarget = targets.min(by: { abs($0 - current) < abs($1 - current) }) ?? 1
-
-        HStack(spacing: 3) {
-            ForEach(targets, id: \.self) { target in
-                let stop = stops.first(where: { abs($0.value - target) < 0.01 })
-                let selected = abs(activeTarget - target) < 0.01
-                Button {
-                    guard let stop else { return }
-                    cam.selectStop(stop)
-                } label: {
-                    Text(target < 1 ? "0.5×" : "\(Int(target))×")
-                        .font(.system(size: 12, weight: selected ? .bold : .medium, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(selected ? Color.yellow : Color.white.opacity(stop == nil ? 0.32 : 0.84))
-                        .frame(width: 44, height: 36)
-                        .background(Capsule().fill(selected ? Color.yellow.opacity(0.15) : Color.clear))
-                        .overlay(Capsule().stroke(selected ? Color.yellow.opacity(0.48) : Color.white.opacity(0.06), lineWidth: 0.8))
-                        .contentShape(Capsule())
+        let active = activeIndex(stops: stops, current: current)
+        HStack(spacing: 4) {
+            ForEach(Array(stops.enumerated()), id: \.element.id) { index, stop in
+                let selected = index == active
+                Button { cam.selectStop(stop) } label: {
+                    Text(selected ? selectedText(stop: stop, current: current) : plainText(stop.value))
+                        .font(.system(size: selected ? 14 : 13, weight: .semibold))
+                        .foregroundStyle(selected ? Color.yellow : Color.white)
+                        .frame(width: selected ? 46 : 38, height: selected ? 46 : 38)
+                        .background(Circle().fill(Color.black.opacity(selected ? 0.55 : 0)))
                 }
                 .buttonStyle(.plain)
-                .disabled(stop == nil || cam.isRecording)
-                .accessibilityLabel(stop == nil ? "\(target) 倍镜头暂不可用" : "切换到 \(target) 倍")
+                .disabled(cam.isRecording)
             }
         }
-        .padding(3)
-        .background(Capsule().fill(Color.black.opacity(0.62)))
-        .overlay(Capsule().stroke(Color.white.opacity(0.14), lineWidth: 0.7))
-        // Fixed-width buttons prevent the row from shifting as the selected stop changes.
-        .animation(.easeOut(duration: 0.12), value: activeTarget)
+        .padding(4)
+        .background(Capsule().fill(Color.black.opacity(stops.isEmpty ? 0 : 0.28)))
+    }
+    private func activeIndex(stops: [ZoomStop], current: CGFloat) -> Int? {
+        guard !stops.isEmpty else { return nil }
+        var best = 0, distance = CGFloat.greatestFiniteMagnitude
+        for (i, stop) in stops.enumerated() { let d = abs(stop.value - current); if d < distance { distance = d; best = i } }
+        return best
+    }
+    private func plainText(_ value: CGFloat) -> String { value < 1 ? ".5" : "\(Int(value))" }
+    private func selectedText(stop: ZoomStop, current: CGFloat) -> String {
+        let value = abs(stop.value - current) < 0.05 ? stop.value : current
+        if abs(value - value.rounded()) < 0.05 { return "\(Int(value.rounded()))×" }
+        if value < 1 { return ".5×" }
+        return String(format: "%.1f×", Double(value))
     }
 }
-
 struct ShutterButton: View {
     @EnvironmentObject private var cam: CameraManager
 
@@ -803,11 +828,8 @@ struct OverlayLayer: View {
                 Color.white.opacity(0.92).ignoresSafeArea().allowsHitTesting(false)
             }
             if let n = cam.countdown {
-                Text("\(n)")
-                    .font(.system(size: 96, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color.white)
-                    .shadow(radius: 8)
-                    .allowsHitTesting(false)
+                Color.black.opacity(0.18).ignoresSafeArea()
+                Text("\(n)").font(.system(size: 112, weight: .bold, design: .rounded)).monospacedDigit().foregroundStyle(Color.white).shadow(color: .black.opacity(0.6), radius: 18).frame(maxWidth: .infinity, maxHeight: .infinity).allowsHitTesting(false).zIndex(10)
             }
             if let text = cam.toast {
                 VStack {
