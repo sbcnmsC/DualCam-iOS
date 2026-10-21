@@ -19,6 +19,36 @@ enum FilterKind: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    var subtitle: String {
+        switch self {
+        case .original: return "保留镜头原始色彩"
+        case .vivid: return "鲜艳通透，提升色彩表现"
+        case .warm: return "暖色倾向，适合夕阳与室内"
+        case .cool: return "克制冷调，适合城市与阴天"
+        case .fresh: return "明亮清爽，适合日常记录"
+        case .cinema: return "低饱和与高反差的电影感"
+        case .film: return "柔和暖调，带有胶片气质"
+        case .retro: return "复古棕调，适合旧街与建筑"
+        case .faded: return "低反差褪色，轻柔怀旧"
+        case .chrome: return "浓郁色彩与更强质感"
+        case .mono: return "去除色彩，突出光影"
+        case .blackGold: return "暗部沉稳，金色高光"
+        case .beach: return "海水青蓝、阳光暖亮"
+        case .landscape: return "增强自然层次与绿色表现"
+        case .humanity: return "低饱和暖调，适合街拍人文"
+        }
+    }
+
+    var group: FilterGroup {
+        switch self {
+        case .original: return .all
+        case .beach, .landscape, .fresh, .cool: return .scenery
+        case .humanity, .warm: return .people
+        case .cinema, .film, .retro, .faded, .chrome, .mono: return .film
+        case .vivid, .blackGold: return .stylized
+        }
+    }
+
     /// 对合成后的整幅画面应用滤镜。intensity 为 0...1，1 为完全应用。
     func apply(to image: CIImage, intensity: CGFloat) -> CIImage {
         if self == .original { return image }
@@ -86,6 +116,25 @@ enum FilterKind: String, CaseIterable, Identifiable {
             let balanced = colorMatrix(image, r: 1.035, g: 1.005, b: 0.965,
                                        bias: CIVector(x: 0.012, y: 0.008, z: 0.004, w: 0))
             return colorControls(balanced, saturation: 0.84, brightness: 0.012, contrast: 1.055)
+        }
+    }
+}
+
+enum FilterGroup: String, CaseIterable, Identifiable {
+    case all = "全部"
+    case scenery = "风景"
+    case people = "人文"
+    case film = "胶片"
+    case stylized = "氛围"
+    var id: String { rawValue }
+
+    var filters: [FilterKind] {
+        switch self {
+        case .all: return FilterKind.allCases
+        case .scenery: return [.original, .beach, .landscape, .fresh, .cool]
+        case .people: return [.original, .humanity, .warm, .fresh, .mono]
+        case .film: return [.original, .cinema, .film, .retro, .faded, .chrome, .mono]
+        case .stylized: return [.original, .vivid, .warm, .cool, .blackGold]
         }
     }
 }
