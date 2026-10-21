@@ -474,11 +474,14 @@ struct SettingsTab: View {
                 .pickerStyle(.segmented)
                 .disabled(cam.isRecording)
             }
-            Text("原图直出：每颗镜头各存一份，不合成、不加滤镜、不镜像、不裁切；合成画面是预览里看到的样子。")
+            Text(cam.cfg.livePhoto
+                 ? "实况照片已开启：为了保持照片与动态片段配对，原片走兼容分辨率采集。关闭实况照片后，主镜头原片会使用高分辨率静态照片接口；副镜头仍受双摄采集规格限制。"
+                 : "高像素模式：主镜头原片走 AVCapturePhotoOutput，使用当前格式支持的最大静态照片尺寸；「两者都存」的合成图仍来自双摄预览。")
                 .font(.system(size: 11))
-                .foregroundStyle(Color.white.opacity(0.6))
+                .foregroundStyle(Color.white.opacity(0.66))
+                .fixedSize(horizontal: false, vertical: true)
 
-            Toggle("实况照片", isOn: $cam.cfg.livePhoto).font(.system(size: 13))
+            Toggle("实况照片（开启时使用兼容分辨率）", isOn: $cam.cfg.livePhoto).font(.system(size: 13))
             HStack {
                 Text("定时器").font(.system(size: 13)).frame(width: 64, alignment: .leading)
                 Picker("", selection: $cam.timerSeconds) {
