@@ -527,6 +527,8 @@ struct GridOverlay: Shape {
 
 struct TopBar: View {
     @EnvironmentObject private var cam: CameraManager
+    @State private var showTimerSettings = false
+    @State private var timerDraft = 5
 
     var body: some View {
         ZStack {
