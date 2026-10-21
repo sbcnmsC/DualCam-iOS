@@ -480,6 +480,7 @@ struct SettingsTab: View {
                 Picker("", selection: $cam.cfg.fps) {
                     Text("30 fps").tag(30)
                     Text("60 fps").tag(60)
+                    Text("120 fps").tag(120)
                 }
                 .pickerStyle(.segmented)
                 .disabled(cam.isRecording)
@@ -523,8 +524,12 @@ struct SettingsTab: View {
                     Spacer()
                 }
             }
+            Toggle("原生高画质录像（单摄）", isOn: $cam.cfg.nativeVideoRecording)
+                .font(.system(size: 13)).disabled(cam.isRecording)
+            Text("开启后使用原生视频文件输出，优先尝试所选帧率下的最高分辨率（设备支持时可达 4K/120）；录像期间录制当前主镜头，停止后恢复双摄。关闭则沿用双摄合成录像。")
+                .font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.6))
             Toggle("弱光增亮", isOn: $cam.cfg.lowLight).font(.system(size: 13))
-            Toggle("视频防抖（系统标准模式）", isOn: $cam.cfg.stabilization).font(.system(size: 13))
+            Toggle("视频防抖（系统标准模式）", isOn: $cam.cfg.stabilization).font(.system(size: 13)).disabled(cam.isRecording)
             Text("启用时优先使用 iOS 原生视频防抖；是否生效取决于设备与当前双摄格式支持。最高分辨率会优先使用双摄可用的高分辨率格式，不通过插值放大画面。")
                 .font(.system(size: 10))
                 .foregroundStyle(Color.white.opacity(0.6))
@@ -549,6 +554,7 @@ private enum QuickParameter: String, CaseIterable, Identifiable {
     case frameRate = "帧率"
     case timer = "定时器"
     case stabilization = "防抖"
+    case recordingMode = "录像模式"
 
     var id: String { rawValue }
     var icon: String {
@@ -563,6 +569,7 @@ private enum QuickParameter: String, CaseIterable, Identifiable {
         case .frameRate: return "speedometer"
         case .timer: return "hourglass"
         case .stabilization: return "viewfinder.circle"
+        case .recordingMode: return "video"
         }
     }
 }
@@ -731,9 +738,12 @@ struct QuickParamsTab: View {
                 Picker("帧率", selection: $cam.cfg.fps) {
                     Text("30 fps").tag(30)
                     Text("60 fps").tag(60)
+                    Text("120 fps").tag(120)
                 }
                 .pickerStyle(.segmented).disabled(cam.isRecording)
             }
+            Text("原生录像优先匹配所选帧率，并选用该帧率下可用的最高像素格式；双摄合成会按设备能力自动降档。")
+                .font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.6))
             Text("当前双摄格式不支持所选帧率时，会自动退到可用档位。")
                 .font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.6))
         case .timer:
@@ -750,6 +760,11 @@ struct QuickParamsTab: View {
             Toggle("系统视频防抖", isOn: $cam.cfg.stabilization)
                 .font(.system(size: 12)).disabled(cam.isRecording)
             Text("只在设备和当前双摄连接支持时生效。")
+                .font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.6))
+        case .recordingMode:
+            Toggle("原生高画质录像（单摄）", isOn: $cam.cfg.nativeVideoRecording)
+                .font(.system(size: 12)).disabled(cam.isRecording)
+            Text("开启后优先使用原生视频文件输出，最高能力取决于机型、镜头与支持格式。录像期间只录当前主镜头，停止后自动恢复双摄；关闭则沿用双摄合成录像。")
                 .font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.6))
         }
     }

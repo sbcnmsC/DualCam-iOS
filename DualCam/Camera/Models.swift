@@ -108,7 +108,9 @@ struct Config: Equatable {
     var filterIntensity: CGFloat = 1
     // 采集
     var resolution: ResolutionOption = .maximum
-    var fps = 30
+    var fps = 120
+    /// Native single-camera recording requests the best device-supported format up to 120 fps.
+    var nativeVideoRecording = true
     var outputMode: OutputMode = .original
     var livePhoto = true
     var lowLight = true

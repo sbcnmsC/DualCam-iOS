@@ -83,10 +83,12 @@ struct PreviewStage: View {
                 .simultaneousGesture(zoomGesture)
 
             // 小窗 / 分割线盖在手势层之上，各自的手势优先
-            if cam.cfg.layout == .pip {
-                PiPOverlay(size: size)
-            } else {
-                SplitDivider(size: size)
+            if !cam.nativeVideoSessionActive {
+                if cam.cfg.layout == .pip {
+                    PiPOverlay(size: size)
+                } else {
+                    SplitDivider(size: size)
+                }
             }
 
             if let marker = cam.focusMarker {
@@ -108,12 +110,14 @@ struct PreviewStage: View {
 
             VStack {
                 HStack {
-                    OutputModePill()
+                    if !cam.nativeVideoSessionActive { OutputModePill() }
                     Spacer()
                 }
                 .padding(10)
                 Spacer()
-                ZoomChips().padding(.bottom, 14)
+                if !cam.nativeVideoSessionActive {
+                    ZoomChips().padding(.bottom, 14)
+                }
             }
 
             if !cam.ready {

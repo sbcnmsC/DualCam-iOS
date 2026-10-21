@@ -41,11 +41,11 @@ struct PreviewRepresentable: UIViewRepresentable {
 
     func makeUIView(context: Context) -> PreviewUIView {
         let view = PreviewUIView()
-        view.attach(cam.displayLayer)
+        view.attach(cam.nativeVideoSessionActive ? cam.nativePreviewLayer : cam.displayLayer)
         return view
     }
 
     func updateUIView(_ uiView: PreviewUIView, context: Context) {
-        uiView.attach(cam.displayLayer)
+        uiView.attach(cam.nativeVideoSessionActive ? cam.nativePreviewLayer : cam.displayLayer)
     }
 }

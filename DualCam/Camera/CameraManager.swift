@@ -6,6 +6,14 @@ import Photos
 import SwiftUI
 import UIKit
 
+private struct NativeVideoFormatChoice {
+    let format: AVCaptureDevice.Format
+    let fps: Int
+    let width: Int
+    let height: Int
+    var pixelCount: Int { width * height }
+}
+
 final class CameraManager: NSObject, ObservableObject {
 
     // MARK: - 界面状态（只在主线程修改）
@@ -34,6 +42,21 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var focusMarker: FocusMarker? = nil
     @Published var zoomStops: [ZoomStop] = []
     @Published var lastThumb: UIImage? = nil
+    @Published private(set) var nativeVideoSessionActive = false
+
+    /// Single-camera native recording session. The native preview layer avoids per-frame 4K/120 processing.
+    let nativePreviewLayer: AVCaptureVideoPreviewLayer = {
+        let layer = AVCaptureVideoPreviewLayer()
+        layer.videoGravity = .resizeAspectFill
+        return layer
+    }()
+    private let nativeSession = AVCaptureSession()
+    private let nativeMovieOutput = AVCaptureMovieFileOutput()
+    private var nativeRecordingDevice: AVCaptureDevice?
+    private var nativeRecordingSlot = 0
+    private var nativeRecordingURL: URL?
+    /// Main-thread state used to prevent double taps while sessions switch.
+    private var nativeRecordingStartPending = false
 
     /// 合成后的预览画面直接送进这个显示层（GPU 渲染 → 像素缓冲 → 显示层，不经过 CPU 回读和主线程）。
     let displayLayer: AVSampleBufferDisplayLayer = {
@@ -43,7 +66,7 @@ final class CameraManager: NSObject, ObservableObject {
         return l
     }()
 
-    var mainSlot: Int { cfg.swapped ? 1 : 0 }
+    var mainSlot: Int { nativeVideoSessionActive ? nativeRecordingSlot : (cfg.swapped ? 1 : 0) }
 
     // MARK: - 采集对象
 
@@ -346,8 +369,6 @@ final class CameraManager: NSObject, ObservableObject {
 
     /// 选择多摄支持的格式和帧率，返回实际生效的帧率。
     private func configureFormat(_ dev: AVCaptureDevice, targetHeight: Int, fps: Int) -> Int {
-        var chosenFPS = fps
-
         func supports(_ f: AVCaptureDevice.Format, _ rate: Int) -> Bool {
             return f.videoSupportedFrameRateRanges.contains {
                 $0.minFrameRate <= Double(rate) && Double(rate) <= $0.maxFrameRate
@@ -361,11 +382,11 @@ final class CameraManager: NSObject, ObservableObject {
         }
 
         let multi = dev.formats.filter { $0.isMultiCamSupported }
+        let requested = min(max(fps, 24), 120)
+        let standardRates = [120, 60, 30, 24].filter { $0 <= requested }
+        let chosenFPS = standardRates.first { rate in multi.contains { supports($0, rate) } }
+            ?? max(1, min(requested, Int(multi.flatMap { $0.videoSupportedFrameRateRanges.map(\.maxFrameRate) }.max() ?? 30)))
         var pool = multi.filter { supports($0, chosenFPS) }
-        if pool.isEmpty {
-            chosenFPS = 30
-            pool = multi.filter { supports($0, 30) }
-        }
         if pool.isEmpty { pool = multi }
 
         do {
@@ -475,6 +496,7 @@ final class CameraManager: NSObject, ObservableObject {
         sharedCfg = cfg
         lock.unlock()
         let new = cfg
+        guard !nativeVideoSessionActive && !nativeRecordingStartPending else { return }
         if old.resolution != new.resolution || old.fps != new.fps {
             sessionQueue.async { self.rebuild() }
         } else if old.lowLight != new.lowLight || old.stabilization != new.stabilization {
@@ -901,6 +923,32 @@ final class CameraManager: NSObject, ObservableObject {
     // MARK: - 点按对焦 / 曝光
 
     func focus(atNormalized p: CGPoint) {
+        if nativeVideoSessionActive {
+            let slot = nativeRecordingSlot
+            let layerPoint = CGPoint(
+                x: p.x * max(nativePreviewLayer.bounds.width, 1),
+                y: p.y * max(nativePreviewLayer.bounds.height, 1)
+            )
+            let devicePoint = nativePreviewLayer.captureDevicePointConverted(fromLayerPoint: layerPoint)
+            let state = slotStates[slot]
+            if state.locked { slotStates[slot].locked = false }
+            withDevice(slot) { device in
+                if device.isFocusPointOfInterestSupported,
+                   device.isFocusModeSupported(.autoFocus), !state.manualFocus {
+                    device.focusPointOfInterest = devicePoint
+                    device.focusMode = .autoFocus
+                }
+                if device.isExposurePointOfInterestSupported,
+                   device.isExposureModeSupported(.autoExpose), !state.manualExposure {
+                    device.exposurePointOfInterest = devicePoint
+                    device.exposureMode = .autoExpose
+                }
+                device.isSubjectAreaChangeMonitoringEnabled = true
+            }
+            showMarker(at: p, slot: slot)
+            return
+        }
+
         let c = cfg
         let regions = Compositor.regions(cfg: c)
         let mainSlot = c.swapped ? 1 : 0
@@ -970,6 +1018,11 @@ final class CameraManager: NSObject, ObservableObject {
     }
 
     func exposureDragBegan(at p: CGPoint) {
+        if nativeVideoSessionActive {
+            dragSlot = nativeRecordingSlot
+            dragStartBias = slotStates[dragSlot].exposureBias
+            return
+        }
         let c = cfg
         let regions = Compositor.regions(cfg: c)
         let mainSlot = c.swapped ? 1 : 0
@@ -1354,8 +1407,254 @@ final class CameraManager: NSObject, ObservableObject {
         }
     }
 
+
+    /// Record the currently selected main lens through AVFoundation's native movie output.
+    /// MultiCam is paused while the chosen device uses its full single-camera format list.
+    private func startNativeRecording() {
+        guard !nativeRecordingStartPending else { return }
+        nativeRecordingStartPending = true
+        let requestedSlot = mainSlot
+        let targetFPS = cfg.fps
+        let useTorch = flashEnabled
+        statusText = "正在切换原生高画质录像…"
+
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
+            guard self.devices.indices.contains(requestedSlot),
+                  let selectedDevice = self.devices[requestedSlot] else {
+                self.abortNativeRecordingSetup("无法获取当前镜头")
+                return
+            }
+            let selectedSpec: LensSpec = {
+                guard let combo = self.currentCombo else { return .backWide }
+                return requestedSlot == 0 ? combo.a : combo.b
+            }()
+            guard let choice = self.bestNativeVideoFormat(for: selectedDevice, targetFPS: targetFPS) else {
+                self.abortNativeRecordingSetup("当前镜头没有可用的视频格式")
+                return
+            }
+
+            if self.session.isRunning { self.session.stopRunning() }
+            self.session.beginConfiguration()
+            for output in self.session.outputs { self.session.removeOutput(output) }
+            for input in self.session.inputs { self.session.removeInput(input) }
+            self.session.commitConfiguration()
+            self.audioActive = false
+
+            do {
+                try selectedDevice.lockForConfiguration()
+                selectedDevice.activeFormat = choice.format
+                let duration = CMTime(value: 1, timescale: CMTimeScale(choice.fps))
+                selectedDevice.activeVideoMinFrameDuration = duration
+                selectedDevice.activeVideoMaxFrameDuration = duration
+                selectedDevice.unlockForConfiguration()
+            } catch {
+                self.abortNativeRecordingSetup("无法启用所选高画质格式：\(error.localizedDescription)")
+                return
+            }
+
+            guard let videoInput = try? AVCaptureDeviceInput(device: selectedDevice) else {
+                self.abortNativeRecordingSetup("无法创建原生录像输入")
+                return
+            }
+            var microphoneInput: AVCaptureDeviceInput?
+            if self.audioGranted, let microphone = AVCaptureDevice.default(for: .audio) {
+                microphoneInput = try? AVCaptureDeviceInput(device: microphone)
+            }
+
+            self.nativeSession.beginConfiguration()
+            self.nativeSession.sessionPreset = .inputPriority
+            for output in self.nativeSession.outputs { self.nativeSession.removeOutput(output) }
+            for input in self.nativeSession.inputs { self.nativeSession.removeInput(input) }
+
+            guard self.nativeSession.canAddInput(videoInput) else {
+                self.nativeSession.commitConfiguration()
+                self.abortNativeRecordingSetup("设备不支持原生高画质录像输入")
+                return
+            }
+            self.nativeSession.addInput(videoInput)
+            if let microphoneInput, self.nativeSession.canAddInput(microphoneInput) {
+                self.nativeSession.addInput(microphoneInput)
+            }
+            guard self.nativeSession.canAddOutput(self.nativeMovieOutput) else {
+                self.nativeSession.commitConfiguration()
+                self.abortNativeRecordingSetup("当前设备不能启用原生视频输出")
+                return
+            }
+            self.nativeSession.addOutput(self.nativeMovieOutput)
+            self.nativeSession.commitConfiguration()
+
+            if let connection = self.nativeMovieOutput.connection(with: .video) {
+                if connection.isVideoRotationAngleSupported(90) { connection.videoRotationAngle = 90 }
+                if connection.isVideoMirroringSupported {
+                    connection.automaticallyAdjustsVideoMirroring = false
+                    connection.isVideoMirrored = false
+                }
+                if connection.isVideoStabilizationSupported && choice.fps <= 60 {
+                    connection.preferredVideoStabilizationMode = .standard
+                } else {
+                    connection.preferredVideoStabilizationMode = .off
+                }
+            }
+
+            self.nativeRecordingDevice = selectedDevice
+            self.nativeRecordingSlot = requestedSlot
+            self.devices = [nil, nil]
+            self.devices[requestedSlot] = selectedDevice
+            self.slotFront = [false, false]
+            self.slotFront[requestedSlot] = selectedDevice.position == .front
+
+            DispatchQueue.main.sync {
+                self.slotInfos[requestedSlot] = self.makeInfo(device: selectedDevice, spec: selectedSpec)
+                self.nativePreviewLayer.session = self.nativeSession
+                if let connection = self.nativePreviewLayer.connection {
+                    if connection.isVideoRotationAngleSupported(90) { connection.videoRotationAngle = 90 }
+                    if connection.isVideoMirroringSupported {
+                        connection.automaticallyAdjustsVideoMirroring = false
+                        connection.isVideoMirrored = selectedDevice.position == .front && self.cfg.mirrorFront
+                    }
+                }
+            }
+
+            self.nativeSession.startRunning()
+            guard self.nativeSession.isRunning else {
+                self.abortNativeRecordingSetup("原生录像相机启动失败")
+                return
+            }
+
+            if useTorch, selectedDevice.hasTorch, selectedDevice.isTorchAvailable,
+               (try? selectedDevice.lockForConfiguration()) != nil {
+                if selectedDevice.isTorchModeSupported(.on) { selectedDevice.torchMode = .on }
+                selectedDevice.unlockForConfiguration()
+            }
+
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("dualcam-native-\(UUID().uuidString).mov")
+            self.nativeRecordingURL = url
+            self.nativeMovieOutput.startRecording(to: url, recordingDelegate: self)
+
+            let label = "\(choice.width)×\(choice.height)"
+            DispatchQueue.main.async {
+                self.nativeVideoSessionActive = true
+                self.nativeRecordingStartPending = false
+                self.isRecording = true
+                self.ready = true
+                self.statusText = "原生高画质录像"
+                self.outputLabel = label
+                self.effectiveFPS = choice.fps
+                self.recordSeconds = 0
+                self.recTimer?.invalidate()
+                self.recTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+                    self?.recordSeconds += 1
+                }
+                self.showToast("原生录像：\(label) · \(choice.fps) fps（当前主镜头）")
+            }
+        }
+    }
+
+    /// Pick the fastest supported standard frame rate up to the request, then maximize pixels.
+    private func bestNativeVideoFormat(for device: AVCaptureDevice, targetFPS: Int) -> NativeVideoFormatChoice? {
+        let requested = min(max(targetFPS, 24), 120)
+        let standardRates = [120, 60, 30, 24].filter { $0 <= requested }
+        var choices: [NativeVideoFormatChoice] = []
+
+        for format in device.formats {
+            let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+            let width = Int(dimensions.width)
+            let height = Int(dimensions.height)
+            let rates = format.videoSupportedFrameRateRanges
+            guard !rates.isEmpty else { continue }
+            guard let fps = standardRates.first(where: { rate in
+                rates.contains { $0.minFrameRate <= Double(rate) && Double(rate) <= $0.maxFrameRate }
+            }) else { continue }
+            choices.append(NativeVideoFormatChoice(format: format, fps: fps, width: width, height: height))
+        }
+
+        guard let fastestAvailable = choices.map(\.fps).max() else { return nil }
+        let targetPool = choices.filter { $0.fps == fastestAvailable }
+        return targetPool.max { left, right in
+            if left.pixelCount != right.pixelCount { return left.pixelCount < right.pixelCount }
+            return min(left.width, left.height) < min(right.width, right.height)
+        }
+    }
+
+    private func abortNativeRecordingSetup(_ message: String) {
+        if nativeSession.isRunning { nativeSession.stopRunning() }
+        nativeSession.beginConfiguration()
+        for output in nativeSession.outputs { nativeSession.removeOutput(output) }
+        for input in nativeSession.inputs { nativeSession.removeInput(input) }
+        nativeSession.commitConfiguration()
+
+        DispatchQueue.main.sync {
+            nativePreviewLayer.session = nil
+        }
+        nativeRecordingDevice = nil
+        nativeRecordingURL = nil
+        devices = [nil, nil]
+        audioActive = false
+        rebuild(resetStates: false)
+        DispatchQueue.main.async {
+            self.nativeVideoSessionActive = false
+            self.nativeRecordingStartPending = false
+            self.isRecording = false
+            self.recTimer?.invalidate()
+            self.recTimer = nil
+            self.showToast(message)
+        }
+    }
+
+    private func finishNativeRecording(_ url: URL, error: Error?) {
+        let saveIsSuccessful: Bool = {
+            guard let nsError = error as NSError? else { return true }
+            return (nsError.userInfo[AVErrorRecordingSuccessfullyFinishedKey] as? Bool) == true
+        }()
+        if saveIsSuccessful {
+            saveVideo(url)
+        } else {
+            try? FileManager.default.removeItem(at: url)
+            showToast("原生录像失败：\(error?.localizedDescription ?? "未知错误")")
+        }
+
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
+            if self.nativeSession.isRunning { self.nativeSession.stopRunning() }
+
+            if let device = self.nativeRecordingDevice, device.hasTorch,
+               (try? device.lockForConfiguration()) != nil {
+                if device.isTorchModeSupported(.off) { device.torchMode = .off }
+                device.unlockForConfiguration()
+            }
+
+            self.nativeSession.beginConfiguration()
+            for output in self.nativeSession.outputs { self.nativeSession.removeOutput(output) }
+            for input in self.nativeSession.inputs { self.nativeSession.removeInput(input) }
+            self.nativeSession.commitConfiguration()
+
+            DispatchQueue.main.sync {
+                self.nativePreviewLayer.session = nil
+            }
+            self.nativeRecordingDevice = nil
+            self.nativeRecordingURL = nil
+            self.devices = [nil, nil]
+            self.audioActive = false
+
+            self.rebuild(resetStates: false)
+            DispatchQueue.main.async {
+                self.nativeVideoSessionActive = false
+                self.nativeRecordingStartPending = false
+                self.isRecording = false
+                self.recTimer?.invalidate()
+                self.recTimer = nil
+            }
+        }
+    }
+
     func startRecording() {
-        guard !isRecording else { return }
+        guard !isRecording, !nativeRecordingStartPending else { return }
+        if cfg.nativeVideoRecording {
+            startNativeRecording()
+            return
+        }
         let useFlash = flashEnabled
         let slot = mainSlot
         videoQueue.async {
@@ -1430,6 +1729,11 @@ final class CameraManager: NSObject, ObservableObject {
     }
 
     func stopRecording() {
+        if nativeVideoSessionActive {
+            guard isRecording, nativeMovieOutput.isRecording else { return }
+            nativeMovieOutput.stopRecording()
+            return
+        }
         guard isRecording else { return }
         isRecording = false
         recTimer?.invalidate()
@@ -1553,5 +1857,16 @@ private final class MovieSlots {
         lock.lock()
         defer { lock.unlock() }
         return urls[index]
+    }
+}
+
+
+extension CameraManager: AVCaptureFileOutputRecordingDelegate {
+    func fileOutput(_ output: AVCaptureFileOutput,
+                    didFinishRecordingTo outputFileURL: URL,
+                    from connections: [AVCaptureConnection],
+                    error: Error?) {
+        guard output === nativeMovieOutput else { return }
+        finishNativeRecording(outputFileURL, error: error)
     }
 }
