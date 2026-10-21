@@ -210,6 +210,24 @@ struct ParamsTab: View {
             }
             .pickerStyle(.segmented)
 
+            ParameterChart(
+                zoom: Double(cam.displayZoom(slot: i)),
+                maxZoom: Double(max(base * info.maxZoom, base + 0.01)),
+                exposureBias: Double(st.exposureBias),
+                minBias: Double(info.minBias),
+                maxBias: Double(info.maxBias),
+                iso: Double(st.iso),
+                minISO: Double(info.minISO),
+                maxISO: Double(info.maxISO),
+                shutter: st.shutter,
+                temperature: Double(st.temperature),
+                tint: Double(st.tint),
+                focus: Double(st.lensPosition),
+                manualExposure: st.manualExposure,
+                manualWB: st.manualWB,
+                manualFocus: st.manualFocus
+            )
+
             LabeledSlider(title: "变焦",
                           value: Binding(
                             get: { Double(cam.displayZoom(slot: i)) },
@@ -296,6 +314,82 @@ struct ParamsTab: View {
                 apply(i)
             }
         )
+    }
+}
+
+/// Compact live chart of the selected camera's current capture parameters.
+private struct ParameterChart: View {
+    let zoom: Double
+    let maxZoom: Double
+    let exposureBias: Double
+    let minBias: Double
+    let maxBias: Double
+    let iso: Double
+    let minISO: Double
+    let maxISO: Double
+    let shutter: Double
+    let temperature: Double
+    let tint: Double
+    let focus: Double
+    let manualExposure: Bool
+    let manualWB: Bool
+    let manualFocus: Bool
+
+    private var rows: [(String, String, Double)] {
+        [
+            ("变焦", String(format: "%.1f×", zoom), normalize(zoom, 1, maxZoom)),
+            ("曝光", String(format: "%+.1f EV", exposureBias), normalize(exposureBias, minBias, maxBias)),
+            ("ISO", manualExposure ? String(Int(iso)) : "自动", normalize(iso, minISO, maxISO)),
+            ("快门", manualExposure ? shutterLabel : "自动", min(max(shutter, 0), 1)),
+            ("白平衡", manualWB ? "\(Int(temperature))K" : "自动", normalize(temperature, 2500, 9000)),
+            ("对焦", manualFocus ? String(format: "%.2f", focus) : "自动", min(max(focus, 0), 1))
+        ]
+    }
+
+    private var shutterLabel: String {
+        let seconds = 1.0 / max(pow(max(maxZoom, 1), 1 - shutter) * 1000, 1)
+        return String(format: "1/%.0f", 1 / max(seconds, 0.0001))
+    }
+
+    private func normalize(_ value: Double, _ lower: Double, _ upper: Double) -> Double {
+        guard upper > lower else { return 0 }
+        return min(max((value - lower) / (upper - lower), 0), 1)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Text("参数概览")
+                    .font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Text("实时")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Color.yellow)
+            }
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                HStack(spacing: 8) {
+                    Text(row.0)
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color.white.opacity(0.72))
+                        .frame(width: 38, alignment: .leading)
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Color.white.opacity(0.10))
+                            Capsule().fill(Color.yellow.opacity(0.9))
+                                .frame(width: geo.size.width * row.2)
+                        }
+                    }
+                    .frame(height: 5)
+                    Text(row.1)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Color.white.opacity(0.9))
+                        .frame(width: 58, alignment: .trailing)
+                }
+                .frame(height: 12)
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.black.opacity(0.22)))
     }
 }
 
