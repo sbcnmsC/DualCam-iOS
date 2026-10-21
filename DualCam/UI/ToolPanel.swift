@@ -145,7 +145,12 @@ struct FilterTab: View {
                     ForEach(FilterGroup.allCases) { item in
                         let selected = group == item
                         Button {
-                            withAnimation(.easeOut(duration: 0.16)) { group = item }
+                            withAnimation(.easeOut(duration: 0.16)) {
+                                group = item
+                                if !item.filters.contains(cam.cfg.filter) {
+                                    cam.cfg.filter = item.filters.first(where: { $0 != .original }) ?? .original
+                                }
+                            }
                         } label: {
                             Text(item.rawValue)
                                 .font(.system(size: 11, weight: selected ? .semibold : .regular))
@@ -212,7 +217,7 @@ struct FilterTab: View {
                         Rectangle()
                             .fill(Color.white.opacity(0.12))
                             .overlay {
-                                Image(systemName: "camera.filters")
+                                Image(systemName: "camera.aperture")
                                     .font(.system(size: 17))
                                     .foregroundStyle(Color.white.opacity(0.35))
                             }
@@ -450,6 +455,7 @@ private struct ParameterChart: View {
             ("ISO", manualExposure ? String(Int(iso)) : "自动", manualExposure ? normalize(iso, minISO, maxISO) : 0.45),
             ("快门", manualExposure ? shutterLabel : "自动", manualExposure ? 0.65 : 0.45),
             ("色温", manualWB ? "\(Int(temperature))K" : "自动", manualWB ? normalize(temperature, 2500, 9000) : 0.45),
+            ("色调", manualWB ? String(format: "%+.0f", tint) : "自动", manualWB ? normalize(tint, -150, 150) : 0.45),
             ("对焦", manualFocus ? String(format: "%.2f", focus) : "自动", manualFocus ? min(max(focus, 0), 1) : 0.45)
         ]
     }
