@@ -98,7 +98,7 @@ struct Config: Equatable {
     // 布局
     var layout: LayoutMode = .pip
     var swapped = false
-    var aspect: CanvasAspect = .r34
+    var aspect: CanvasAspect = .free
     /// Updated from the available preview bounds when full-screen free aspect is selected.
     var freeAspect: CGFloat = 9.0 / 16.0
     var aspectRatio: CGFloat {
