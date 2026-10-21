@@ -59,9 +59,11 @@ final class CameraManager: NSObject, ObservableObject {
     private let audioQueue = DispatchQueue(label: "dualcam.audio")
     private let outputA = AVCaptureVideoDataOutput()
     private let outputB = AVCaptureVideoDataOutput()
-    /// One still-photo output is attached to camera slot A; MultiCam supports several video outputs,
-    /// but keeping one still output avoids depending on multiple photo-output support.
-    private let photoOutput = AVCapturePhotoOutput()
+    /// Each camera gets its own still-photo output, matching the two video capture slots.
+    private let photoOutputs: [AVCapturePhotoOutput] = [
+        AVCapturePhotoOutput(),
+        AVCapturePhotoOutput()
+    ]
     private let audioOutput = AVCaptureAudioDataOutput()
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
     /// 缩略图专用，和实时渲染互不干扰。
@@ -71,7 +73,7 @@ final class CameraManager: NSObject, ObservableObject {
     // sessionQueue 独占
     private var devices: [AVCaptureDevice?] = [nil, nil]
     private var videoInputs: [AVCaptureDeviceInput?] = [nil, nil]
-    private var highResolutionPhotoReady = false
+    private var highResolutionPhotoReady = [false, false]
     private var pendingPhotoDelegates: [Int64: HighResolutionPhotoCaptureDelegate] = [:]
     // 高频滑块只保留最新参数，约 30 次/秒锁定一次设备配置。
     private var pendingDeviceUpdateTokens: [String: UUID] = [:]
@@ -240,7 +242,7 @@ final class CameraManager: NSObject, ObservableObject {
         for output in session.outputs { session.removeOutput(output) }
         devices = [nil, nil]
         videoInputs = [nil, nil]
-        highResolutionPhotoReady = false
+        highResolutionPhotoReady = [false, false]
         audioActive = false
 
         let specs = [combo.a, combo.b]
@@ -296,7 +298,9 @@ final class CameraManager: NSObject, ObservableObject {
         }
 
         if failure == nil {
-            highResolutionPhotoReady = configureHighResolutionPhotoOutput()
+            for slot in 0..<2 {
+                highResolutionPhotoReady[slot] = configureHighResolutionPhotoOutput(slot: slot)
+            }
         }
         if failure == nil, audioGranted {
             addAudio()
@@ -338,24 +342,28 @@ final class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    /// Configure the native still-photo path before startRunning so the device can use its
-    /// largest photo dimensions for the currently selected MultiCam-compatible camera format.
-    private func configureHighResolutionPhotoOutput() -> Bool {
-        guard let input = videoInputs[0], let device = devices[0],
-              session.canAddOutput(photoOutput) else {
+    /// Configure one native still-photo output per camera before startRunning. Each output uses
+    /// the largest dimensions supported by that camera's active MultiCam-compatible format.
+    private func configureHighResolutionPhotoOutput(slot: Int) -> Bool {
+        guard videoInputs.indices.contains(slot),
+              photoOutputs.indices.contains(slot),
+              let input = videoInputs[slot],
+              let device = devices[slot] else {
             return false
         }
+        let output = photoOutputs[slot]
+        guard session.canAddOutput(output) else { return false }
 
-        session.addOutputWithNoConnections(photoOutput)
+        session.addOutputWithNoConnections(output)
         guard let port = input.ports(for: .video,
                                      sourceDeviceType: device.deviceType,
                                      sourceDevicePosition: device.position).first else {
-            session.removeOutput(photoOutput)
+            session.removeOutput(output)
             return false
         }
-        let connection = AVCaptureConnection(inputPorts: [port], output: photoOutput)
+        let connection = AVCaptureConnection(inputPorts: [port], output: output)
         guard session.canAddConnection(connection) else {
-            session.removeOutput(photoOutput)
+            session.removeOutput(output)
             return false
         }
         session.addConnection(connection)
@@ -372,11 +380,11 @@ final class CameraManager: NSObject, ObservableObject {
         }
         guard let dimensions = dimensions else {
             session.removeConnection(connection)
-            session.removeOutput(photoOutput)
+            session.removeOutput(output)
             return false
         }
-        photoOutput.maxPhotoDimensions = dimensions
-        photoOutput.maxPhotoQualityPrioritization = .quality
+        output.maxPhotoDimensions = dimensions
+        output.maxPhotoQualityPrioritization = .quality
         return true
     }
 
@@ -1186,14 +1194,16 @@ final class CameraManager: NSObject, ObservableObject {
                     if captureConfig.outputMode.savesComposite {
                         self.captureStill(includeOriginals: false, silentSave: true)
                     }
-                    self.captureHighResolutionPrimaryPhoto { highResolutionData in
+                    let primarySlot = captureConfig.swapped ? 1 : 0
+                    self.captureHighResolutionPhotos(slots: [primarySlot, 1 - primarySlot]) { highResolutionPhotos in
                         var datas: [Data] = []
-                        if let highResolutionData = highResolutionData {
-                            datas.append(highResolutionData)
-                        } else if let primary = fallback.primary {
-                            datas.append(primary)
+                        if captureConfig.outputMode.savesOriginal {
+                            if let photo = highResolutionPhotos[0] { datas.append(photo) }
+                            else if let primary = fallback.primary { datas.append(primary) }
+
+                            if let photo = highResolutionPhotos[1] { datas.append(photo) }
+                            else if let secondary = fallback.secondary { datas.append(secondary) }
                         }
-                        if let secondary = fallback.secondary { datas.append(secondary) }
 
                         DispatchQueue.main.async {
                             self.flash(on: false)
@@ -1202,11 +1212,12 @@ final class CameraManager: NSObject, ObservableObject {
                                 self.isCapturingPhoto = false
                                 return
                             }
+                            let capturedCount = highResolutionPhotos.count
                             let message: String
-                            if highResolutionData != nil {
-                                message = captureConfig.outputMode.savesComposite
-                                    ? "高清主镜头原片已保存，合成画面另行保存"
-                                    : "高清主镜头原片已保存"
+                            if capturedCount == 2 {
+                                message = "两路高清原片已保存"
+                            } else if capturedCount == 1 {
+                                message = "已保存高清原片与兼容分辨率回退照片"
                             } else {
                                 message = "高清静态拍照不可用，已保存兼容分辨率原片"
                             }
@@ -1235,17 +1246,20 @@ final class CameraManager: NSObject, ObservableObject {
         return (primary, secondary)
     }
 
-    /// Capture from the dedicated AVCapturePhotoOutput. The callback's Data contains the original
-    /// still-image dimensions and metadata; it is not upscaled from a video frame.
-    private func captureHighResolutionPrimaryPhoto(completion: @escaping (Data?) -> Void) {
+    /// Capture one camera's native still image. Returned data keeps the photo output's real
+    /// dimensions and metadata instead of being upscaled from a video frame.
+    private func captureHighResolutionPhoto(slot: Int, completion: @escaping (Data?) -> Void) {
         sessionQueue.async { [weak self] in
             guard let self = self,
                   self.session.isRunning,
-                  self.highResolutionPhotoReady,
-                  let device = self.devices[0] else {
+                  self.highResolutionPhotoReady.indices.contains(slot),
+                  self.highResolutionPhotoReady[slot],
+                  self.devices.indices.contains(slot),
+                  let device = self.devices[slot] else {
                 DispatchQueue.main.async { completion(nil) }
                 return
             }
+            let output = self.photoOutputs[slot]
             guard let dimensions = device.activeFormat.supportedMaxPhotoDimensions.max(by: { lhs, rhs in
                 Int64(lhs.width) * Int64(lhs.height) < Int64(rhs.width) * Int64(rhs.height)
             }) else {
@@ -1254,7 +1268,7 @@ final class CameraManager: NSObject, ObservableObject {
             }
 
             let settings: AVCapturePhotoSettings
-            if self.photoOutput.availablePhotoCodecTypes.contains(.jpeg) {
+            if output.availablePhotoCodecTypes.contains(.jpeg) {
                 settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
             } else {
                 settings = AVCapturePhotoSettings()
@@ -1276,7 +1290,31 @@ final class CameraManager: NSObject, ObservableObject {
                 }
             )
             self.pendingPhotoDelegates[uniqueID] = delegate
-            self.photoOutput.capturePhoto(with: settings, delegate: delegate)
+            output.capturePhoto(with: settings, delegate: delegate)
+        }
+    }
+
+    /// Capture sequentially in the requested order to reduce still-capture pipeline contention.
+    private func captureHighResolutionPhotos(
+        slots: [Int],
+        index: Int = 0,
+        captured: [Int: Data] = [:],
+        completion: @escaping ([Int: Data]) -> Void
+    ) {
+        guard index < slots.count else {
+            completion(captured)
+            return
+        }
+        let slot = slots[index]
+        captureHighResolutionPhoto(slot: slot) { data in
+            var next = captured
+            if let data = data { next[slot] = data }
+            self.captureHighResolutionPhotos(
+                slots: slots,
+                index: index + 1,
+                captured: next,
+                completion: completion
+            )
         }
     }
 
