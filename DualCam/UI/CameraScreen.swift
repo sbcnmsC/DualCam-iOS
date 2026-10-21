@@ -545,8 +545,8 @@ struct TopBar: View {
                     }
                     iconButton(cam.timerSeconds == 0 ? "timer" : "timer.circle.fill",
                                active: cam.timerSeconds > 0,
-                               label: cam.timerSeconds == 0 ? "定时器：关闭" : "定时器：\\(cam.timerSeconds) 秒",
-                               badge: cam.timerSeconds == 0 ? nil : "\\(cam.timerSeconds)") {
+                               label: cam.timerSeconds == 0 ? "定时器：关闭" : "定时器：\(cam.timerSeconds) 秒",
+                               badge: cam.timerSeconds == 0 ? nil : "\(cam.timerSeconds)") {
                         cam.cycleTimer()
                     }
                 }
