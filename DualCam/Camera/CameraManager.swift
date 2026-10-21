@@ -105,7 +105,7 @@ final class CameraManager: NSObject, ObservableObject {
     private var displayFormatSize = CGSize.zero
     private var sharedFPS = 30
     private var exposureMarkerID: UUID?
-    private var focusMarkerHideToken = UUID()
+    private var focusMarkerDismissWorkItem: DispatchWorkItem?
 
     // 录制状态（用 recLock 保护）
     private let recLock = NSLock()
@@ -964,15 +964,16 @@ final class CameraManager: NSObject, ObservableObject {
 
     /// Extend the focus/exposure overlay lifetime while the user is actively adjusting EV.
     private func scheduleFocusMarkerDismissal(id: UUID) {
-        let token = UUID()
-        focusMarkerHideToken = token
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4.5) { [weak self] in
-            guard let self = self,
-                  self.focusMarker?.id == id,
-                  self.focusMarkerHideToken == token else { return }
+        // A single cancellable dismissal prevents creating a new delayed block for every slider tick.
+        focusMarkerDismissWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self, self.focusMarker?.id == id else { return }
             self.focusMarker = nil
             if self.exposureMarkerID == id { self.exposureMarkerID = nil }
+            self.focusMarkerDismissWorkItem = nil
         }
+        focusMarkerDismissWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.5, execute: work)
     }
 
     /// Direct-value callback for the dedicated exposure rail shown beside the focus reticle.
