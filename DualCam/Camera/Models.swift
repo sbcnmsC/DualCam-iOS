@@ -203,10 +203,12 @@ struct FocusMarker: Equatable {
     let id: UUID
     var point: CGPoint   // 归一化，相对预览区域
     var exposureBias: Float?
+    var slot: Int?       // 被点按对焦 / 曝光调节的镜头槽位
 
-    init(point: CGPoint, exposureBias: Float? = nil, id: UUID = UUID()) {
+    init(point: CGPoint, exposureBias: Float? = nil, slot: Int? = nil, id: UUID = UUID()) {
         self.id = id
         self.point = point
         self.exposureBias = exposureBias
+        self.slot = slot
     }
 }
