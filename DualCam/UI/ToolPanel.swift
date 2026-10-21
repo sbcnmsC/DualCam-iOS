@@ -475,8 +475,8 @@ struct SettingsTab: View {
                 .disabled(cam.isRecording)
             }
             Text(cam.cfg.livePhoto
-                 ? "实况照片已开启：为了保持照片与动态片段配对，原片走兼容分辨率采集。关闭实况照片后，主镜头原片会使用高分辨率静态照片接口；副镜头仍受双摄采集规格限制。"
-                 : "高像素模式：主镜头原片走 AVCapturePhotoOutput，使用当前格式支持的最大静态照片尺寸；「两者都存」的合成图仍来自双摄预览。")
+                 ? "实况照片已开启：为保持静态图与动态片段配对，照片使用兼容采集帧。关闭实况后，原图模式会分别用两个静态照片输出获取当前格式支持的最大尺寸。"
+                 : "高像素模式：原图模式分别获取两路原片；合成模式以主镜头静态照片为底图，副画面使用双摄实时流，因此副画面细节受视频规格限制。")
                 .font(.system(size: 11))
                 .foregroundStyle(Color.white.opacity(0.66))
                 .fixedSize(horizontal: false, vertical: true)
