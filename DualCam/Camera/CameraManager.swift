@@ -930,43 +930,30 @@ final class CameraManager: NSObject, ObservableObject {
             }
             d.isSubjectAreaChangeMonitoringEnabled = true
         }
-        showMarker(at: p, slot: slot)
+        showMarker(at: p)
     }
 
-    func showMarker(at p: CGPoint, slot: Int? = nil) {
+    func showMarker(at p: CGPoint) {
         exposureMarkerID = nil
-        let marker = FocusMarker(point: p, slot: slot)
+        let marker = FocusMarker(point: p)
         focusMarker = marker
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
-            if self.focusMarker?.id == marker.id { self.focusMarker = nil }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+            if self.focusMarker == marker { self.focusMarker = nil }
         }
     }
 
-    private func showExposureMarker(at p: CGPoint, bias: Float, slot: Int) {
+    private func showExposureMarker(at p: CGPoint, bias: Float) {
         let isFirst = exposureMarkerID == nil
-        let id = exposureMarkerID ?? focusMarker?.id ?? UUID()
+        let id = exposureMarkerID ?? UUID()
         exposureMarkerID = id
-        focusMarker = FocusMarker(point: p, exposureBias: bias, slot: slot, id: id)
+        focusMarker = FocusMarker(point: p, exposureBias: bias, id: id)
         if isFirst {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { [weak self] in
                 guard let self = self, self.focusMarker?.id == id else { return }
                 self.focusMarker = nil
                 self.exposureMarkerID = nil
             }
         }
-    }
-
-    /// 独立曝光滑杆回调，继续调整当前被选中的镜头。
-    func adjustExposureBias(slot: Int, value: Float) {
-        guard slotStates.indices.contains(slot) else { return }
-        let state = slotStates[slot]
-        guard !state.manualExposure, !state.locked else { return }
-        let info = slotInfos[slot]
-        let bias = min(max(value, info.minBias), info.maxBias)
-        slotStates[slot].exposureBias = bias
-        applyExposure(slot)
-        let point = focusMarker?.point ?? CGPoint(x: 0.5, y: 0.5)
-        showExposureMarker(at: point, bias: bias, slot: slot)
     }
 
     func exposureDragBegan(at p: CGPoint) {
@@ -985,8 +972,7 @@ final class CameraManager: NSObject, ObservableObject {
         let bias = min(max(dragStartBias - Float(dy / 70), info.minBias), info.maxBias)
         slotStates[slot].exposureBias = bias
         applyExposure(slot)
-        let markerPoint = focusMarker?.point ?? point
-        showExposureMarker(at: markerPoint, bias: bias, slot: slot)
+        showExposureMarker(at: point, bias: bias)
     }
 
     private func subjectAreaChanged() {
