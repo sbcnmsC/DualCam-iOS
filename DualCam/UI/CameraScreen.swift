@@ -5,7 +5,7 @@ struct CameraScreen: View {
     @State private var showPanel = false
     @State private var panelTab: PanelTab = .pip
 
-    private let topBarHeight: CGFloat = 52
+    private let topBarHeight: CGFloat = 56
 
     var body: some View {
         GeometryReader { geo in
@@ -89,6 +89,16 @@ struct PreviewStage: View {
                     .transition(.opacity)
             }
 
+            VStack {
+                HStack {
+                    OutputModePill()
+                    Spacer()
+                }
+                .padding(10)
+                Spacer()
+                ZoomChips().padding(.bottom, 14)
+            }
+
             if !cam.ready {
                 VStack(spacing: 10) {
                     Image(systemName: "camera.aperture").font(.system(size: 44))
@@ -150,6 +160,29 @@ struct PreviewStage: View {
     private func normalized(_ p: CGPoint) -> CGPoint {
         return CGPoint(x: min(max(p.x / max(size.width, 1), 0), 1),
                        y: min(max(p.y / max(size.height, 1), 0), 1))
+    }
+}
+
+/// 预览左上角：点一下循环「原图直出 / 合成画面 / 两者都存」。
+struct OutputModePill: View {
+    @EnvironmentObject private var cam: CameraManager
+
+    var body: some View {
+        Button {
+            let all = OutputMode.allCases
+            let i = all.firstIndex(of: cam.cfg.outputMode) ?? 0
+            cam.cfg.outputMode = all[(i + 1) % all.count]
+        } label: {
+            Text(cam.cfg.outputMode.rawValue)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.yellow)
+                .padding(.horizontal, 10)
+                .frame(height: 24)
+                .background(Capsule().fill(Color.black.opacity(0.45)))
+        }
+        .buttonStyle(.plain)
+        .disabled(cam.isRecording)
+        .opacity(cam.isRecording ? 0.5 : 1)
     }
 }
 
@@ -280,89 +313,59 @@ struct GridOverlay: Shape {
     }
 }
 
-// MARK: - 顶部栏
+// MARK: - 顶部栏（仿 iPhone 原生相机：闪光灯 / 实况 / 夜景）
 
 struct TopBar: View {
     @EnvironmentObject private var cam: CameraManager
 
     var body: some View {
-        HStack(spacing: 8) {
-            barButton(icon: cam.flashEnabled ? "bolt.fill" : "bolt.slash",
-                      tint: cam.flashEnabled ? .yellow : .white) {
-                cam.flashEnabled.toggle()
-            }
-
-            Button { cam.cycleTimer() } label: {
-                HStack(spacing: 3) {
-                    Image(systemName: "timer")
-                    Text(cam.timerSeconds == 0 ? "关" : "\(cam.timerSeconds)秒")
-                        .font(.system(size: 12, weight: .semibold))
-                }
-                .foregroundStyle(cam.timerSeconds == 0 ? Color.white : Color.yellow)
-                .padding(.horizontal, 10)
-                .frame(height: 36)
-                .background(Capsule().fill(Color.white.opacity(0.14)))
-            }
-            .buttonStyle(.plain)
-
-            barButton(icon: cam.cfg.layout == .pip ? "rectangle.on.rectangle" : "rectangle.split.1x2",
-                      tint: .white) {
-                cam.toggleLayout()
-            }
-
-            Spacer(minLength: 4)
-
-            Group {
-                if cam.isRecording {
-                    HStack(spacing: 5) {
-                        Circle().fill(Color.red).frame(width: 8, height: 8)
-                        Text(timeString(cam.recordSeconds))
-                            .font(.system(size: 14, weight: .semibold, design: .monospaced))
-                    }
-                } else {
-                    Text("\(cam.outputLabel) · \(cam.effectiveFPS)")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Color.white.opacity(0.8))
-                }
-            }
-            .lineLimit(1)
-            .minimumScaleFactor(0.7)
-
-            Spacer(minLength: 4)
-
-            Button { cam.cycleCombo() } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "camera.rotate")
-                    Text(comboTitle)
-                        .font(.system(size: 11, weight: .semibold))
-                        .lineLimit(1)
+        ZStack {
+            if cam.isRecording {
+                HStack(spacing: 6) {
+                    Circle().fill(Color.red).frame(width: 8, height: 8)
+                    Text(timeString(cam.recordSeconds))
+                        .font(.system(size: 15, weight: .semibold, design: .monospaced))
                 }
                 .foregroundStyle(Color.white)
-                .padding(.horizontal, 10)
-                .frame(height: 36)
-                .background(Capsule().fill(Color.white.opacity(0.14)))
+                .padding(.horizontal, 12)
+                .frame(height: 30)
+                .background(Capsule().fill(Color.red.opacity(0.85)))
+            } else {
+                HStack(spacing: 38) {
+                    iconButton(cam.flashEnabled ? "bolt.fill" : "bolt.slash", active: cam.flashEnabled) {
+                        cam.flashEnabled.toggle()
+                    }
+                    iconButton(cam.cfg.livePhoto ? "livephoto" : "livephoto.slash",
+                               active: cam.cfg.livePhoto && cam.captureMode == .photo,
+                               dimmed: cam.captureMode == .video) {
+                        cam.cfg.livePhoto.toggle()
+                    }
+                    iconButton(cam.cfg.lowLight ? "moon.fill" : "moon", active: cam.cfg.lowLight) {
+                        cam.cfg.lowLight.toggle()
+                    }
+                }
             }
-            .buttonStyle(.plain)
-            .disabled(cam.isRecording || cam.combos.count < 2)
-            .opacity(cam.isRecording ? 0.4 : 1)
+
+            HStack {
+                Spacer()
+                Text("\(cam.outputLabel) · \(cam.effectiveFPS)")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Color.white.opacity(0.55))
+                    .padding(.trailing, 14)
+            }
         }
-        .foregroundStyle(Color.white)
-        .padding(.horizontal, 12)
     }
 
-    private var comboTitle: String {
-        guard cam.comboIndex < cam.combos.count else { return "镜头" }
-        return cam.combos[cam.comboIndex].title
-    }
-
-    private func barButton(icon: String, tint: Color, action: @escaping () -> Void) -> some View {
+    private func iconButton(_ icon: String, active: Bool, dimmed: Bool = false,
+                            action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon)
-                .foregroundStyle(tint)
-                .frame(width: 36, height: 36)
-                .background(Circle().fill(Color.white.opacity(0.14)))
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(active ? Color.yellow : Color.white)
+                .frame(width: 40, height: 40)
         }
         .buttonStyle(.plain)
+        .opacity(dimmed ? 0.4 : 1)
     }
 
     private func timeString(_ s: Int) -> String {
@@ -377,31 +380,16 @@ struct BottomBar: View {
     @Binding var showPanel: Bool
 
     var body: some View {
-        VStack(spacing: 12) {
-            ZoomChips()
-
-            HStack(spacing: 26) {
-                modeButton(.photo)
-                modeButton(.video)
-            }
-            .frame(height: 24)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 24)
-                    .onEnded { v in
-                        guard !cam.isRecording else { return }
-                        if v.translation.width < -24 { cam.captureMode = .video }
-                        if v.translation.width > 24 { cam.captureMode = .photo }
-                    }
-            )
-
+        VStack(spacing: 16) {
+            // 快门行：左 = 布局（对应原生的微距键位置），右 = 更多
             HStack {
-                Button { showPanel.toggle() } label: {
-                    Image(systemName: "slider.horizontal.3")
-                        .font(.system(size: 20))
-                        .foregroundStyle(showPanel ? Color.yellow : Color.white)
+                Button { cam.toggleLayout() } label: {
+                    Image(systemName: cam.cfg.layout == .pip ? "rectangle.on.rectangle" : "rectangle.split.1x2")
+                        .font(.system(size: 19, weight: .semibold))
+                        .foregroundStyle(Color.yellow)
                         .frame(width: 52, height: 52)
-                        .background(Circle().fill(Color.white.opacity(0.14)))
+                        .background(Circle().fill(Color.black))
+                        .overlay(Circle().stroke(Color.yellow, lineWidth: 2.5))
                 }
                 .buttonStyle(.plain)
 
@@ -409,70 +397,147 @@ struct BottomBar: View {
                 ShutterButton()
                 Spacer()
 
-                Button { cam.swapCameras() } label: {
-                    Image(systemName: "arrow.triangle.2.circlepath")
+                Button { showPanel.toggle() } label: {
+                    Image(systemName: "circle.grid.2x3.fill")
                         .font(.system(size: 20))
-                        .foregroundStyle(Color.white)
+                        .foregroundStyle(showPanel ? Color.yellow : Color.white)
                         .frame(width: 52, height: 52)
-                        .background(Circle().fill(Color.white.opacity(0.14)))
+                        .background(Circle().fill(Color.white.opacity(0.12)))
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.horizontal, 32)
-        }
-        .padding(.top, 10)
-        .padding(.bottom, 10)
-        .background(
-            LinearGradient(colors: [Color.black.opacity(0), Color.black.opacity(0.75)],
-                           startPoint: .top, endPoint: .bottom)
-        )
-    }
+            .padding(.horizontal, 28)
 
-    private func modeButton(_ mode: CaptureMode) -> some View {
+            // 模式行：缩略图 / 视频·照片 / 换主副画面
+            HStack {
+                ThumbnailButton()
+                Spacer()
+                ModePill()
+                Spacer()
+                Button { cam.swapCameras() } label: {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(Color.white)
+                        .frame(width: 52, height: 52)
+                        .background(Circle().fill(Color.white.opacity(0.12)))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 28)
+        }
+        .padding(.top, 8)
+        .padding(.bottom, 8)
+        .background(Color.black)
+    }
+}
+
+struct ThumbnailButton: View {
+    @EnvironmentObject private var cam: CameraManager
+
+    var body: some View {
         Button {
-            if !cam.isRecording { cam.captureMode = mode }
+            if let url = URL(string: "photos-redirect://") { UIApplication.shared.open(url) }
         } label: {
-            Text(mode.rawValue)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(cam.captureMode == mode ? Color.yellow : Color.white.opacity(0.8))
-                .padding(.horizontal, 6)
+            ZStack {
+                if let img = cam.lastThumb {
+                    Image(uiImage: img).resizable().scaledToFill()
+                } else {
+                    Color.white.opacity(0.12)
+                    Image(systemName: "photo").foregroundStyle(Color.white.opacity(0.6))
+                }
+            }
+            .frame(width: 52, height: 52)
+            .clipShape(Circle())
+            .overlay(Circle().stroke(Color.white.opacity(0.25), lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
 }
 
+/// 「视频 / 照片」胶囊切换，选中项为黄字高亮，支持左右滑动。
+struct ModePill: View {
+    @EnvironmentObject private var cam: CameraManager
+
+    var body: some View {
+        HStack(spacing: 0) {
+            item(.video)
+            item(.photo)
+        }
+        .padding(4)
+        .background(Capsule().fill(Color.white.opacity(0.12)))
+        .contentShape(Capsule())
+        .gesture(
+            DragGesture(minimumDistance: 20)
+                .onEnded { v in
+                    guard !cam.isRecording else { return }
+                    if v.translation.width < -20 { cam.captureMode = .photo }
+                    if v.translation.width > 20 { cam.captureMode = .video }
+                }
+        )
+    }
+
+    private func item(_ mode: CaptureMode) -> some View {
+        let selected = cam.captureMode == mode
+        return Button {
+            if !cam.isRecording { cam.captureMode = mode }
+        } label: {
+            Text(mode == .video ? "视频" : "照片")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(selected ? Color.yellow : Color.white.opacity(0.9))
+                .frame(width: 84, height: 40)
+                .background(Capsule().fill(selected ? Color.white.opacity(0.16) : Color.clear))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// 焦段条：.5  1×  2  5。选中那一档是黄色数字 + 深色圆底；捏合变焦到两档之间时，选中档显示当前倍率。
 struct ZoomChips: View {
     @EnvironmentObject private var cam: CameraManager
 
     var body: some View {
-        let slot = cam.mainSlot
-        let info = cam.slotInfos[slot]
-        let current = cam.displayZoom(slot: slot)
-        HStack(spacing: 8) {
-            Text(zoomText(current))
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(Color.yellow)
-                .padding(.horizontal, 10)
-                .frame(height: 30)
-                .background(Capsule().fill(Color.black.opacity(0.5)))
-
-            ForEach(cam.zoomPresets(slot: slot), id: \.self) { preset in
-                Button {
-                    cam.setZoom(slot: slot, factor: preset / max(info.baseMultiplier, 0.01))
-                } label: {
-                    Text(zoomText(preset))
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Color.white)
-                        .frame(width: 38, height: 30)
-                        .background(Capsule().fill(Color.white.opacity(0.14)))
+        let stops = cam.zoomStops
+        let current = cam.displayZoom(slot: 0)
+        let active = activeIndex(stops: stops, current: current)
+        HStack(spacing: 4) {
+            ForEach(Array(stops.enumerated()), id: \.element.id) { index, stop in
+                let selected = index == active
+                Button { cam.selectStop(stop) } label: {
+                    Text(selected ? selectedText(stop: stop, current: current) : plainText(stop.value))
+                        .font(.system(size: selected ? 14 : 13, weight: .semibold))
+                        .foregroundStyle(selected ? Color.yellow : Color.white)
+                        .frame(width: selected ? 46 : 38, height: selected ? 46 : 38)
+                        .background(Circle().fill(Color.black.opacity(selected ? 0.55 : 0)))
                 }
                 .buttonStyle(.plain)
             }
         }
+        .padding(4)
+        .background(Capsule().fill(Color.black.opacity(stops.isEmpty ? 0 : 0.28)))
     }
 
-    private func zoomText(_ v: CGFloat) -> String {
+    private func activeIndex(stops: [ZoomStop], current: CGFloat) -> Int? {
+        guard !stops.isEmpty else { return nil }
+        var best = 0
+        var bestDistance = CGFloat.greatestFiniteMagnitude
+        for (i, s) in stops.enumerated() {
+            let d = abs(s.value - current)
+            if d < bestDistance {
+                bestDistance = d
+                best = i
+            }
+        }
+        return best
+    }
+
+    private func plainText(_ v: CGFloat) -> String {
+        return v < 1 ? ".5" : "\(Int(v))"
+    }
+
+    private func selectedText(stop: ZoomStop, current: CGFloat) -> String {
+        let v = abs(stop.value - current) < 0.05 ? stop.value : current
         if abs(v - v.rounded()) < 0.05 { return "\(Int(v.rounded()))×" }
+        if v < 1 { return ".5×" }
         return String(format: "%.1f×", Double(v))
     }
 }

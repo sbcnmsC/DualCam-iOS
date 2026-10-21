@@ -57,6 +57,19 @@ enum CaptureMode: String {
     case video = "录像"
 }
 
+/// 照片 / 视频保存什么。
+/// - original：每颗镜头各存一份原始画面（不镜像、不加滤镜、不裁切、不合成）
+/// - composite：只存预览里看到的合成画面（画中画 / 分屏 + 滤镜）
+/// - both：两者都存
+enum OutputMode: String, CaseIterable, Identifiable {
+    case original = "原图直出"
+    case composite = "合成画面"
+    case both = "两者都存"
+    var id: String { rawValue }
+    var savesOriginal: Bool { self != .composite }
+    var savesComposite: Bool { self != .original }
+}
+
 enum PanelTab: String, CaseIterable, Identifiable {
     case pip = "小窗"
     case filter = "滤镜"
@@ -70,7 +83,7 @@ struct Config: Equatable {
     // 布局
     var layout: LayoutMode = .pip
     var swapped = false
-    var aspect: CanvasAspect = .r916
+    var aspect: CanvasAspect = .r34
     var pipCenter = CGPoint(x: 0.76, y: 0.20)   // 归一化，左上角为原点
     var pipWidth: CGFloat = 0.32                // 占画布宽度的比例
     var pipRatio: PiPRatio = .r34
@@ -87,7 +100,8 @@ struct Config: Equatable {
     // 采集
     var resolution: ResolutionOption = .p1080
     var fps = 30
-    var saveRaw = false
+    var outputMode: OutputMode = .original
+    var livePhoto = true
     var lowLight = true
     var stabilization = true
     var showGrid = true
@@ -162,6 +176,14 @@ struct LensCombo: Equatable {
     var a: LensSpec
     var b: LensSpec
     var title: String { "\(a.shortTitle)+\(b.shortTitle)" }
+}
+
+/// 焦段快捷档（0.5 / 1 / 2 / 5）。点一档就切到对应镜头并设置好变焦倍率。
+struct ZoomStop: Equatable, Identifiable {
+    let value: CGFloat      // 显示倍率：0.5 / 1 / 2 / 5
+    let spec: LensSpec      // 该档使用的后置镜头
+    let zoom: CGFloat       // 该镜头上的 videoZoomFactor
+    var id: CGFloat { value }
 }
 
 struct FocusMarker: Equatable {

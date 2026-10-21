@@ -32,6 +32,8 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var thumbsActive = false { didSet { setSharedThumbs(thumbsActive) } }
     @Published var paramTarget = 0
     @Published var focusMarker: FocusMarker? = nil
+    @Published var zoomStops: [ZoomStop] = []
+    @Published var lastThumb: UIImage? = nil
 
     weak var previewView: PreviewUIView?
 
@@ -55,6 +57,7 @@ final class CameraManager: NSObject, ObservableObject {
     private var audioGranted = false
     private var audioActive = false
     private var restartCount = 0
+    private var lensBase: [LensSpec: CGFloat] = [:]
 
     // 渲染线程与主线程共享（用 lock 保护）
     private let lock = NSLock()
@@ -72,6 +75,10 @@ final class CameraManager: NSObject, ObservableObject {
     private let recLock = NSLock()
     private var recorder: VideoRecorder?
     private var rawRecorders: [VideoRecorder?] = [nil, nil]
+    // 实况照片的配套短视频（同样用 recLock 保护）
+    private var liveComposite: VideoRecorder?
+    private var liveRaw: [VideoRecorder?] = [nil, nil]
+    private let liveSeconds = 1.6
 
     private var recTimer: Timer?
     private var countdownTimer: Timer?
@@ -132,10 +139,48 @@ final class CameraManager: NSObject, ObservableObject {
             postStatus("没有可同时使用的摄像头组合")
             return
         }
+
+        // 各镜头相对 1× 广角的倍率，以及多摄格式下最大的数码变焦
+        var base: [LensSpec: CGFloat] = [.backWide: 1, .backUltra: 0.5, .front: 1]
+        var maxZoom: [LensSpec: CGFloat] = [:]
+        for spec in [LensSpec.backWide, .backUltra, .backTele, .front] {
+            guard let d = device(spec) else { continue }
+            let zooms = d.formats.filter { $0.isMultiCamSupported }.map { $0.videoMaxZoomFactor }
+            maxZoom[spec] = max(1, zooms.max() ?? 1)
+        }
+        if let tele = device(.backTele), let wide = device(.backWide) {
+            let wFOV = Double(wide.activeFormat.videoFieldOfView) * Double.pi / 180
+            let tFOV = Double(tele.activeFormat.videoFieldOfView) * Double.pi / 180
+            let denom = tan(tFOV / 2)
+            var mult: CGFloat = 2
+            if denom > 0.01 {
+                mult = CGFloat((tan(wFOV / 2) / denom * 2).rounded() / 2)
+            }
+            base[.backTele] = max(mult, 2)
+        }
+        lensBase = base
+
+        // 0.5 / 1 / 2 / 5：每一档选「倍率不超过它」里最长的镜头，剩下的用数码变焦补
+        var stops: [ZoomStop] = []
+        let backSpecs: [LensSpec] = [.backUltra, .backWide, .backTele]
+        for target in [CGFloat(0.5), 1, 2, 5] {
+            var best: LensSpec? = nil
+            for spec in backSpecs {
+                guard let b = base[spec], b <= target + 0.01, device(spec) != nil,
+                      found.contains(where: { $0.a == spec }) else { continue }
+                if best == nil || b > (base[best!] ?? 0) { best = spec }
+            }
+            guard let spec = best, let b = base[spec] else { continue }
+            let z = max(target / b, 1)
+            guard z <= (maxZoom[spec] ?? 1) + 0.001 else { continue }
+            stops.append(ZoomStop(value: target, spec: spec, zoom: z))
+        }
+
         currentCombo = first
         DispatchQueue.main.async {
             self.combos = found
             self.comboIndex = 0
+            self.zoomStops = stops
         }
         rebuild(resetStates: true)
     }
@@ -344,6 +389,7 @@ final class CameraManager: NSObject, ObservableObject {
         default:
             info.baseMultiplier = 1
         }
+        if let b = lensBase[spec] { info.baseMultiplier = b }
         return info
     }
 
@@ -495,8 +541,10 @@ final class CameraManager: NSObject, ObservableObject {
         // 录像
         recLock.lock()
         let rec = recorder
+        let live = liveComposite
         recLock.unlock()
         rec?.appendComposite(finalImage, context: ciContext, time: pts)
+        live?.appendComposite(finalImage, context: ciContext, time: pts)
 
         // 预览
         if beginDisplay() {
@@ -554,11 +602,31 @@ final class CameraManager: NSObject, ObservableObject {
 
     // MARK: - 变焦 / 参数
 
-    func zoomPresets(slot: Int) -> [CGFloat] {
-        let info = slotInfos[slot]
-        let maxDisplay = info.baseMultiplier * info.maxZoom
-        let steps: [CGFloat] = [1, 2, 3]
-        return steps.map { info.baseMultiplier * $0 }.filter { $0 <= maxDisplay + 0.01 }
+    /// 点 0.5 / 1 / 2 / 5：同一颗镜头只改变焦，换镜头则重建会话。
+    func selectStop(_ stop: ZoomStop) {
+        guard comboIndex < combos.count else { return }
+        let current = combos[comboIndex]
+        if current.a == stop.spec {
+            setZoom(slot: 0, factor: stop.zoom)
+            return
+        }
+        guard !isRecording else {
+            showToast("录像中不能切换镜头，请先停止录像")
+            return
+        }
+        var target = combos.firstIndex(where: { $0.a == stop.spec && $0.b == current.b })
+        if target == nil { target = combos.firstIndex(where: { $0.a == stop.spec && $0.b == .front }) }
+        if target == nil { target = combos.firstIndex(where: { $0.a == stop.spec }) }
+        guard let idx = target else { return }
+        comboIndex = idx
+        let combo = combos[idx]
+        slotStates[0] = SlotState(zoom: stop.zoom)
+        if combo.b != current.b { slotStates[1] = SlotState() }
+        ready = false
+        sessionQueue.async {
+            self.currentCombo = combo
+            self.rebuild(resetStates: false)
+        }
     }
 
     func displayZoom(slot: Int) -> CGFloat {
@@ -761,9 +829,14 @@ final class CameraManager: NSObject, ObservableObject {
     }
 
     func cycleCombo() {
-        guard !isRecording, combos.count > 1 else { return }
-        comboIndex = (comboIndex + 1) % combos.count
-        let combo = combos[comboIndex]
+        guard combos.count > 1 else { return }
+        selectCombo((comboIndex + 1) % combos.count)
+    }
+
+    func selectCombo(_ index: Int) {
+        guard !isRecording, combos.indices.contains(index), index != comboIndex else { return }
+        comboIndex = index
+        let combo = combos[index]
         slotStates = [SlotState(), SlotState()]
         paramTarget = 0
         if cfg.swapped { cfg.swapped = false }
@@ -857,6 +930,8 @@ final class CameraManager: NSObject, ObservableObject {
         let a = latest[0]
         let b = latest[1]
         let front = slotFront
+        let sizes = bufferSizes
+        let fps = sharedFPS
         lock.unlock()
         guard let bufA = a else {
             showToast("还没有画面")
@@ -888,22 +963,162 @@ final class CameraManager: NSObject, ObservableObject {
         let composed = Compositor.compose(main: mainImage, sub: subImage, cfg: c, canvas: canvas)
         let finalImage = c.filter.apply(to: composed, intensity: c.filterIntensity).cropped(to: full)
 
-        var datas: [Data] = []
-        if let d = jpeg(finalImage) { datas.append(d) }
-        if c.saveRaw {
-            if let d = jpeg(rawA) { datas.append(d) }
-            if let rb = rawB, let d = jpeg(rb) { datas.append(d) }
+        // 原图直出：每颗镜头各存一张未镜像、未加滤镜、未裁切、未合成的画面；合成图是预览里看到的样子
+        var shots: [StillShot] = []
+        if c.outputMode.savesComposite { shots.append(StillShot(image: finalImage, slot: nil)) }
+        if c.outputMode.savesOriginal {
+            shots.append(StillShot(image: rawA, slot: 0))
+            if let rb = rawB { shots.append(StillShot(image: rb, slot: 1)) }
         }
-        guard !datas.isEmpty else {
+        guard !shots.isEmpty else {
             showToast("生成照片失败")
             return
         }
-        saveImages(datas)
+
+        // 实况：每张照片配一段 1.6 秒的短视频，写入前先准备好录制器
+        if c.livePhoto {
+            for i in shots.indices {
+                let size = shots[i].slot.map { sizes[$0] } ?? canvas
+                guard size.width > 0 else { continue }
+                let id = UUID().uuidString
+                if let rec = try? VideoRecorder(width: Int(size.width), height: Int(size.height), fps: fps,
+                                                audioSettings: nil, liveID: id),
+                   rec.start() {
+                    shots[i].liveID = id
+                    shots[i].recorder = rec
+                }
+            }
+        }
+
+        // 照片编码（实况照片要把同一个 ID 写进 JPEG）
+        for i in shots.indices {
+            if let id = shots[i].liveID {
+                if let d = jpegWithIdentifier(shots[i].image, id: id) {
+                    shots[i].data = d
+                } else {
+                    // 编码失败就退回普通照片，并丢弃配套视频
+                    shots[i].recorder?.finish { _ in }
+                    shots[i].recorder = nil
+                    shots[i].liveID = nil
+                    shots[i].data = jpeg(shots[i].image)
+                }
+            } else {
+                shots[i].data = jpeg(shots[i].image)
+            }
+        }
+
+        guard shots.contains(where: { $0.recorder != nil }) else {
+            let datas = shots.compactMap { $0.data }
+            guard !datas.isEmpty else {
+                showToast("生成照片失败")
+                return
+            }
+            saveImages(datas)
+            return
+        }
+
+        recLock.lock()
+        for s in shots {
+            guard let rec = s.recorder else { continue }
+            if let slot = s.slot { liveRaw[slot] = rec } else { liveComposite = rec }
+        }
+        recLock.unlock()
+
+        let finished = shots
+        videoQueue.asyncAfter(deadline: .now() + liveSeconds) { [weak self] in
+            self?.finishLive(finished)
+        }
+    }
+
+    private func finishLive(_ shots: [StillShot]) {
+        recLock.lock()
+        liveComposite = nil
+        liveRaw = [nil, nil]
+        recLock.unlock()
+
+        let box = MovieSlots(count: shots.count)
+        let group = DispatchGroup()
+        for (i, s) in shots.enumerated() {
+            guard let rec = s.recorder else { continue }
+            group.enter()
+            rec.finish { url in
+                box.set(i, url)
+                group.leave()
+            }
+        }
+        group.notify(queue: .global(qos: .userInitiated)) { [weak self] in
+            var items: [SavedItem] = []
+            for (i, s) in shots.enumerated() {
+                if let d = s.data { items.append(SavedItem(photo: d, movie: box.get(i))) }
+            }
+            self?.saveLivePhotos(items)
+        }
     }
 
     private func jpeg(_ image: CIImage) -> Data? {
         let key = CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String)
         return ciContext.jpegRepresentation(of: image, colorSpace: srgb, options: [key: 0.95])
+    }
+
+    /// 实况照片的静态图：JPEG 的 Apple MakerNote 里写入与视频相同的 content identifier。
+    private func jpegWithIdentifier(_ image: CIImage, id: String) -> Data? {
+        guard let cg = ciContext.createCGImage(image, from: image.extent, format: .RGBA8, colorSpace: srgb) else {
+            return nil
+        }
+        let data = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(data, "public.jpeg" as CFString, 1, nil) else {
+            return nil
+        }
+        let props: [CFString: Any] = [
+            kCGImageDestinationLossyCompressionQuality: 0.95,
+            kCGImagePropertyMakerAppleDictionary: ["17": id]
+        ]
+        CGImageDestinationAddImage(dest, cg, props as CFDictionary)
+        guard CGImageDestinationFinalize(dest) else { return nil }
+        return data as Data
+    }
+
+    private func setThumb(data: Data) {
+        guard let img = UIImage(data: data) else { return }
+        let thumb = img.preparingThumbnail(of: CGSize(width: 160, height: 160)) ?? img
+        DispatchQueue.main.async { self.lastThumb = thumb }
+    }
+
+    private func saveLivePhotos(_ items: [SavedItem]) {
+        guard !items.isEmpty else { return }
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self] status in
+            guard let self = self else { return }
+            guard status == .authorized || status == .limited else {
+                for item in items { if let m = item.movie { try? FileManager.default.removeItem(at: m) } }
+                self.showToast("请在「设置」中允许保存到照片")
+                return
+            }
+            // 配对资源必须是文件
+            let photoURLs: [URL?] = items.map { item in
+                guard item.movie != nil else { return nil }
+                let url = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("dualcam-\(UUID().uuidString).jpg")
+                return (try? item.photo.write(to: url)) != nil ? url : nil
+            }
+            PHPhotoLibrary.shared().performChanges({
+                for (i, item) in items.enumerated() {
+                    let req = PHAssetCreationRequest.forAsset()
+                    if let movie = item.movie, let jpg = photoURLs[i] {
+                        req.addResource(with: .photo, fileURL: jpg, options: nil)
+                        req.addResource(with: .pairedVideo, fileURL: movie, options: nil)
+                    } else {
+                        req.addResource(with: .photo, data: item.photo, options: nil)
+                    }
+                }
+            }, completionHandler: { ok, error in
+                for (i, item) in items.enumerated() {
+                    if let m = item.movie { try? FileManager.default.removeItem(at: m) }
+                    if let p = photoURLs[i] { try? FileManager.default.removeItem(at: p) }
+                }
+                self.showToast(ok ? "实况照片已保存（\(items.count) 张）" : "保存失败：\(error?.localizedDescription ?? "未知错误")")
+            })
+            if let first = items.first { self.setThumb(data: first.photo) }
+        }
     }
 
     private func saveImages(_ datas: [Data]) {
@@ -919,8 +1134,9 @@ final class CameraManager: NSObject, ObservableObject {
                     req.addResource(with: .photo, data: d, options: nil)
                 }
             }, completionHandler: { ok, error in
-                self.showToast(ok ? "照片已保存" : "保存失败：\(error?.localizedDescription ?? "未知错误")")
+                self.showToast(ok ? "照片已保存（\(datas.count) 张）" : "保存失败：\(error?.localizedDescription ?? "未知错误")")
             })
+            if let first = datas.first { self.setThumb(data: first) }
         }
     }
 
@@ -957,22 +1173,31 @@ final class CameraManager: NSObject, ObservableObject {
             }
 
             do {
-                let rec = try VideoRecorder(width: Int(canvas.width), height: Int(canvas.height), fps: fps, audioSettings: audioSettings)
-                guard rec.start() else {
-                    self.showToast("无法开始录像")
-                    return
+                // 合成视频：预览里看到的样子；原图直出：每颗镜头各录一份原始画面（各自带音轨）
+                var comp: VideoRecorder? = nil
+                if c.outputMode.savesComposite {
+                    let r = try VideoRecorder(width: Int(canvas.width), height: Int(canvas.height), fps: fps, audioSettings: audioSettings)
+                    guard r.start() else {
+                        self.showToast("无法开始录像")
+                        return
+                    }
+                    comp = r
                 }
                 var raws: [VideoRecorder?] = [nil, nil]
-                if c.saveRaw {
+                if c.outputMode.savesOriginal {
                     for i in 0..<2 where sizes[i].width > 0 {
-                        if let r = try? VideoRecorder(width: Int(sizes[i].width), height: Int(sizes[i].height), fps: fps, audioSettings: nil),
+                        if let r = try? VideoRecorder(width: Int(sizes[i].width), height: Int(sizes[i].height), fps: fps, audioSettings: audioSettings),
                            r.start() {
                             raws[i] = r
                         }
                     }
                 }
+                guard comp != nil || raws.contains(where: { $0 != nil }) else {
+                    self.showToast("无法开始录像")
+                    return
+                }
                 self.recLock.lock()
-                self.recorder = rec
+                self.recorder = comp
                 self.rawRecorders = raws
                 self.recLock.unlock()
                 DispatchQueue.main.async {
@@ -1028,6 +1253,14 @@ final class CameraManager: NSObject, ObservableObject {
                 try? FileManager.default.removeItem(at: url)
                 return
             }
+            // 缩略图取视频第一帧
+            let gen = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+            gen.appliesPreferredTrackTransform = true
+            gen.maximumSize = CGSize(width: 320, height: 320)
+            if let cg = try? gen.copyCGImage(at: .zero, actualTime: nil) {
+                let thumb = UIImage(cgImage: cg)
+                DispatchQueue.main.async { self.lastThumb = thumb }
+            }
             PHPhotoLibrary.shared().performChanges({
                 PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
             }, completionHandler: { ok, error in
@@ -1045,8 +1278,10 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate, AVCapture
         if output is AVCaptureAudioDataOutput {
             recLock.lock()
             let rec = recorder
+            let raws = rawRecorders
             recLock.unlock()
             rec?.appendAudio(sampleBuffer)
+            for r in raws { r?.appendAudio(sampleBuffer) }
             return
         }
         guard let pixel = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
@@ -1060,9 +1295,49 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate, AVCapture
 
         recLock.lock()
         let raw = rawRecorders[slot]
+        let liveRawRec = liveRaw[slot]
         recLock.unlock()
         raw?.appendRaw(pixel, time: pts)
+        liveRawRec?.appendRaw(pixel, time: pts)
 
         if slot == 0 { processFrame(pts) }
+    }
+}
+
+// MARK: - 拍照辅助类型
+
+/// 一张要保存的照片：原图（某个镜头）或合成图，以及它的实况配套录制器。
+private struct StillShot {
+    var image: CIImage
+    var slot: Int?                 // nil = 合成图；0 / 1 = 对应镜头的原图
+    var liveID: String? = nil
+    var recorder: VideoRecorder? = nil
+    var data: Data? = nil
+}
+
+private struct SavedItem {
+    let photo: Data
+    let movie: URL?
+}
+
+/// 多个录制器的完成回调在不同线程，用它收集各自的输出文件。
+private final class MovieSlots {
+    private var urls: [URL?]
+    private let lock = NSLock()
+
+    init(count: Int) {
+        urls = [URL?](repeating: nil, count: count)
+    }
+
+    func set(_ index: Int, _ url: URL?) {
+        lock.lock()
+        urls[index] = url
+        lock.unlock()
+    }
+
+    func get(_ index: Int) -> URL? {
+        lock.lock()
+        defer { lock.unlock() }
+        return urls[index]
     }
 }

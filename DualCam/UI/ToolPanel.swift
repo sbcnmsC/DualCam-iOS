@@ -334,15 +334,46 @@ struct SettingsTab: View {
                 .font(.system(size: 11))
                 .foregroundStyle(Color.white.opacity(0.6))
 
-            Toggle("保存两路原片", isOn: $cam.cfg.saveRaw).font(.system(size: 13))
+            HStack {
+                Text("保存").font(.system(size: 13)).frame(width: 64, alignment: .leading)
+                Picker("", selection: $cam.cfg.outputMode) {
+                    ForEach(OutputMode.allCases) { m in Text(m.rawValue).tag(m) }
+                }
+                .pickerStyle(.segmented)
+                .disabled(cam.isRecording)
+            }
+            Text("原图直出：每颗镜头各存一份，不合成、不加滤镜、不镜像、不裁切；合成画面是预览里看到的样子。")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.white.opacity(0.6))
+
+            Toggle("实况照片", isOn: $cam.cfg.livePhoto).font(.system(size: 13))
+            HStack {
+                Text("定时器").font(.system(size: 13)).frame(width: 64, alignment: .leading)
+                Picker("", selection: $cam.timerSeconds) {
+                    Text("关").tag(0)
+                    Text("3 秒").tag(3)
+                    Text("10 秒").tag(10)
+                }
+                .pickerStyle(.segmented)
+            }
+            if cam.combos.count > 1 {
+                HStack {
+                    Text("镜头组合").font(.system(size: 13)).frame(width: 64, alignment: .leading)
+                    Picker("", selection: Binding(get: { cam.comboIndex }, set: { cam.selectCombo($0) })) {
+                        ForEach(cam.combos.indices, id: \.self) { i in
+                            Text(cam.combos[i].title).tag(i)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .disabled(cam.isRecording)
+                    Spacer()
+                }
+            }
             Toggle("弱光增亮", isOn: $cam.cfg.lowLight).font(.system(size: 13))
             Toggle("视频防抖", isOn: $cam.cfg.stabilization).font(.system(size: 13))
             Toggle("前置镜像", isOn: $cam.cfg.mirrorFront).font(.system(size: 13))
             Toggle("三分参考线", isOn: $cam.cfg.showGrid).font(.system(size: 13))
 
-            Text("实况照片与视频转实况暂未实现。")
-                .font(.system(size: 11))
-                .foregroundStyle(Color.white.opacity(0.6))
         }
     }
 }
