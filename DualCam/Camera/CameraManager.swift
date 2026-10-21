@@ -1180,49 +1180,81 @@ final class CameraManager: NSObject, ObservableObject {
         guard !isCapturingPhoto else { return }
         let useFlash = flashEnabled
         let captureConfig = cfg
-        // The dedicated photo output is used for stills when Live Photo is off. Live Photo keeps
-        // the existing paired still/movie pipeline because its movie must carry matching metadata.
-        let useHighResolutionOriginals = !captureConfig.livePhoto && captureConfig.outputMode.savesOriginal
-        if useHighResolutionOriginals { isCapturingPhoto = true }
+        // Native still capture is used whenever Live Photo is off. Live Photos stay on the
+        // existing still/movie pair path so their content identifiers and motion frames remain paired.
+        let useHighResolutionCapture = !captureConfig.livePhoto
+        if useHighResolutionCapture { isCapturingPhoto = true }
         if useFlash { flash(on: true) }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + (useFlash ? 0.45 : 0)) { [weak self] in
             guard let self = self else { return }
-            if useHighResolutionOriginals {
+            if useHighResolutionCapture {
                 self.videoQueue.async {
                     let fallback = self.fallbackOriginalData()
-                    if captureConfig.outputMode.savesComposite {
-                        self.captureStill(includeOriginals: false, silentSave: true)
-                    }
                     let primarySlot = captureConfig.swapped ? 1 : 0
-                    self.captureHighResolutionPhotos(slots: [primarySlot, 1 - primarySlot]) { highResolutionPhotos in
-                        var datas: [Data] = []
-                        if captureConfig.outputMode.savesOriginal {
-                            if let photo = highResolutionPhotos[0] { datas.append(photo) }
-                            else if let primary = fallback.primary { datas.append(primary) }
+                    let slots = captureConfig.outputMode.savesOriginal
+                        ? [primarySlot, 1 - primarySlot]
+                        : [primarySlot]
 
-                            if let photo = highResolutionPhotos[1] { datas.append(photo) }
-                            else if let secondary = fallback.secondary { datas.append(secondary) }
-                        }
+                    self.captureHighResolutionPhotos(slots: slots) { highResolutionPhotos in
+                        // Do image composition and JPEG encoding off the main thread. A composite
+                        // uses the native still from the displayed main camera and the other camera's
+                        // most recent video frame, retaining detail where the sensor still is available.
+                        self.videoQueue.async {
+                            var datas: [Data] = []
+                            let fallbackForSlot: (Int) -> Data? = {
+                                $0 == 0 ? fallback.primary : fallback.secondary
+                            }
 
-                        DispatchQueue.main.async {
-                            self.flash(on: false)
-                            guard !datas.isEmpty else {
-                                self.showToast("拍照失败：没有可保存的画面")
+                            if captureConfig.outputMode.savesOriginal {
+                                for slot in 0..<2 {
+                                    if let photo = highResolutionPhotos[slot] {
+                                        datas.append(photo)
+                                    } else if let frame = fallbackForSlot(slot) {
+                                        datas.append(frame)
+                                    }
+                                }
+                            }
+
+                            if captureConfig.outputMode.savesComposite {
+                                let mainData = highResolutionPhotos[primarySlot] ?? fallbackForSlot(primarySlot)
+                                let secondaryData = fallbackForSlot(1 - primarySlot)
+                                if let composite = self.highResolutionCompositeJPEG(
+                                    mainPhotoData: mainData,
+                                    secondaryFrameData: secondaryData,
+                                    config: captureConfig,
+                                    mainSlot: primarySlot
+                                ) {
+                                    datas.append(composite)
+                                }
+                            }
+
+                            DispatchQueue.main.async {
+                                self.flash(on: false)
+                                guard !datas.isEmpty else {
+                                    self.showToast("拍照失败：没有可保存的画面")
+                                    self.isCapturingPhoto = false
+                                    return
+                                }
+
+                                let highResolutionCount = highResolutionPhotos.count
+                                let message: String
+                                if captureConfig.outputMode == .composite {
+                                    message = highResolutionPhotos[primarySlot] != nil
+                                        ? "高清合成照片已保存"
+                                        : "高清静态输出不可用，已保存兼容分辨率合成照片"
+                                } else if highResolutionCount == 2 {
+                                    message = captureConfig.outputMode.savesComposite
+                                        ? "两路高清原片与合成照片已保存"
+                                        : "两路高清原片已保存"
+                                } else if highResolutionCount == 1 {
+                                    message = "已保存高清原片与兼容分辨率回退照片"
+                                } else {
+                                    message = "高清静态输出不可用，已保存兼容分辨率照片"
+                                }
+                                self.saveImages(datas, successMessage: message)
                                 self.isCapturingPhoto = false
-                                return
                             }
-                            let capturedCount = highResolutionPhotos.count
-                            let message: String
-                            if capturedCount == 2 {
-                                message = "两路高清原片已保存"
-                            } else if capturedCount == 1 {
-                                message = "已保存高清原片与兼容分辨率回退照片"
-                            } else {
-                                message = "高清静态拍照不可用，已保存兼容分辨率原片"
-                            }
-                            self.saveImages(datas, successMessage: message)
-                            self.isCapturingPhoto = false
                         }
                     }
                 }
@@ -1233,6 +1265,46 @@ final class CameraManager: NSObject, ObservableObject {
                 }
             }
         }
+    }
+
+    /// Create a high-detail composite still from a native primary photo and the other camera's
+    /// current video frame. Output dimensions fit inside the native still instead of upscaling it.
+    private func highResolutionCompositeJPEG(
+        mainPhotoData: Data?,
+        secondaryFrameData: Data?,
+        config: Config,
+        mainSlot: Int
+    ) -> Data? {
+        guard let mainPhotoData,
+              var main = CIImage(data: mainPhotoData, options: [.applyOrientationProperty: true]) else {
+            return nil
+        }
+
+        lock.lock()
+        let front = slotFront
+        lock.unlock()
+        if front.indices.contains(mainSlot), front[mainSlot] && config.mirrorFront {
+            main = main.oriented(.upMirrored)
+        }
+
+        var sub: CIImage? = nil
+        if let data = secondaryFrameData, var secondary = CIImage(data: data, options: [.applyOrientationProperty: true]) {
+            let subSlot = 1 - mainSlot
+            if front.indices.contains(subSlot), front[subSlot] && config.mirrorFront {
+                secondary = secondary.oriented(.upMirrored)
+            }
+            sub = secondary
+        }
+
+        let extent = main.extent
+        let aspect = max(config.aspect.value, 0.1)
+        let width = max(2, floor(min(extent.width, extent.height * aspect) / 2) * 2)
+        let height = max(2, floor(width / aspect / 2) * 2)
+        let canvas = CGSize(width: width, height: height)
+        let bounds = CGRect(origin: .zero, size: canvas)
+        let composed = Compositor.compose(main: main, sub: sub, cfg: config, canvas: canvas)
+        let filtered = config.filter.apply(to: composed, intensity: config.filterIntensity).cropped(to: bounds)
+        return jpeg(filtered)
     }
 
     /// Fallback frames preserve the previous behavior if a camera/format cannot supply a native still.
