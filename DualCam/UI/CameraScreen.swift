@@ -127,6 +127,7 @@ struct CameraScreen: View {
                         .zIndex(20)
                 }
             }
+            .animation(.spring(response: 0.36, dampingFraction: 0.88), value: isParameterPanelLandscape)
             .onAppear {
                 UIDevice.current.beginGeneratingDeviceOrientationNotifications()
                 currentOrientation = resolvedInterfaceOrientation(for: canvasSize)
@@ -146,7 +147,7 @@ struct CameraScreen: View {
                 // Scene orientation distinguishes left- and right-landscape even when bounds stay the same.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
                     let orientation = resolvedInterfaceOrientation(for: canvasSize)
-                    withAnimation(.smooth(duration: 0.28)) {
+                    withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
                         currentOrientation = orientation
                     }
                     // Keep capture/composition orientation unchanged; only UI icons follow device rotation.
@@ -165,7 +166,6 @@ struct CameraScreen: View {
         .background(Color.black.ignoresSafeArea())
         .statusBarHidden(true)
         .animation(.easeInOut(duration: 0.22), value: showPanel)
-        .animation(.spring(response: 0.36, dampingFraction: 0.88), value: isParameterPanelLandscape)
     }
 
     /// Open the native iPhone Photos app from the album shortcut.
