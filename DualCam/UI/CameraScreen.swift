@@ -259,7 +259,8 @@ struct PreviewStage: View {
                     isDisabled: cam.slotStates[slot].manualExposure || cam.slotStates[slot].locked,
                     railOnLeft: railOnLeft,
                     trackHeight: railHeight,
-                    onExposureChanged: { cam.adjustExposureBias(slot: slot, value: $0) }
+                    onExposureChanged: { cam.adjustExposureBias(slot: slot, value: $0) },
+                    iconRotationDegrees: iconRotationDegrees
                 )
                 .position(
                     x: min(max(groupCenterX, 61), max(61, size.width - 61)),
@@ -374,6 +375,7 @@ struct FocusMarkerView: View {
     let railOnLeft: Bool
     let trackHeight: CGFloat
     let onExposureChanged: (Float) -> Void
+    var iconRotationDegrees: CGFloat = 0
 
     @State private var appeared = false
     @State private var isDragging = false
@@ -423,6 +425,7 @@ struct FocusMarkerView: View {
                         .frame(width: reticleSize, height: reticleSize)
                 }
             Image(systemName: isDisabled ? "lock.fill" : "scope")
+                .rotationEffect(.degrees(iconRotationDegrees))
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(Color.yellow)
                 .frame(width: 20, height: 20)
@@ -558,7 +561,10 @@ struct PiPOverlay: View {
             if isDraggingPiP {
                 RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.ultraThinMaterial)
                     .overlay(RoundedRectangle(cornerRadius: 16).fill(Color.white.opacity(0.12)))
-                    .overlay(Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 18)).foregroundStyle(.white.opacity(0.85)))
+                    .overlay(Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .rotationEffect(.degrees(iconRotationDegrees))
+                        .font(.system(size: 18))
+                        .foregroundStyle(.white.opacity(0.85)))
                     .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.35), lineWidth: 1))
             } else {
                 Color.clear.contentShape(Rectangle()).onTapGesture { cam.swapCameras() }
@@ -961,7 +967,7 @@ struct BottomBar: View {
                 }
                 HStack(alignment: .center, spacing: 8) {
                     // Left cluster: gallery then photo/video mode toggle.
-                    ThumbnailButton(action: onAlbumTap)
+                    ThumbnailButton(action: onAlbumTap, iconRotationDegrees: iconRotationDegrees)
                     captureModeSwitchButton
 
                     Spacer(minLength: 4)
@@ -998,6 +1004,7 @@ struct BottomBar: View {
 struct ThumbnailButton: View {
     @EnvironmentObject private var cam: CameraManager
     let action: () -> Void
+    var iconRotationDegrees: CGFloat = 0
 
     var body: some View {
         Button(action: action) {
@@ -1012,6 +1019,7 @@ struct ThumbnailButton: View {
                             Color.white.opacity(0.12)
                                 .overlay {
                                     Image(systemName: "photo.on.rectangle.angled")
+                                        .rotationEffect(.degrees(iconRotationDegrees))
                                         .font(.system(size: 19, weight: .medium))
                                         .foregroundStyle(Color.white.opacity(0.7))
                                 }
@@ -1022,6 +1030,7 @@ struct ThumbnailButton: View {
                     .overlay(Circle().stroke(Color.white.opacity(0.25), lineWidth: 1))
 
                     Image(systemName: "square.stack")
+                        .rotationEffect(.degrees(iconRotationDegrees))
                         .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(.white)
                         .frame(width: 19, height: 19)
