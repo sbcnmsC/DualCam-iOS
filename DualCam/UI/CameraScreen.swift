@@ -22,6 +22,7 @@ struct CameraScreen: View {
                 height: geo.size.height + insets.top + insets.bottom
             )
             let canvasOffset = CGSize(width: -insets.leading, height: -insets.top)
+            let isLandscape = canvasSize.width > canvasSize.height
             let topControlsBottom = insets.top + topBarHeight
             let dockTop = canvasSize.height - insets.bottom - bottomBarHeight
 
@@ -56,8 +57,8 @@ struct CameraScreen: View {
 
                     Spacer(minLength: 0)
 
-                    if showPanel {
-                        ToolPanel(tab: $panelTab)
+                    if showPanel && !isLandscape {
+                        ToolPanel(tab: $panelTab, isLandscape: false)
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
 
@@ -65,11 +66,30 @@ struct CameraScreen: View {
                         showPanel: $showPanel,
                         panelTab: $panelTab,
                         onAlbumTap: { openNativePhotos() },
-                        bottomDockPadding: max(insets.bottom + 44, 80)
+                        bottomDockPadding: isLandscape ? max(insets.bottom + 8, 12) : max(insets.bottom + 44, 80),
+                        isLandscape: isLandscape
                     )
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .zIndex(5)
+
+                // In landscape, the tool panel moves to a compact side card instead of
+                // competing with the shutter row for the short vertical space.
+                if showPanel && isLandscape {
+                    let panelWidth = min(max(canvasSize.width * 0.36, 280), 360)
+                    let panelHeight = min(220, max(120, dockTop - topControlsBottom - 16))
+                    let panelTop = topControlsBottom + 8
+                    Color.clear
+                        .frame(width: canvasSize.width, height: canvasSize.height)
+                        .overlay(alignment: .topLeading) {
+                            ToolPanel(tab: $panelTab, isLandscape: true)
+                                .frame(width: panelWidth, height: panelHeight)
+                                .offset(x: canvasSize.width - panelWidth - 10, y: panelTop)
+                                .transition(.move(edge: .trailing).combined(with: .opacity))
+                        }
+                        .offset(x: canvasOffset.width, y: canvasOffset.height)
+                        .zIndex(8)
+                }
 
                 OverlayLayer(topSafeAreaInset: insets.top)
                     .frame(width: canvasSize.width, height: canvasSize.height)
@@ -84,6 +104,12 @@ struct CameraScreen: View {
             }
             .onAppear { updateFreeAspect(for: canvasSize) }
             .onChange(of: canvasSize) { _, newSize in updateFreeAspect(for: newSize) }
+            .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+                // Scene orientation distinguishes left- and right-landscape even when bounds stay the same.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                    cam.setInterfaceOrientation(resolvedInterfaceOrientation(for: canvasSize))
+                }
+            }
             .onPreferenceChange(CameraBottomBarHeightPreferenceKey.self) { height in
                 guard height > 0, abs(bottomBarHeight - height) > 1 else { return }
                 bottomBarHeight = height
@@ -97,6 +123,13 @@ struct CameraScreen: View {
         .background(Color.black.ignoresSafeArea())
         .statusBarHidden(true)
         .animation(.easeInOut(duration: 0.22), value: showPanel)
+        .animation(.smooth(duration: 0.28), value: geoOrientationIsLandscape)
+
+    private var geoOrientationIsLandscape: Bool {
+        guard let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive }) else { return false }
+        return scene.interfaceOrientation.isLandscape
     }
 
     /// Open the native iPhone Photos app from the album shortcut.
@@ -126,8 +159,22 @@ struct CameraScreen: View {
         return CGSize(width: w, height: w / aspect)
     }
 
+    private func resolvedInterfaceOrientation(for size: CGSize) -> UIInterfaceOrientation {
+        let landscapeBounds = size.width > size.height
+        if let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive }) {
+            let orientation = scene.interfaceOrientation
+            if orientation != .unknown && orientation.isLandscape == landscapeBounds {
+                return orientation
+            }
+        }
+        return landscapeBounds ? .landscapeLeft : .portrait
+    }
+
     private func updateFreeAspect(for size: CGSize) {
         cam.updateFreeAspect(width: size.width, height: max(size.height, 100))
+        cam.setInterfaceOrientation(resolvedInterfaceOrientation(for: size))
     }
 }
 
@@ -497,6 +544,7 @@ struct PiPOverlay: View {
         }
         .frame(width: rect.width, height: rect.height)
         .position(x: rect.midX, y: rect.midY)
+        .animation(.smooth(duration: 0.26), value: size)
     }
 
     private var moveGesture: some Gesture {
@@ -757,6 +805,7 @@ struct BottomBar: View {
     @Binding var panelTab: PanelTab
     let onAlbumTap: () -> Void
     let bottomDockPadding: CGFloat
+    var isLandscape: Bool = false
 
     // Match the visible circles and tap targets on both sides of the shutter.
     private let sideButtonSize: CGFloat = 48
@@ -767,7 +816,7 @@ struct BottomBar: View {
             ZoomChips()
             Spacer(minLength: 0)
         }
-        .padding(.top, 2)
+        .padding(.top, isLandscape ? 0 : 2)
         // Measure the actual zoom control's bottom edge in screen coordinates.
         // The 9:16 preview uses this measurement as its lower alignment edge.
         .background(GeometryReader { proxy in
@@ -847,7 +896,7 @@ struct BottomBar: View {
     }
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: isLandscape ? 4 : 12) {
             // 倍率条固定在快门上方。
             zoomRow
 
@@ -875,8 +924,8 @@ struct BottomBar: View {
             }
             .frame(height: 84)
         }
-        .padding(.top, 8)
-        .padding(.bottom, 8)
+        .padding(.top, isLandscape ? 2 : 8)
+        .padding(.bottom, isLandscape ? 4 : 8)
         // Reserve real layout space below the controls so they move up as a group;
         // applying this inside the dock also extends its gradient behind the safe margin.
         .padding(.bottom, bottomDockPadding)

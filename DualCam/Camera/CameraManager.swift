@@ -91,6 +91,8 @@ final class CameraManager: NSObject, ObservableObject {
     // 渲染线程与主线程共享（用 lock 保护）
     private let lock = NSLock()
     private var sharedCfg = Config()
+    /// Interface orientation shared with the real-time compositor (guarded by lock).
+    private var sharedInterfaceOrientation: UIInterfaceOrientation = .portrait
     /// While PiP is dragged, omit the secondary image from idle preview rendering.
     private var sharedPiPDragActive = false
     private var sharedThumbs = false
@@ -287,7 +289,10 @@ final class CameraManager: NSObject, ObservableObject {
                 break
             }
             session.addConnection(conn)
-            if conn.isVideoRotationAngleSupported(90) { conn.videoRotationAngle = 90 }
+            let rotationAngle = Self.rotationAngle(for: interfaceOrientationSnapshot())
+            if conn.isVideoRotationAngleSupported(rotationAngle) {
+                conn.videoRotationAngle = rotationAngle
+            }
             if conn.isVideoMirroringSupported {
                 conn.automaticallyAdjustsVideoMirroring = false
                 conn.isVideoMirrored = false
@@ -548,10 +553,65 @@ final class CameraManager: NSObject, ObservableObject {
         }
     }
 
+    // MARK: - 屏幕方向
+
+    private static func rotationAngle(for orientation: UIInterfaceOrientation) -> CGFloat {
+        switch orientation {
+        case .landscapeLeft: return 0
+        case .landscapeRight: return 180
+        case .portraitUpsideDown: return 270
+        default: return 90
+        }
+    }
+
+    private func interfaceOrientationSnapshot() -> UIInterfaceOrientation {
+        lock.lock()
+        defer { lock.unlock() }
+        return sharedInterfaceOrientation
+    }
+
+    /// Update capture-buffer orientation on the session queue so both camera feeds rotate together.
+    func setInterfaceOrientation(_ orientation: UIInterfaceOrientation) {
+        let target = orientation.isLandscape ? orientation : .portrait
+        lock.lock()
+        let current = sharedInterfaceOrientation
+        lock.unlock()
+        guard current != target else { return }
+
+        sessionQueue.async {
+            let angle = Self.rotationAngle(for: target)
+            for output in [self.outputA, self.outputB] {
+                for connection in output.connections where connection.isVideoRotationAngleSupported(angle) {
+                    connection.videoRotationAngle = angle
+                }
+            }
+
+            self.lock.lock()
+            self.sharedInterfaceOrientation = target
+            self.lock.unlock()
+
+            // Flush the previous-size sample buffers once; subsequent frames rebuild the pool
+            // at the new aspect and avoid a stale portrait frame flashing into landscape.
+            self.videoQueue.async {
+                self.displayLayer.flush()
+                self.displayFormat = nil
+                self.displayFormatSize = .zero
+                self.previewPool = nil
+                self.previewPoolSize = .zero
+            }
+        }
+    }
+
     // MARK: - 逐帧处理
 
-    private func orient(_ image: CIImage) -> CIImage {
-        // 连接已设为竖屏；如果系统没有旋转，兜底转正
+    private func orient(_ image: CIImage, for orientation: UIInterfaceOrientation? = nil) -> CIImage {
+        let target = orientation ?? interfaceOrientationSnapshot()
+        if target.isLandscape {
+            // In landscape the sensor's native wide buffer is already correctly oriented.
+            if image.extent.height > image.extent.width { return image.oriented(.left) }
+            return image
+        }
+        // In portrait, rotate the sensor's native landscape buffer into a portrait canvas.
         if image.extent.width > image.extent.height { return image.oriented(.right) }
         return image
     }
@@ -563,14 +623,15 @@ final class CameraManager: NSObject, ObservableObject {
         let b = latest[1]
         let front = slotFront
         let isPiPDragging = sharedPiPDragActive
+        let orientation = sharedInterfaceOrientation
         lock.unlock()
         guard let bufA = a else { return }
 
-        var imgA = orient(CIImage(cvPixelBuffer: bufA))
+        var imgA = orient(CIImage(cvPixelBuffer: bufA), for: orientation)
         if front[0] && c.mirrorFront { imgA = imgA.oriented(.upMirrored) }
         var imgB: CIImage? = nil
         if let bufB = b {
-            var tmp = orient(CIImage(cvPixelBuffer: bufB))
+            var tmp = orient(CIImage(cvPixelBuffer: bufB), for: orientation)
             if front[1] && c.mirrorFront { tmp = tmp.oriented(.upMirrored) }
             imgB = tmp
         }
@@ -932,10 +993,14 @@ final class CameraManager: NSObject, ObservableObject {
         lock.lock()
         let canvas = lastCanvas
         let size = bufferSizes[slot]
+        let orientation = sharedInterfaceOrientation
         lock.unlock()
 
         let mirrored = slotInfos[slot].isFront && c.mirrorFront
-        let dp = Compositor.devicePoint(tap: p, region: region, canvas: canvas, bufferSize: size, mirrored: mirrored)
+        let dp = Compositor.devicePoint(
+            tap: p, region: region, canvas: canvas, bufferSize: size, mirrored: mirrored,
+            landscape: orientation.isLandscape, reverseLandscape: orientation == .landscapeRight
+        )
         let s = slotStates[slot]
         if s.locked { slotStates[slot].locked = false }
 

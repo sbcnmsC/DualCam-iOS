@@ -1,52 +1,103 @@
 import SwiftUI
 
+import SwiftUI
+
 struct ToolPanel: View {
     @Binding var tab: PanelTab
+    var isLandscape: Bool = false
+
+    private var selectedContent: some View {
+        Group {
+            switch tab {
+            case .pip: PiPTab()
+            case .filter: FilterTab()
+            case .params: QuickParamsTab()
+            case .settings: SettingsTab()
+            }
+        }
+    }
+
+    private func tabButton(_ item: PanelTab, vertical: Bool) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) { tab = item }
+        } label: {
+            Group {
+                if vertical {
+                    VStack(spacing: 3) {
+                        Image(systemName: item.icon)
+                            .font(.system(size: 15, weight: .semibold))
+                        Text(item.rawValue)
+                            .font(.system(size: 9, weight: .medium))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 42)
+                } else {
+                    HStack(spacing: 5) {
+                        Image(systemName: item.icon)
+                            .font(.system(size: 16, weight: .semibold))
+                        if tab == item {
+                            Text(item.rawValue).font(.system(size: 14, weight: .semibold))
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                }
+            }
+            .foregroundStyle(tab == item ? Color.yellow : Color.white.opacity(0.7))
+            .background {
+                if tab == item {
+                    RoundedRectangle(cornerRadius: vertical ? 8 : 14)
+                        .fill(Color.white.opacity(0.16))
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
 
     var body: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 4) {
-                ForEach(PanelTab.allCases) { t in
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) { tab = t }
-                    } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: t.icon)
-                                .font(.system(size: 16, weight: .semibold))
-                            if tab == t {
-                                Text(t.rawValue).font(.system(size: 14, weight: .semibold))
-                            }
-                        }
-                        .foregroundStyle(tab == t ? Color.yellow : Color.white.opacity(0.7))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background {
-                            if tab == t { Capsule().fill(Color.white.opacity(0.16)) }
+        Group {
+            if isLandscape {
+                HStack(alignment: .top, spacing: 8) {
+                    VStack(spacing: 4) {
+                        ForEach(PanelTab.allCases) { item in
+                            tabButton(item, vertical: true)
                         }
                     }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 10)
+                    .frame(width: 54)
 
-            ScrollView {
-                Group {
-                    switch tab {
-                    case .pip: PiPTab()
-                    case .filter: FilterTab()
-                    case .params: QuickParamsTab()
-                    case .settings: SettingsTab()
+                    ScrollView {
+                        selectedContent
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .padding(.horizontal, 14)
-                .padding(.bottom, 12)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 8)
+            } else {
+                VStack(spacing: 8) {
+                    HStack(spacing: 4) {
+                        ForEach(PanelTab.allCases) { item in
+                            tabButton(item, vertical: false)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 10)
+
+                    ScrollView {
+                        selectedContent
+                            .padding(.horizontal, 14)
+                            .padding(.bottom, 12)
+                    }
+                    .frame(height: 230)
+                }
             }
-            .frame(height: 230)
         }
         .foregroundStyle(Color.white)
         .background(RoundedRectangle(cornerRadius: 18).fill(.ultraThinMaterial))
-        .padding(.horizontal, 8)
+        .padding(.horizontal, isLandscape ? 4 : 8)
         .padding(.bottom, 4)
     }
 }

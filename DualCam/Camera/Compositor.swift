@@ -54,19 +54,31 @@ enum Compositor {
     }
 
     /// 把预览上的点按位置换算为摄像头的对焦 / 测光坐标（传感器横向坐标系，0...1）。
-    static func devicePoint(tap: CGPoint, region: CGRect, canvas: CGSize, bufferSize: CGSize, mirrored: Bool) -> CGPoint {
+    static func devicePoint(
+        tap: CGPoint, region: CGRect, canvas: CGSize, bufferSize: CGSize, mirrored: Bool,
+        landscape: Bool = false, reverseLandscape: Bool = false
+    ) -> CGPoint {
         let rw = region.width * canvas.width
         let rh = region.height * canvas.height
-        guard rw > 0, rh > 0, bufferSize.width > 0, bufferSize.height > 0 else {
+        // Buffer sizes are stored in portrait-normalized form; swap them back in landscape.
+        let orientedSize = landscape
+            ? CGSize(width: bufferSize.height, height: bufferSize.width)
+            : bufferSize
+        guard rw > 0, rh > 0, orientedSize.width > 0, orientedSize.height > 0 else {
             return CGPoint(x: 0.5, y: 0.5)
         }
-        let s = max(rw / bufferSize.width, rh / bufferSize.height)
+        let s = max(rw / orientedSize.width, rh / orientedSize.height)
         let lx = (tap.x - region.minX) * canvas.width - rw / 2
         let ly = (tap.y - region.minY) * canvas.height - rh / 2
-        var nx = (bufferSize.width / 2 + lx / s) / bufferSize.width
-        let ny = (bufferSize.height / 2 + ly / s) / bufferSize.height
+        var nx = (orientedSize.width / 2 + lx / s) / orientedSize.width
+        let ny = (orientedSize.height / 2 + ly / s) / orientedSize.height
         if mirrored { nx = 1 - nx }
-        // 竖屏画面由横向传感器顺时针旋转 90° 得到
+        if landscape {
+            let x = reverseLandscape ? 1 - nx : nx
+            let y = reverseLandscape ? 1 - ny : ny
+            return CGPoint(x: min(max(x, 0), 1), y: min(max(y, 0), 1))
+        }
+        // Portrait view maps back to the camera's native landscape sensor coordinates.
         return CGPoint(x: min(max(ny, 0), 1), y: min(max(1 - nx, 0), 1))
     }
 
