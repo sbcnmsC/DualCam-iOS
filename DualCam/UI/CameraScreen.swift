@@ -65,19 +65,9 @@ struct CameraScreen: View {
 
                     Spacer(minLength: 0)
 
-                    if showPanel {
-                        ToolPanel(
-                            tab: $panelTab,
-                            isLandscape: isParameterPanelLandscape,
-                            rotationDegrees: iconRotationDegrees
-                        )
-                        .id(isParameterPanelLandscape ? "landscape-parameter-panel" : "portrait-parameter-panel")
-                        .transition(
-                            .asymmetric(
-                                insertion: .opacity.combined(with: .move(edge: isParameterPanelLandscape ? .trailing : .bottom)),
-                                removal: .opacity.combined(with: .move(edge: isParameterPanelLandscape ? .bottom : .trailing))
-                            )
-                        )
+                    if showPanel && !isParameterPanelLandscape {
+                        ToolPanel(tab: $panelTab, isLandscape: false, rotationDegrees: iconRotationDegrees)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
 
                     BottomBar(
@@ -93,6 +83,34 @@ struct CameraScreen: View {
                 .frame(maxHeight: .infinity, alignment: .top)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .zIndex(5)
+
+                // When the device is physically landscape, render a real landscape-sized
+                // parameter canvas and rotate that panel as one unit. The camera interface and
+                // its preview remain portrait-locked underneath.
+                if showPanel && isParameterPanelLandscape {
+                    ZStack {
+                        Color.black.ignoresSafeArea()
+
+                        ToolPanel(
+                            tab: $panelTab,
+                            isLandscape: true,
+                            rotationDegrees: 0,
+                            onClose: {
+                                withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+                                    showPanel = false
+                                }
+                            }
+                        )
+                        .frame(width: canvasSize.height, height: canvasSize.width)
+                        .rotationEffect(.degrees(iconRotationDegrees))
+                        .animation(.spring(response: 0.36, dampingFraction: 0.88), value: iconRotationDegrees)
+                        .frame(width: canvasSize.width, height: canvasSize.height)
+                    }
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .offset(x: canvasOffset.width, y: canvasOffset.height)
+                    .transition(.opacity)
+                    .zIndex(15)
+                }
 
                 OverlayLayer(topSafeAreaInset: insets.top)
                     .frame(width: canvasSize.width, height: canvasSize.height)
@@ -147,6 +165,7 @@ struct CameraScreen: View {
         .background(Color.black.ignoresSafeArea())
         .statusBarHidden(true)
         .animation(.easeInOut(duration: 0.22), value: showPanel)
+        .animation(.spring(response: 0.36, dampingFraction: 0.88), value: isParameterPanelLandscape)
     }
 
     /// Open the native iPhone Photos app from the album shortcut.
