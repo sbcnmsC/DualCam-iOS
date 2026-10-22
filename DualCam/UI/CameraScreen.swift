@@ -645,38 +645,25 @@ struct SplitDivider: View {
     @State private var start: CGFloat? = nil
 
     var body: some View {
-        let isLandscape = size.width > size.height
-        let position = cam.cfg.splitRatio * (isLandscape ? size.width : size.height)
+        let y = cam.cfg.splitRatio * size.height
         ZStack {
-            if isLandscape {
-                Rectangle().fill(Color.white.opacity(0.55)).frame(width: 1)
-                Capsule().fill(Color.white).frame(width: 5, height: 46)
-            } else {
-                Rectangle().fill(Color.white.opacity(0.55)).frame(height: 1)
-                Capsule().fill(Color.white).frame(width: 46, height: 5)
-            }
+            Rectangle().fill(Color.white.opacity(0.55)).frame(height: 1)
+            Capsule().fill(Color.white).frame(width: 46, height: 5)
         }
-        .frame(width: isLandscape ? 44 : size.width, height: isLandscape ? size.height : 44)
+        .frame(width: size.width, height: 44)
         .contentShape(Rectangle())
-        .position(
-            x: isLandscape ? position : size.width / 2,
-            y: isLandscape ? size.height / 2 : position
-        )
+        .position(x: size.width / 2, y: y)
         .gesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { v in
                     if start == nil { start = cam.cfg.splitRatio }
-                    let delta = isLandscape
-                        ? v.translation.width / max(size.width, 1)
-                        : v.translation.height / max(size.height, 1)
-                    let r = (start ?? 0.5) + delta
+                    let r = (start ?? 0.5) + v.translation.height / max(size.height, 1)
                     cam.cfg.splitRatio = min(max(r, 0.25), 0.75)
                 }
                 .onEnded { _ in start = nil }
         )
     }
 }
-
 struct GridOverlay: Shape {
     func path(in rect: CGRect) -> Path {
         var p = Path()
