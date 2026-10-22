@@ -52,7 +52,7 @@ struct CameraScreen: View {
                     TopBar(onTimerTap: {
                         timerDraft = cam.timerSeconds > 0 ? cam.timerSeconds : 5
                         showTimerSettings = true
-                    })
+                    }, isLandscape: isLandscape)
                     .frame(height: topBarHeight)
 
                     Spacer(minLength: 0)
@@ -535,6 +535,7 @@ struct PiPOverlay: View {
             Color.clear.contentShape(Rectangle()).gesture(moveGesture).simultaneousGesture(pinchGesture)
 
             Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .rotationEffect(.degrees(size.width > size.height ? 90 : 0))
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(Color.white)
                 .frame(width: 24, height: 24)
@@ -607,19 +608,31 @@ struct SplitDivider: View {
     @State private var start: CGFloat? = nil
 
     var body: some View {
-        let y = cam.cfg.splitRatio * size.height
+        let isLandscape = size.width > size.height
+        let position = cam.cfg.splitRatio * (isLandscape ? size.width : size.height)
         ZStack {
-            Rectangle().fill(Color.white.opacity(0.55)).frame(height: 1)
-            Capsule().fill(Color.white).frame(width: 46, height: 5)
+            if isLandscape {
+                Rectangle().fill(Color.white.opacity(0.55)).frame(width: 1)
+                Capsule().fill(Color.white).frame(width: 5, height: 46)
+            } else {
+                Rectangle().fill(Color.white.opacity(0.55)).frame(height: 1)
+                Capsule().fill(Color.white).frame(width: 46, height: 5)
+            }
         }
-        .frame(width: size.width, height: 44)
+        .frame(width: isLandscape ? 44 : size.width, height: isLandscape ? size.height : 44)
         .contentShape(Rectangle())
-        .position(x: size.width / 2, y: y)
+        .position(
+            x: isLandscape ? position : size.width / 2,
+            y: isLandscape ? size.height / 2 : position
+        )
         .gesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { v in
                     if start == nil { start = cam.cfg.splitRatio }
-                    let r = (start ?? 0.5) + v.translation.height / max(size.height, 1)
+                    let delta = isLandscape
+                        ? v.translation.width / max(size.width, 1)
+                        : v.translation.height / max(size.height, 1)
+                    let r = (start ?? 0.5) + delta
                     cam.cfg.splitRatio = min(max(r, 0.25), 0.75)
                 }
                 .onEnded { _ in start = nil }
@@ -707,6 +720,7 @@ struct TimerSettingsOverlay: View {
 struct TopBar: View {
     @EnvironmentObject private var cam: CameraManager
     let onTimerTap: () -> Void
+    var isLandscape: Bool = false
 
     var body: some View {
         ZStack {
@@ -757,6 +771,7 @@ struct TopBar: View {
                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon)
+                .rotationEffect(.degrees(isLandscape ? 90 : 0))
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(active ? Color.yellow : Color.white)
                 .frame(width: 40, height: 40)
@@ -831,6 +846,7 @@ struct BottomBar: View {
     private var splitButton: some View {
         Button { cam.toggleLayout() } label: {
             Image(systemName: cam.cfg.layout == .pip ? "rectangle.on.rectangle" : "rectangle.split.1x2")
+                .rotationEffect(.degrees(isLandscape ? 90 : 0))
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(Color.yellow)
                 .frame(width: sideButtonSize, height: sideButtonSize)
@@ -853,6 +869,7 @@ struct BottomBar: View {
             }
         } label: {
             Image(systemName: "slider.horizontal.3")
+                .rotationEffect(.degrees(isLandscape ? 90 : 0))
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(showPanel && panelTab == .params ? Color.yellow : Color.white)
                 .frame(width: sideButtonSize, height: sideButtonSize)
@@ -876,10 +893,12 @@ struct BottomBar: View {
         } label: {
             ZStack(alignment: .bottomTrailing) {
                 Image(systemName: cam.captureMode == .photo ? "video.fill" : "camera.fill")
+                    .rotationEffect(.degrees(isLandscape ? 90 : 0))
                     .font(.system(size: 17, weight: .semibold))
                     .frame(width: sideButtonSize, height: sideButtonSize)
                     .background(Circle().fill(Color.white.opacity(0.12)))
                 Image(systemName: "arrow.left.arrow.right")
+                    .rotationEffect(.degrees(isLandscape ? 90 : 0))
                     .font(.system(size: 8, weight: .bold))
                     .padding(3)
                     .background(Circle().fill(Color.black.opacity(0.92)))
