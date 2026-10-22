@@ -166,6 +166,10 @@ final class CameraManager: NSObject, ObservableObject {
     private let sessionQueue = DispatchQueue(label: "dualcam.session")
     /// A 路（主渲染）队列：合成、预览、写录都在这里。
     private let videoQueue = DispatchQueue(label: "dualcam.video", qos: .userInteractive)
+    /// Full-resolution composite encoding can be much slower than preview rendering.
+    /// Keep it off the capture callback queue and cap in-flight frames to bound latency/memory.
+    private let compositeRenderQueue = DispatchQueue(label: "dualcam.composite.render", qos: .userInitiated)
+    private let compositeRenderSlots = DispatchSemaphore(value: 2)
     /// B 路独立队列：只更新「最新帧」和写原片，不再排在 A 路合成后面。
     private let videoQueueB = DispatchQueue(label: "dualcam.video.b", qos: .userInteractive)
     /// 滤镜缩略图队列：缩略图渲染不再堵住实时预览。
@@ -813,8 +817,14 @@ final class CameraManager: NSObject, ObservableObject {
             DispatchQueue.main.async { self.outputLabel = label }
         }
 
-        rec?.appendComposite(finalImage, context: ciContext, time: pts)
-        live?.appendComposite(finalImage, context: ciContext, time: pts)
+        // Do expensive full-resolution writer rendering on a separate bounded queue.
+        // If the encoder is behind, skip a recording frame rather than stalling live preview.
+        if let rec {
+            enqueueCompositeFrame(finalImage, recorder: rec, time: pts)
+        }
+        if let live {
+            enqueueCompositeFrame(finalImage, recorder: live, time: pts)
+        }
 
         // Display layer long edge is capped at 1920px (was 1280, which looked soft on 2500+px-tall screens).
         // During composite recording, the full-size render above is scaled once here;
@@ -838,6 +848,22 @@ final class CameraManager: NSObject, ObservableObject {
                 self.endThumbs()
             }
         }
+    }
+
+    /// Enqueue in capture timestamp order. A two-frame limit keeps this queue from retaining
+    /// an unbounded chain of CIImage graphs and the source camera buffers they reference.
+    private func enqueueCompositeFrame(_ image: CIImage, recorder: VideoRecorder, time: CMTime) {
+        guard compositeRenderSlots.wait(timeout: .now()) == .success else { return }
+        compositeRenderQueue.async { [self] in
+            defer { compositeRenderSlots.signal() }
+            recorder.appendComposite(image, context: ciContext, time: time)
+        }
+    }
+
+    /// Must be called before finishing composite writers so all accepted frames are handed
+    /// to their writer queues first. Call only from outside compositeRenderQueue.
+    private func drainCompositeRenderQueue() {
+        compositeRenderQueue.sync {}
     }
 
     // MARK: 预览显示
@@ -1857,6 +1883,7 @@ final class CameraManager: NSObject, ObservableObject {
     }
 
     private func finishLive(_ shots: [StillShot]) {
+        drainCompositeRenderQueue()
         recLock.lock()
         liveComposite = nil
         liveRaw = [nil, nil]
@@ -2062,6 +2089,7 @@ final class CameraManager: NSObject, ObservableObject {
         let slot = mainSlot
         if slotInfos[slot].hasTorch { setTorch(slot: slot, on: false) }
         videoQueue.async {
+            self.drainCompositeRenderQueue()
             self.recLock.lock()
             let rec = self.recorder
             let raws = self.rawRecorders
