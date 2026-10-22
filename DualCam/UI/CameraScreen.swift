@@ -42,7 +42,18 @@ struct CameraScreen: View {
             // Fit the selected output ratio against the whole device canvas.
             // In free mode this exactly matches the iPhone screen; fixed ratios use the largest
             // possible frame instead of shrinking to the control-free area.
-            let previewSize = fitSize(in: canvasSize)
+            let fittedPreviewSize = fitSize(in: canvasSize)
+            // For 9:16, fit the frame into the measured space from the canvas top
+            // to the actual shutter outer-ring top. Keep 9:16 intact instead of letting
+            // the frame run behind the shutter when the full-width version is too tall.
+            let previewSize: CGSize = {
+                guard cam.cfg.aspect == .r916, shutterButtonTop > 0 else {
+                    return fittedPreviewSize
+                }
+                let targetHeight = min(fittedPreviewSize.height, max(shutterButtonTop, 100))
+                let targetWidth = min(fittedPreviewSize.width, targetHeight * cam.cfg.aspectRatio)
+                return CGSize(width: targetWidth, height: targetWidth / max(cam.cfg.aspectRatio, 0.1))
+            }()
             let previewBottomLimit = dockTop - 12
             let previewTop = previewOriginY(
                 previewHeight: previewSize.height,
