@@ -38,7 +38,7 @@ struct CameraScreen: View {
             let previewBottomLimit = dockTop - 12
             // For 9:16, align the bottom edge of the live preview to the measured bottom
             // edge of the zoom-control row. This moves the tall frame upward without resizing it.
-            let previewTop: CGFloat = cam.cfg.aspect == .free
+            let previewTop: CGFloat = isLandscape || cam.cfg.aspect == .free
                 ? 0
                 : (cam.cfg.aspect == .r916 && zoomControlBottom > 0
                     ? zoomControlBottom - previewSize.height
@@ -105,7 +105,11 @@ struct CameraScreen: View {
                     .offset(x: canvasOffset.width, y: canvasOffset.height)
 
                 if showTimerSettings {
-                    TimerSettingsOverlay(timerDraft: $timerDraft, isPresented: $showTimerSettings)
+                    TimerSettingsOverlay(
+                        timerDraft: $timerDraft,
+                        isPresented: $showTimerSettings,
+                        iconRotationDegrees: iconRotationDegrees
+                    )
                         .frame(width: canvasSize.width, height: canvasSize.height)
                         .offset(x: canvasOffset.width, y: canvasOffset.height)
                         .zIndex(20)
@@ -695,6 +699,7 @@ struct TimerSettingsOverlay: View {
     @EnvironmentObject private var cam: CameraManager
     @Binding var timerDraft: Int
     @Binding var isPresented: Bool
+    var iconRotationDegrees: CGFloat = 0
 
     var body: some View {
         ZStack {
@@ -704,22 +709,30 @@ struct TimerSettingsOverlay: View {
                 .onTapGesture { isPresented = false }
             VStack(spacing: 16) {
                 HStack {
-                    Image(systemName: "timer").foregroundStyle(Color.yellow)
+                    Image(systemName: "timer")
+                        .rotationEffect(.degrees(iconRotationDegrees))
+                        .foregroundStyle(Color.yellow)
                     Text("拍摄倒计时").font(.system(size: 17, weight: .semibold))
                     Spacer()
                     Button { isPresented = false } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(.white.opacity(0.65))
+                        Image(systemName: "xmark.circle.fill")
+                            .rotationEffect(.degrees(iconRotationDegrees))
+                            .foregroundStyle(.white.opacity(0.65))
                     }
                 }
                 HStack(spacing: 14) {
                     Button { timerDraft = max(1, timerDraft - 1) } label: {
-                        Image(systemName: "minus").frame(width: 40, height: 40)
+                        Image(systemName: "minus")
+                            .rotationEffect(.degrees(iconRotationDegrees))
+                            .frame(width: 40, height: 40)
                     }
                     Text("\(timerDraft) 秒")
                         .font(.system(size: 28, weight: .semibold, design: .rounded))
                         .monospacedDigit().frame(minWidth: 90)
                     Button { timerDraft = min(60, timerDraft + 1) } label: {
-                        Image(systemName: "plus").frame(width: 40, height: 40)
+                        Image(systemName: "plus")
+                            .rotationEffect(.degrees(iconRotationDegrees))
+                            .frame(width: 40, height: 40)
                     }
                 }
                 Slider(value: Binding(get: { Double(timerDraft) }, set: { timerDraft = Int($0.rounded()) }), in: 1...60, step: 1)
