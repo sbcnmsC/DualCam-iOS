@@ -22,13 +22,22 @@ struct CameraScreen: View {
                 height: geo.size.height + insets.top + insets.bottom
             )
             let canvasOffset = CGSize(width: -insets.leading, height: -insets.top)
-            let previewSize = fitSize(in: canvasSize)
-            // The zoom row is the top edge of the bottom camera dock. Fixed aspect ratios
-            // align their preview bottom to this edge; tall ratios extend behind the controls.
+
+            // Reserve a safe slot between the top controls and the zoom row / bottom camera dock.
+            // Fixed ratios are fitted inside this slot instead of extending underneath tappable controls.
+            let topControlsBottom = insets.top + topBarHeight
             let dockTop = canvasSize.height - insets.bottom - bottomBarHeight
+            let previewTopLimit = topControlsBottom + 14
+            let previewBottomLimit = dockTop - 12
+            let availablePreviewHeight = max(100, previewBottomLimit - previewTopLimit)
+            let previewSize = cam.cfg.aspect == .free
+                ? fitSize(in: canvasSize)
+                : fitSize(in: CGSize(width: canvasSize.width, height: availablePreviewHeight))
+            // Short/wide formats remain aligned to the bottom of the available preview slot;
+            // 3:4 and other tall formats shrink proportionally, then move down below the top controls.
             let previewTop = cam.cfg.aspect == .free
                 ? 0
-                : max(insets.top, dockTop - previewSize.height)
+                : previewBottomLimit - previewSize.height
 
             ZStack(alignment: .topLeading) {
                 Color.black.ignoresSafeArea()
