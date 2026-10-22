@@ -12,44 +12,61 @@ struct CameraScreen: View {
 
     var body: some View {
         GeometryReader { geo in
-            let previewSize = fitSize(in: geo.size)
-            ZStack(alignment: .top) {
+            // Keep the GeometryReader inside the safe area so controls respect the Dynamic Island
+            // and home indicator, while extending only the camera canvas behind them.
+            let insets = geo.safeAreaInsets
+            let canvasSize = CGSize(
+                width: geo.size.width + insets.leading + insets.trailing,
+                height: geo.size.height + insets.top + insets.bottom
+            )
+            let canvasOffset = CGSize(width: -insets.leading, height: -insets.top)
+            let previewSize = fitSize(in: canvasSize)
+
+            ZStack(alignment: .topLeading) {
                 Color.black.ignoresSafeArea()
 
+                // Camera preview and gesture canvas extend edge-to-edge under the controls.
                 VStack(spacing: 0) {
                     PreviewStage(size: previewSize)
                         .frame(width: previewSize.width, height: previewSize.height)
                     Spacer(minLength: 0)
                 }
-                .frame(maxWidth: .infinity)
+                .frame(width: canvasSize.width, height: canvasSize.height, alignment: .top)
+                .offset(x: canvasOffset.width, y: canvasOffset.height)
 
+                // Controls intentionally stay in the GeometryReader's safe area.
                 VStack(spacing: 0) {
                     TopBar(onTimerTap: {
                         timerDraft = cam.timerSeconds > 0 ? cam.timerSeconds : 5
                         showTimerSettings = true
                     })
-                        .frame(height: topBarHeight)
+                    .frame(height: topBarHeight)
+
                     Spacer(minLength: 0)
+
                     if showPanel {
                         ToolPanel(tab: $panelTab)
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
+
                     BottomBar(showPanel: $showPanel, panelTab: $panelTab)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                OverlayLayer()
+                OverlayLayer(topSafeAreaInset: insets.top)
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .offset(x: canvasOffset.width, y: canvasOffset.height)
 
                 if showTimerSettings {
                     TimerSettingsOverlay(timerDraft: $timerDraft, isPresented: $showTimerSettings)
+                        .frame(width: canvasSize.width, height: canvasSize.height)
+                        .offset(x: canvasOffset.width, y: canvasOffset.height)
                         .zIndex(20)
                 }
             }
-            .onAppear { updateFreeAspect(for: geo.size) }
-            .onChange(of: geo.size) { _, newSize in updateFreeAspect(for: newSize) }
+            .onAppear { updateFreeAspect(for: canvasSize) }
+            .onChange(of: canvasSize) { _, newSize in updateFreeAspect(for: newSize) }
         }
-        // Extend the GeometryReader itself edge-to-edge so geo.size represents the full device canvas,
-        // not the safe-area region between the top and bottom system/tool bars.
-        .ignoresSafeArea(.container, edges: .all)
         .background(Color.black.ignoresSafeArea())
         .statusBarHidden(true)
         .animation(.easeInOut(duration: 0.22), value: showPanel)
@@ -876,6 +893,7 @@ struct ShutterButton: View {
 
 struct OverlayLayer: View {
     @EnvironmentObject private var cam: CameraManager
+    let topSafeAreaInset: CGFloat
 
     var body: some View {
         ZStack {
@@ -894,7 +912,7 @@ struct OverlayLayer: View {
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
                         .background(Capsule().fill(Color.black.opacity(0.7)))
-                        .padding(.top, 64)
+                        .padding(.top, topSafeAreaInset + 64)
                     Spacer()
                 }
                 .allowsHitTesting(false)
