@@ -138,6 +138,7 @@ struct CameraScreen: View {
         // Preserve Build 94's safe-area measurement and expand the preview canvas explicitly.
         .background(Color.black.ignoresSafeArea())
         .statusBarHidden(true)
+        .supportedInterfaceOrientations(.portrait)
         .animation(.easeInOut(duration: 0.22), value: showPanel)
     }
 
