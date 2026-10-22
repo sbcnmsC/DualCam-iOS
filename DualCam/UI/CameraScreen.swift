@@ -900,12 +900,9 @@ struct ThumbnailButton: View {
                         .offset(x: 3, y: 1)
                 }
 
-                Text("相册")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(Color.white.opacity(0.82))
             }
-            .frame(width: 58, height: 66)
-            .contentShape(Rectangle())
+            .frame(width: 48, height: 48)
+            .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("打开相册")
