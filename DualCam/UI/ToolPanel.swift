@@ -61,6 +61,8 @@ struct ToolPanel: View {
                 } else {
                     HStack(spacing: 5) {
                         Image(systemName: item.icon)
+                            .rotationEffect(.degrees(rotationDegrees))
+                            .animation(.smooth(duration: 0.28), value: rotationDegrees)
                             .font(.system(size: 16, weight: .semibold))
                         if tab == item {
                             Text(item.rawValue).font(.system(size: 14, weight: .semibold))
@@ -685,6 +687,7 @@ struct QuickParamsTab: View {
                                         Image(systemName: item.icon)
                                             .font(.system(size: 14, weight: .semibold))
                                             .rotationEffect(.degrees(rotationDegrees))
+                                            .animation(.smooth(duration: 0.28), value: rotationDegrees)
                                         Text(item.rawValue)
                                             .font(.system(size: 9, weight: .medium))
                                             .lineLimit(1)
@@ -756,8 +759,9 @@ struct QuickParamsTab: View {
                                 } label: {
                                     VStack(spacing: 4) {
                                         Image(systemName: item.icon)
-                                    .rotationEffect(.degrees(isLandscape ? rotationDegrees : 0))
-                                    .font(.system(size: 16, weight: .semibold))
+                                            .rotationEffect(.degrees(rotationDegrees))
+                                            .animation(.smooth(duration: 0.28), value: rotationDegrees)
+                                            .font(.system(size: 16, weight: .semibold))
                                         Text(item.rawValue).font(.system(size: 10, weight: .medium))
                                     }
                                     .foregroundStyle(activeSelection == item ? Color.yellow : Color.white.opacity(0.8))
