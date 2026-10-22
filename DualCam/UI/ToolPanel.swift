@@ -880,12 +880,6 @@ struct QuickParamsTab: View {
             Button {
                 guard !cam.isRecording else { return }
                 cam.resetParameterDefaults(slot)
-                var defaults = cam.cfg
-                defaults.resolution = .maximum
-                defaults.fps = 30
-                defaults.stabilization = false
-                cam.cfg = defaults
-                cam.timerSeconds = 0
             } label: {
                 Label("恢复默认", systemImage: "arrow.counterclockwise")
                     .font(.system(size: 11, weight: .semibold))
