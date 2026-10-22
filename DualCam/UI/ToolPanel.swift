@@ -23,8 +23,6 @@ private struct RotatingSymbolLabelStyle: LabelStyle {
     }
 }
 
-import SwiftUI
-
 struct ToolPanel: View {
     @Binding var tab: PanelTab
     var isLandscape: Bool = false
