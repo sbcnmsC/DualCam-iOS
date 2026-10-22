@@ -59,7 +59,6 @@ struct PhotoLibraryView: View {
                             .foregroundStyle(.white.opacity(0.75))
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .onAppear { requestReadAccess() }
                 } else {
                     ContentUnavailableView {
                         Label("需要相册访问权限", systemImage: "photo.badge.exclamationmark")
@@ -279,9 +278,10 @@ private struct PhotoAssetViewer: View {
                 contentMode: .aspectFit,
                 options: options
             ) { result, _ in
-                guard let result else { return }
                 DispatchQueue.main.async {
-                    image = result
+                    if let result {
+                        image = result
+                    }
                     isLoading = false
                 }
             }
