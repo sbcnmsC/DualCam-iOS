@@ -67,12 +67,10 @@ struct CameraScreen: View {
                     BottomBar(
                         showPanel: $showPanel,
                         panelTab: $panelTab,
-                        onAlbumTap: { showPhotoLibrary = true }
+                        onAlbumTap: { showPhotoLibrary = true },
+                        bottomDockPadding: max(insets.bottom + 44, 80)
                     )
                 }
-                // Keep the whole bottom control cluster above the physical screen edge and
-                // home-indicator area. The preview remains full-canvas behind these controls.
-                .padding(.bottom, max(insets.bottom, 32))
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .zIndex(5)
 
@@ -738,6 +736,10 @@ struct BottomBar: View {
     @Binding var showPanel: Bool
     @Binding var panelTab: PanelTab
     let onAlbumTap: () -> Void
+    let bottomDockPadding: CGFloat
+
+    // Match the visible circles and tap targets on both sides of the shutter.
+    private let sideButtonSize: CGFloat = 48
 
     private var zoomRow: some View {
         HStack {
@@ -753,7 +755,7 @@ struct BottomBar: View {
             Image(systemName: cam.cfg.layout == .pip ? "rectangle.on.rectangle" : "rectangle.split.1x2")
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(Color.yellow)
-                .frame(width: 42, height: 42)
+                .frame(width: sideButtonSize, height: sideButtonSize)
                 .background(Circle().fill(Color.black))
                 .overlay(Circle().stroke(Color.yellow, lineWidth: 2))
         }
@@ -775,7 +777,7 @@ struct BottomBar: View {
             Image(systemName: "slider.horizontal.3")
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(showPanel && panelTab == .params ? Color.yellow : Color.white)
-                .frame(width: 42, height: 42)
+                .frame(width: sideButtonSize, height: sideButtonSize)
                 .background(Circle().fill(Color.white.opacity(0.12)))
                 .overlay(Circle().stroke(
                     showPanel && panelTab == .params ? Color.yellow.opacity(0.7) : Color.clear,
@@ -797,7 +799,7 @@ struct BottomBar: View {
             ZStack(alignment: .bottomTrailing) {
                 Image(systemName: cam.captureMode == .photo ? "video.fill" : "camera.fill")
                     .font(.system(size: 17, weight: .semibold))
-                    .frame(width: 42, height: 42)
+                    .frame(width: sideButtonSize, height: sideButtonSize)
                     .background(Circle().fill(Color.white.opacity(0.12)))
                 Image(systemName: "arrow.left.arrow.right")
                     .font(.system(size: 8, weight: .bold))
@@ -847,6 +849,9 @@ struct BottomBar: View {
         }
         .padding(.top, 8)
         .padding(.bottom, 8)
+        // Reserve real layout space below the controls so they move up as a group;
+        // applying this inside the dock also extends its gradient behind the safe margin.
+        .padding(.bottom, bottomDockPadding)
         .background {
             LinearGradient(
                 colors: [Color.black.opacity(0.02), Color.black.opacity(0.72)],
