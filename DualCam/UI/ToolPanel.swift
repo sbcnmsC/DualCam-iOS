@@ -11,7 +11,7 @@ struct ToolPanel: View {
             switch tab {
             case .pip: PiPTab()
             case .filter: FilterTab()
-            case .params: QuickParamsTab()
+            case .params: QuickParamsTab(isLandscape: isLandscape)
             case .settings: SettingsTab()
             }
         }
@@ -620,6 +620,7 @@ private enum QuickParameter: String, CaseIterable, Identifiable {
 
 struct QuickParamsTab: View {
     @EnvironmentObject private var cam: CameraManager
+    var isLandscape: Bool = false
     @State private var selected: QuickParameter = .exposure
     @AppStorage("dualcam.quickParameterOrder") private var parameterOrder = "曝光,ISO,快门,对焦,白平衡,变焦,分辨率,帧率,定时器,防抖"
     @AppStorage("dualcam.quickParameterVisible") private var visibleParameters = "曝光,ISO,快门,对焦,白平衡,变焦,分辨率,帧率,定时器,防抖"
@@ -637,49 +638,114 @@ struct QuickParamsTab: View {
     var body: some View {
         let i = min(max(cam.paramTarget, 0), 1)
         let activeSelection = visibleItems.contains(selected) ? selected : (visibleItems.first ?? .exposure)
-        VStack(alignment: .leading, spacing: 9) {
-            HStack(spacing: 6) {
-                Text("快捷控制").font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color.white.opacity(0.65))
-                Spacer()
-                Picker("镜头", selection: $cam.paramTarget) {
-                    Text(cam.slotInfos[0].name).tag(0)
-                    Text(cam.slotInfos[1].name).tag(1)
-                }
-                .pickerStyle(.menu)
-                .tint(.yellow)
-                .frame(maxWidth: 150)
-            }
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 7) {
-                    ForEach(visibleItems) { item in
-                        Button {
-                            withAnimation(.easeOut(duration: 0.15)) { selected = item }
-                        } label: {
-                            VStack(spacing: 4) {
-                                Image(systemName: item.icon).font(.system(size: 16, weight: .semibold))
-                                Text(item.rawValue).font(.system(size: 10, weight: .medium))
+        Group {
+            if isLandscape {
+                HStack(alignment: .top, spacing: 8) {
+                    ScrollView(.vertical, showsIndicators: false) {
+                        VStack(spacing: 6) {
+                            ForEach(visibleItems) { item in
+                                Button {
+                                    withAnimation(.easeOut(duration: 0.18)) { selected = item }
+                                } label: {
+                                    VStack(spacing: 3) {
+                                        Image(systemName: item.icon)
+                                            .font(.system(size: 14, weight: .semibold))
+                                            .rotationEffect(.degrees(90))
+                                        Text(item.rawValue)
+                                            .font(.system(size: 9, weight: .medium))
+                                            .lineLimit(1)
+                                            .minimumScaleFactor(0.75)
+                                    }
+                                    .foregroundStyle(activeSelection == item ? Color.yellow : Color.white.opacity(0.8))
+                                    .frame(width: 58, height: 43)
+                                    .background(RoundedRectangle(cornerRadius: 9)
+                                        .fill(activeSelection == item ? Color.yellow.opacity(0.14) : Color.white.opacity(0.06)))
+                                    .overlay(RoundedRectangle(cornerRadius: 9)
+                                        .stroke(activeSelection == item ? Color.yellow.opacity(0.7) : Color.clear, lineWidth: 1))
+                                }
+                                .buttonStyle(.plain)
                             }
-                            .foregroundStyle(activeSelection == item ? Color.yellow : Color.white.opacity(0.8))
-                            .frame(width: 59, height: 49)
-                            .background(RoundedRectangle(cornerRadius: 10)
-                                .fill(activeSelection == item ? Color.yellow.opacity(0.14) : Color.white.opacity(0.065)))
-                            .overlay(RoundedRectangle(cornerRadius: 10)
-                                .stroke(activeSelection == item ? Color.yellow.opacity(0.75) : Color.clear, lineWidth: 1))
                         }
-                        .buttonStyle(.plain)
+                        .padding(.vertical, 2)
+                    }
+                    .frame(width: 62)
+
+                    ScrollView(.vertical, showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 5) {
+                                Text("快捷控制")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(Color.white.opacity(0.65))
+                                Spacer(minLength: 2)
+                                Picker("镜头", selection: $cam.paramTarget) {
+                                    Text(cam.slotInfos[0].name).tag(0)
+                                    Text(cam.slotInfos[1].name).tag(1)
+                                }
+                                .pickerStyle(.menu)
+                                .tint(.yellow)
+                                .frame(maxWidth: 118)
+                            }
+
+                            if visibleItems.isEmpty {
+                                Text("没有启用的快捷参数，请到设置中开启。")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(Color.white.opacity(0.65))
+                            } else {
+                                controlBody(slot: i, parameter: activeSelection)
+                            }
+                        }
+                        .padding(.trailing, 2)
+                        .padding(.vertical, 2)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 9) {
+                    HStack(spacing: 6) {
+                        Text("快捷控制").font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Color.white.opacity(0.65))
+                        Spacer()
+                        Picker("镜头", selection: $cam.paramTarget) {
+                            Text(cam.slotInfos[0].name).tag(0)
+                            Text(cam.slotInfos[1].name).tag(1)
+                        }
+                        .pickerStyle(.menu)
+                        .tint(.yellow)
+                        .frame(maxWidth: 150)
+                    }
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 7) {
+                            ForEach(visibleItems) { item in
+                                Button {
+                                    withAnimation(.easeOut(duration: 0.15)) { selected = item }
+                                } label: {
+                                    VStack(spacing: 4) {
+                                        Image(systemName: item.icon).font(.system(size: 16, weight: .semibold))
+                                        Text(item.rawValue).font(.system(size: 10, weight: .medium))
+                                    }
+                                    .foregroundStyle(activeSelection == item ? Color.yellow : Color.white.opacity(0.8))
+                                    .frame(width: 59, height: 49)
+                                    .background(RoundedRectangle(cornerRadius: 10)
+                                        .fill(activeSelection == item ? Color.yellow.opacity(0.14) : Color.white.opacity(0.065)))
+                                    .overlay(RoundedRectangle(cornerRadius: 10)
+                                        .stroke(activeSelection == item ? Color.yellow.opacity(0.75) : Color.clear, lineWidth: 1))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+
+                    if visibleItems.isEmpty {
+                        Text("没有启用的快捷参数。请在「设置 → 快捷栏优先显示」中开启至少一项。")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.white.opacity(0.65))
+                    } else {
+                        controlBody(slot: i, parameter: activeSelection)
                     }
                 }
-                .padding(.vertical, 2)
-            }
-
-            if visibleItems.isEmpty {
-                Text("没有启用的快捷参数。请在「设置 → 快捷栏优先显示」中开启至少一项。")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color.white.opacity(0.65))
-            } else {
-                controlBody(slot: i, parameter: activeSelection)
             }
         }
     }
