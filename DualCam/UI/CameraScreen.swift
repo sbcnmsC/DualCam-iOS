@@ -31,8 +31,8 @@ struct CameraScreen: View {
                 : geo.size.width
             let activeOrientation = currentOrientation
             let iconRotationDegrees: CGFloat = activeOrientation == .landscapeLeft
-                ? -90
-                : (activeOrientation == .landscapeRight ? 90 : 0)
+                ? 90
+                : (activeOrientation == .landscapeRight ? -90 : 0)
             let topControlsBottom = insets.top + topBarHeight
             let dockTop = canvasSize.height - insets.bottom - bottomBarHeight
 
