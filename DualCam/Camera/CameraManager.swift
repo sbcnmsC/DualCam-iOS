@@ -29,8 +29,10 @@ private final class CaptureCuePlayer {
     private let sampleRate = 44_100.0
 
     func play(_ cue: Cue) {
-        let enabled = UserDefaults.standard.object(forKey: cue.preferenceKey) as? Bool ?? true
-        guard enabled else { return }
+        let defaults = UserDefaults.standard
+        let masterEnabled = defaults.object(forKey: "dualcam.sound.enabled") as? Bool ?? true
+        let cueEnabled = defaults.object(forKey: cue.preferenceKey) as? Bool ?? true
+        guard masterEnabled, cueEnabled else { return }
         let wav = makeWave(for: cue)
 
         DispatchQueue.main.async { [weak self] in
@@ -1081,6 +1083,17 @@ final class CameraManager: NSObject, ObservableObject {
                 d.whiteBalanceMode = .continuousAutoWhiteBalance
             }
         }
+    }
+
+    /// Restore the selected camera slot's adjustable capture parameters without changing
+    /// layout, output format, timer, or global camera preferences.
+    func resetParameterDefaults(_ slot: Int) {
+        guard slotStates.indices.contains(slot), !isRecording else { return }
+        slotStates[slot] = SlotState()
+        applyZoom(slot)
+        applyFocus(slot)
+        applyExposure(slot)
+        applyWhiteBalance(slot)
     }
 
     func toggleLock(_ slot: Int) {
