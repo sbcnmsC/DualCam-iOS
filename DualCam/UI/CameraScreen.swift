@@ -27,6 +27,10 @@ struct CameraScreen: View {
             // the parameter panel's presentation; it must never resize the camera canvas or controls.
             let controlCanvasWidth: CGFloat = geo.size.width
             let isParameterPanelLandscape = currentOrientation.isLandscape
+            // Keep the floating landscape panel compact in physical landscape coordinates.
+            // It is rotated as one unit back onto the portrait-locked window.
+            let landscapePanelWidth = min(canvasSize.height * 0.90, 760)
+            let landscapePanelHeight = min(canvasSize.width * 0.82, 320)
             let activeOrientation = currentOrientation
             let iconRotationDegrees: CGFloat = activeOrientation == .landscapeLeft
                 ? 90
@@ -89,7 +93,7 @@ struct CameraScreen: View {
                 // its preview remain portrait-locked underneath.
                 if showPanel && isParameterPanelLandscape {
                     ZStack {
-                        Color.black.ignoresSafeArea()
+                        Color.clear
 
                         ToolPanel(
                             tab: $panelTab,
@@ -101,7 +105,7 @@ struct CameraScreen: View {
                                 }
                             }
                         )
-                        .frame(width: canvasSize.height, height: canvasSize.width)
+                        .frame(width: landscapePanelWidth, height: landscapePanelHeight)
                         .rotationEffect(.degrees(iconRotationDegrees))
                         .animation(.spring(response: 0.36, dampingFraction: 0.88), value: iconRotationDegrees)
                         .frame(width: canvasSize.width, height: canvasSize.height)
