@@ -957,6 +957,7 @@ struct QuickParamsTab: View {
 // MARK: - 快捷栏优先显示（持久化）
 
 private struct QuickParameterPreferencesSection: View {
+    @Environment(\.toolPanelIconRotationDegrees) private var iconRotationDegrees
     @AppStorage("dualcam.quickParameterOrder") private var parameterOrder = "曝光,ISO,快门,对焦,白平衡,变焦,分辨率,帧率,定时器,防抖"
     @AppStorage("dualcam.quickParameterVisible") private var visibleParameters = "曝光,ISO,快门,对焦,白平衡,变焦,分辨率,帧率,定时器,防抖"
 
