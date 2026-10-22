@@ -9,6 +9,7 @@ struct CameraScreen: View {
     @State private var timerDraft = 5
     @State private var bottomBarHeight: CGFloat = 222
     @State private var zoomControlBottom: CGFloat = 0
+    @State private var currentOrientation: UIInterfaceOrientation = .portrait
 
     private let topBarHeight: CGFloat = 56
 
@@ -23,7 +24,7 @@ struct CameraScreen: View {
             )
             let canvasOffset = CGSize(width: -insets.leading, height: -insets.top)
             let isLandscape = canvasSize.width > canvasSize.height
-            let activeOrientation = resolvedInterfaceOrientation(for: canvasSize)
+            let activeOrientation = currentOrientation
             let iconRotationDegrees: CGFloat = activeOrientation == .landscapeLeft
                 ? -90
                 : (activeOrientation == .landscapeRight ? 90 : 0)
@@ -107,12 +108,29 @@ struct CameraScreen: View {
                         .zIndex(20)
                 }
             }
-            .onAppear { updateFreeAspect(for: canvasSize) }
-            .onChange(of: canvasSize) { _, newSize in updateFreeAspect(for: newSize) }
+            .onAppear {
+                UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+                currentOrientation = resolvedInterfaceOrientation(for: canvasSize)
+                updateFreeAspect(for: canvasSize)
+            }
+            .onDisappear {
+                UIDevice.current.endGeneratingDeviceOrientationNotifications()
+            }
+            .onChange(of: canvasSize) { _, newSize in
+                let orientation = resolvedInterfaceOrientation(for: newSize)
+                withAnimation(.smooth(duration: 0.28)) {
+                    currentOrientation = orientation
+                }
+                updateFreeAspect(for: newSize)
+            }
             .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
                 // Scene orientation distinguishes left- and right-landscape even when bounds stay the same.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                    cam.setInterfaceOrientation(resolvedInterfaceOrientation(for: canvasSize))
+                    let orientation = resolvedInterfaceOrientation(for: canvasSize)
+                    withAnimation(.smooth(duration: 0.28)) {
+                        currentOrientation = orientation
+                    }
+                    cam.setInterfaceOrientation(orientation)
                 }
             }
             .onPreferenceChange(CameraBottomBarHeightPreferenceKey.self) { height in
@@ -133,17 +151,11 @@ struct CameraScreen: View {
     }
 
     private var geoOrientationIsLandscape: Bool {
-        guard let scene = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .first(where: { $0.activationState == .foregroundActive }) else { return false }
-        return scene.interfaceOrientation.isLandscape
+        currentOrientation.isLandscape
     }
 
     private var iconRotationForAnimation: CGFloat {
-        guard let scene = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .first(where: { $0.activationState == .foregroundActive }) else { return 0 }
-        switch scene.interfaceOrientation {
+        switch currentOrientation {
         case .landscapeLeft: return -90
         case .landscapeRight: return 90
         default: return 0
