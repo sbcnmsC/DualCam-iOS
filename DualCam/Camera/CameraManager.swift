@@ -1965,7 +1965,11 @@ final class CameraManager: NSObject, ObservableObject {
         guard !isRecording else { return }
         let useFlash = flashEnabled
         let slot = mainSlot
-        videoQueue.async {
+
+        // Play the start cue before creating writers. Leave a short lead-in so the cue
+        // finishes before the first audio/video samples can enter the movie.
+        CaptureCuePlayer.shared.play(.recordingStart)
+        videoQueue.asyncAfter(deadline: .now() + 0.35) {
             self.lock.lock()
             let c = self.sharedCfg
             let sizes = self.bufferSizes
@@ -2024,7 +2028,6 @@ final class CameraManager: NSObject, ObservableObject {
                 self.recLock.unlock()
                 DispatchQueue.main.async {
                     self.isRecording = true
-                    CaptureCuePlayer.shared.play(.recordingStart)
                     self.recordSeconds = 0
                     self.recTimer?.invalidate()
                     self.recTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -2041,7 +2044,6 @@ final class CameraManager: NSObject, ObservableObject {
     func stopRecording() {
         guard isRecording else { return }
         isRecording = false
-        CaptureCuePlayer.shared.play(.recordingStop)
         recTimer?.invalidate()
         recTimer = nil
         let slot = mainSlot
@@ -2057,14 +2059,22 @@ final class CameraManager: NSObject, ObservableObject {
             var all: [VideoRecorder] = []
             if let r = rec { all.append(r) }
             for r in raws { if let r = r { all.append(r) } }
+            let finishGroup = DispatchGroup()
             for r in all {
+                finishGroup.enter()
                 r.finish { url in
-                    guard let url = url else {
+                    if let url = url {
+                        self.saveVideo(url)
+                    } else {
                         self.showToast("录像保存失败")
-                        return
                     }
-                    self.saveVideo(url)
+                    finishGroup.leave()
                 }
+            }
+            // Play the stop cue only after every movie writer has closed its file,
+            // so the cue cannot be captured into any of the saved movie audio tracks.
+            finishGroup.notify(queue: .main) {
+                CaptureCuePlayer.shared.play(.recordingStop)
             }
         }
     }
