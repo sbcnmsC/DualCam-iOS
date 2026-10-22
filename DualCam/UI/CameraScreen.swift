@@ -90,7 +90,7 @@ struct CameraScreen: View {
         }
     }
 
-    private func fitSize(in size: CGSize) {
+    private func fitSize(in size: CGSize) -> CGSize {
         let availableHeight = max(size.height, 100)
         if cam.cfg.aspect == .free {
             // Full device canvas; user can crop the saved image later.
