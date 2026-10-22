@@ -676,6 +676,11 @@ struct TopBar: View {
                                badge: cam.timerSeconds == 0 ? nil : "\(cam.timerSeconds)") {
                         onTimerTap()
                     }
+                    iconButton("arrow.triangle.2.circlepath",
+                               active: false,
+                               label: "切换主副摄像头") {
+                        cam.swapCameras()
+                    }
                 }
             }
 
@@ -743,9 +748,9 @@ struct BottomBar: View {
     private var splitButton: some View {
         Button { cam.toggleLayout() } label: {
             Image(systemName: cam.cfg.layout == .pip ? "rectangle.on.rectangle" : "rectangle.split.1x2")
-                .font(.system(size: 19, weight: .semibold))
+                .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(Color.yellow)
-                .frame(width: 48, height: 48)
+                .frame(width: 42, height: 42)
                 .background(Circle().fill(Color.black))
                 .overlay(Circle().stroke(Color.yellow, lineWidth: 2))
         }
@@ -765,9 +770,9 @@ struct BottomBar: View {
             }
         } label: {
             Image(systemName: "slider.horizontal.3")
-                .font(.system(size: 20, weight: .semibold))
+                .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(showPanel && panelTab == .params ? Color.yellow : Color.white)
-                .frame(width: 48, height: 48)
+                .frame(width: 42, height: 42)
                 .background(Circle().fill(Color.white.opacity(0.12)))
                 .overlay(Circle().stroke(
                     showPanel && panelTab == .params ? Color.yellow.opacity(0.7) : Color.clear,
@@ -778,16 +783,34 @@ struct BottomBar: View {
         .accessibilityLabel("快捷参数")
     }
 
-    private var cameraSwitchButton: some View {
-        Button { cam.swapCameras() } label: {
-            Image(systemName: "arrow.triangle.2.circlepath")
-                .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(Color.white)
-                .frame(width: 48, height: 48)
-                .background(Circle().fill(Color.white.opacity(0.12)))
+    /// Toggle still-photo/video capture mode with a single icon.
+    private var captureModeSwitchButton: some View {
+        Button {
+            guard !cam.isRecording else { return }
+            withAnimation(.easeInOut(duration: 0.15)) {
+                cam.captureMode = cam.captureMode == .photo ? .video : .photo
+            }
+        } label: {
+            ZStack(alignment: .bottomTrailing) {
+                Image(systemName: cam.captureMode == .photo ? "video.fill" : "camera.fill")
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(width: 42, height: 42)
+                    .background(Circle().fill(Color.white.opacity(0.12)))
+                Image(systemName: "arrow.left.arrow.right")
+                    .font(.system(size: 8, weight: .bold))
+                    .padding(3)
+                    .background(Circle().fill(Color.black.opacity(0.92)))
+                    .offset(x: 2, y: 2)
+            }
+            .foregroundStyle(cam.captureMode == .photo ? Color.white : Color.red.opacity(0.95))
+            .frame(width: 44, height: 44)
+            .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("切换主副摄像头")
+        .disabled(cam.isRecording)
+        .opacity(cam.isRecording ? 0.4 : 1)
+        .accessibilityLabel(cam.captureMode == .photo ? "切换到录像" : "切换到拍照")
+        .accessibilityHint("单击切换拍摄模式")
     }
 
     var body: some View {
@@ -795,45 +818,28 @@ struct BottomBar: View {
             // 倍率条固定在快门上方。
             zoomRow
 
-            // 快门行：左侧相册；中央快门；右侧分屏和参数并排。
+            // 同一行：左侧相册，中央快门，右侧依次为模式切换、分屏和参数。
             ZStack {
                 HStack(spacing: 0) {
                     Spacer(minLength: 0)
                     ShutterButton()
                     Spacer(minLength: 0)
                 }
-
-                HStack(alignment: .center, spacing: 10) {
+                HStack(alignment: .center, spacing: 8) {
                     ThumbnailButton(action: onAlbumTap)
-                    Spacer(minLength: 8)
-                    HStack(spacing: 8) {
+                    Spacer(minLength: 4)
+                    HStack(spacing: 4) {
+                        captureModeSwitchButton
                         splitButton
                         paramsButton
                     }
                 }
-                .padding(.horizontal, 22)
+                .padding(.horizontal, 12)
             }
-            .frame(height: 80)
-
-            // 最底行固定为视频/照片切换；摄像头交换按钮保留在右侧。
-            ZStack {
-                HStack {
-                    Spacer(minLength: 0)
-                    cameraSwitchButton
-                }
-                .padding(.horizontal, 28)
-
-                HStack {
-                    Spacer(minLength: 0)
-                    ModePill()
-                    Spacer(minLength: 0)
-                }
-            }
-            .frame(height: 52)
+            .frame(height: 84)
         }
         .padding(.top, 8)
         .padding(.bottom, 8)
-        // Gradient is a visual background only; buttons stay above it and fully tappable.
         .background {
             LinearGradient(
                 colors: [Color.black.opacity(0.02), Color.black.opacity(0.72)],
@@ -892,43 +898,6 @@ struct ThumbnailButton: View {
         .buttonStyle(.plain)
         .accessibilityLabel("打开相册")
         .accessibilityHint("在应用内查看已保存的照片和视频")
-    }
-}
-
-/// 「视频 / 照片」胶囊切换，选中项为黄字高亮，支持左右滑动。
-struct ModePill: View {
-    @EnvironmentObject private var cam: CameraManager
-
-    var body: some View {
-        HStack(spacing: 0) {
-            item(.video)
-            item(.photo)
-        }
-        .padding(4)
-        .background(Capsule().fill(Color.white.opacity(0.12)))
-        .contentShape(Capsule())
-        .gesture(
-            DragGesture(minimumDistance: 20)
-                .onEnded { v in
-                    guard !cam.isRecording else { return }
-                    if v.translation.width < -20 { cam.captureMode = .photo }
-                    if v.translation.width > 20 { cam.captureMode = .video }
-                }
-        )
-    }
-
-    private func item(_ mode: CaptureMode) -> some View {
-        let selected = cam.captureMode == mode
-        return Button {
-            if !cam.isRecording { cam.captureMode = mode }
-        } label: {
-            Text(mode == .video ? "视频" : "照片")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(selected ? Color.yellow : Color.white.opacity(0.9))
-                .frame(width: 84, height: 40)
-                .background(Capsule().fill(selected ? Color.white.opacity(0.16) : Color.clear))
-        }
-        .buttonStyle(.plain)
     }
 }
 
