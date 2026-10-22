@@ -23,12 +23,10 @@ struct CameraScreen: View {
                 height: geo.size.height + insets.top + insets.bottom
             )
             let canvasOffset = CGSize(width: -insets.leading, height: -insets.top)
-            let isLandscape = canvasSize.width > canvasSize.height
-            // Keep the UI's portrait-width layout in the middle of the landscape screen.
-            // The view bounds may be landscape, but the controls must not redistribute across that width.
-            let controlCanvasWidth: CGFloat = isLandscape
-                ? min(canvasSize.height, geo.size.width)
-                : geo.size.width
+            // The app window remains portrait-locked. Physical device orientation only selects
+            // the parameter panel's presentation; it must never resize the camera canvas or controls.
+            let controlCanvasWidth: CGFloat = geo.size.width
+            let isParameterPanelLandscape = currentOrientation.isLandscape
             let activeOrientation = currentOrientation
             let iconRotationDegrees: CGFloat = activeOrientation == .landscapeLeft
                 ? 90
@@ -68,8 +66,18 @@ struct CameraScreen: View {
                     Spacer(minLength: 0)
 
                     if showPanel {
-                        ToolPanel(tab: $panelTab, isLandscape: false, rotationDegrees: iconRotationDegrees)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                        ToolPanel(
+                            tab: $panelTab,
+                            isLandscape: isParameterPanelLandscape,
+                            rotationDegrees: iconRotationDegrees
+                        )
+                        .id(isParameterPanelLandscape ? "landscape-parameter-panel" : "portrait-parameter-panel")
+                        .transition(
+                            .asymmetric(
+                                insertion: .opacity.combined(with: .move(edge: isParameterPanelLandscape ? .trailing : .bottom)),
+                                removal: .opacity.combined(with: .move(edge: isParameterPanelLandscape ? .bottom : .trailing))
+                            )
+                        )
                     }
 
                     BottomBar(
@@ -111,7 +119,7 @@ struct CameraScreen: View {
             }
             .onChange(of: canvasSize) { _, newSize in
                 let orientation = resolvedInterfaceOrientation(for: newSize)
-                withAnimation(.smooth(duration: 0.28)) {
+                withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
                     currentOrientation = orientation
                 }
                 updateFreeAspect(for: newSize)
