@@ -568,6 +568,10 @@ struct ParamsTab: View {
 struct SettingsTab: View {
     @EnvironmentObject private var cam: CameraManager
     @Environment(\.toolPanelIconRotationDegrees) private var iconRotationDegrees
+    @AppStorage("dualcam.sound.enabled") private var cueSoundsEnabled = true
+    @AppStorage("dualcam.sound.shutter") private var shutterSoundEnabled = true
+    @AppStorage("dualcam.sound.recordingStart") private var recordingStartSoundEnabled = true
+    @AppStorage("dualcam.sound.recordingStop") private var recordingStopSoundEnabled = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -667,6 +671,32 @@ struct SettingsTab: View {
             Toggle("前置镜像", isOn: $cam.cfg.mirrorFront).font(.system(size: 13))
             Toggle("三分参考线", isOn: $cam.cfg.showGrid).font(.system(size: 13))
 
+            VStack(alignment: .leading, spacing: 8) {
+                Label("提示音", systemImage: "speaker.wave.2.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                Toggle("启用全部提示音", isOn: $cueSoundsEnabled)
+                    .font(.system(size: 12))
+                    .tint(.yellow)
+                Toggle("拍照快门提示音", isOn: $shutterSoundEnabled)
+                    .font(.system(size: 12))
+                    .tint(.yellow)
+                    .disabled(!cueSoundsEnabled)
+                Toggle("开始录像提示音", isOn: $recordingStartSoundEnabled)
+                    .font(.system(size: 12))
+                    .tint(.yellow)
+                    .disabled(!cueSoundsEnabled)
+                Toggle("结束录像提示音", isOn: $recordingStopSoundEnabled)
+                    .font(.system(size: 12))
+                    .tint(.yellow)
+                    .disabled(!cueSoundsEnabled)
+                Text("关闭总开关会静音所有操作提示，不影响视频麦克风录音。")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.white.opacity(0.6))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.045)))
+
             Divider().overlay(Color.white.opacity(0.12))
             QuickParameterPreferencesSection()
         }
@@ -711,6 +741,7 @@ struct QuickParamsTab: View {
     @State private var selected: QuickParameter = .exposure
     @AppStorage("dualcam.quickParameterOrder") private var parameterOrder = "曝光,ISO,快门,对焦,白平衡,变焦,分辨率,帧率,定时器,防抖"
     @AppStorage("dualcam.quickParameterVisible") private var visibleParameters = "曝光,ISO,快门,对焦,白平衡,变焦,分辨率,帧率,定时器,防抖"
+    @AppStorage("dualcam.quickParameterControlsLocked") private var controlsLocked = false
 
     private var orderedParameters: [QuickParameter] {
         let stored = parameterOrder.split(separator: ",").compactMap { QuickParameter(rawValue: String($0)) }
@@ -744,6 +775,8 @@ struct QuickParamsTab: View {
                         .tint(.yellow)
                         .frame(maxWidth: 170)
                     }
+
+                    parameterActionBar(slot: i)
 
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
@@ -779,6 +812,7 @@ struct QuickParamsTab: View {
                     } else {
                         ScrollView(.vertical, showsIndicators: false) {
                             controlBody(slot: i, parameter: activeSelection)
+                                .disabled(controlsLocked)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.vertical, 2)
                         }
@@ -799,6 +833,8 @@ struct QuickParamsTab: View {
                         .tint(.yellow)
                         .frame(maxWidth: 150)
                     }
+
+                    parameterActionBar(slot: i)
 
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 7) {
@@ -832,9 +868,47 @@ struct QuickParamsTab: View {
                             .foregroundStyle(Color.white.opacity(0.65))
                     } else {
                         controlBody(slot: i, parameter: activeSelection)
+                            .disabled(controlsLocked)
                     }
                 }
             }
+        }
+    }
+
+    private func parameterActionBar(slot: Int) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                guard !cam.isRecording else { return }
+                cam.resetParameterDefaults(slot)
+                var defaults = cam.cfg
+                defaults.resolution = .maximum
+                defaults.fps = 30
+                defaults.stabilization = false
+                cam.cfg = defaults
+                cam.timerSeconds = 0
+            } label: {
+                Label("恢复默认", systemImage: "arrow.counterclockwise")
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 32)
+                    .background(Capsule().fill(Color.white.opacity(0.09)))
+            }
+            .buttonStyle(.plain)
+            .disabled(cam.isRecording)
+
+            Button {
+                controlsLocked.toggle()
+            } label: {
+                Label(controlsLocked ? "解锁参数" : "锁定参数",
+                      systemImage: controlsLocked ? "lock.open.fill" : "lock.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(controlsLocked ? Color.yellow : Color.white.opacity(0.9))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 32)
+                    .background(Capsule().fill(controlsLocked ? Color.yellow.opacity(0.13) : Color.white.opacity(0.09)))
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint(controlsLocked ? "重新启用快捷参数调节" : "禁用快捷参数调节，避免误触")
         }
     }
 
