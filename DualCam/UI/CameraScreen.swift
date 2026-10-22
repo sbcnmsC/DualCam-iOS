@@ -70,7 +70,10 @@ struct CameraScreen: View {
                         onAlbumTap: { showPhotoLibrary = true }
                     )
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Keep the whole bottom control cluster above the physical screen edge and
+                // home-indicator area. The preview remains full-canvas behind these controls.
+                .padding(.bottom, max(insets.bottom, 32))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .zIndex(5)
 
                 OverlayLayer(topSafeAreaInset: insets.top)
