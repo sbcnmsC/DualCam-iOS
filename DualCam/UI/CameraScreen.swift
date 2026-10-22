@@ -7,6 +7,7 @@ struct CameraScreen: View {
     @State private var panelTab: PanelTab = .pip
     @State private var showTimerSettings = false
     @State private var timerDraft = 5
+    @State private var bottomBarHeight: CGFloat = 222
 
     private let topBarHeight: CGFloat = 56
 
@@ -21,18 +22,22 @@ struct CameraScreen: View {
             )
             let canvasOffset = CGSize(width: -insets.leading, height: -insets.top)
             let previewSize = fitSize(in: canvasSize)
+            // The zoom row is the top edge of the bottom camera dock. Fixed aspect ratios
+            // align their preview bottom to this edge; tall ratios extend behind the controls.
+            let dockTop = canvasSize.height - insets.bottom - bottomBarHeight
+            let previewTop = cam.cfg.aspect == .free
+                ? 0
+                : max(insets.top, dockTop - previewSize.height)
 
             ZStack(alignment: .topLeading) {
                 Color.black.ignoresSafeArea()
 
-                // Camera preview and gesture canvas extend edge-to-edge under the controls.
-                VStack(spacing: 0) {
-                    PreviewStage(size: previewSize)
-                        .frame(width: previewSize.width, height: previewSize.height)
-                    Spacer(minLength: 0)
-                }
-                .frame(width: canvasSize.width, height: canvasSize.height, alignment: .top)
-                .offset(x: canvasOffset.width, y: canvasOffset.height)
+                // Only the preview moves/scales with the selected aspect ratio.
+                // The camera canvas remains edge-to-edge behind the safe-area control layer.
+                PreviewStage(size: previewSize)
+                    .frame(width: previewSize.width, height: previewSize.height)
+                    .frame(width: canvasSize.width, height: canvasSize.height, alignment: .top)
+                    .offset(x: canvasOffset.width, y: canvasOffset.height + previewTop)
 
                 // Controls intentionally stay in the GeometryReader's safe area.
                 VStack(spacing: 0) {
@@ -66,6 +71,10 @@ struct CameraScreen: View {
             }
             .onAppear { updateFreeAspect(for: canvasSize) }
             .onChange(of: canvasSize) { _, newSize in updateFreeAspect(for: newSize) }
+            .onPreferenceChange(CameraBottomBarHeightPreferenceKey.self) { height in
+                guard height > 0, abs(bottomBarHeight - height) > 1 else { return }
+                bottomBarHeight = height
+            }
         }
         .background(Color.black.ignoresSafeArea())
         .statusBarHidden(true)
@@ -689,6 +698,13 @@ struct TopBar: View {
 
 // MARK: - 底部栏
 
+private struct CameraBottomBarHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 222
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 struct BottomBar: View {
     @EnvironmentObject private var cam: CameraManager
     @Binding var showPanel: Bool
@@ -763,7 +779,19 @@ struct BottomBar: View {
         }
         .padding(.top, 8)
         .padding(.bottom, 8)
-        .background(Color.black)
+        // Floating camera controls stay legible, while the live image remains visible
+        // underneath them for tall aspect ratios. Short ratios naturally reveal black space.
+        .background {
+            LinearGradient(
+                colors: [Color.black.opacity(0.02), Color.black.opacity(0.72)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .allowsHitTesting(false)
+        }
+        .background(GeometryReader { proxy in
+            Color.clear.preference(key: CameraBottomBarHeightPreferenceKey.self, value: proxy.size.height)
+        })
     }
 }
 
