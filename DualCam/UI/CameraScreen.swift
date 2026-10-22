@@ -22,9 +22,6 @@ struct CameraScreen: View {
             )
             let canvasOffset = CGSize(width: -insets.leading, height: -insets.top)
             let previewSize = fitSize(in: canvasSize)
-            // Tall/full-screen previews keep zoom chips beneath the shutter, matching the
-            // native camera's control hierarchy. Short fixed ratios place zoom near the frame edge.
-            let zoomBelowShutter = cam.cfg.aspect == .free || previewSize.height > canvasSize.height * 0.78
             // The zoom row is the top edge of the bottom camera dock. Fixed aspect ratios
             // align their preview bottom to this edge; tall ratios extend behind the controls.
             let dockTop = canvasSize.height - insets.bottom - bottomBarHeight
@@ -59,11 +56,11 @@ struct CameraScreen: View {
 
                     BottomBar(
                         showPanel: $showPanel,
-                        panelTab: $panelTab,
-                        zoomBelowShutter: zoomBelowShutter
+                        panelTab: $panelTab
                     )
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .zIndex(5)
 
                 OverlayLayer(topSafeAreaInset: insets.top)
                     .frame(width: canvasSize.width, height: canvasSize.height)
@@ -716,7 +713,6 @@ struct BottomBar: View {
     @EnvironmentObject private var cam: CameraManager
     @Binding var showPanel: Bool
     @Binding var panelTab: PanelTab
-    var zoomBelowShutter = false
 
     private var zoomRow: some View {
         HStack {
@@ -729,9 +725,8 @@ struct BottomBar: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            if !zoomBelowShutter {
-                zoomRow
-            }
+            // 参考原生相机：倍率条固定在快门上方，切换画幅不改变按钮顺序。
+            zoomRow
 
             // 快门行：左 = 布局，右 = 快捷参数入口
             HStack {
@@ -774,10 +769,7 @@ struct BottomBar: View {
             }
             .padding(.horizontal, 28)
 
-            if zoomBelowShutter {
-                zoomRow
-            }
-
+            // 最底部固定为模式切换行，左侧相册入口和右侧镜头交换保留。
             // 模式行：缩略图 / 视频·照片 / 换主副画面
             HStack {
                 ThumbnailButton()
@@ -833,6 +825,7 @@ struct ThumbnailButton: View {
             .overlay(Circle().stroke(Color.white.opacity(0.25), lineWidth: 1))
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("查看相册")
     }
 }
 
