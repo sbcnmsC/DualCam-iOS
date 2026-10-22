@@ -53,9 +53,11 @@ struct ToolPanel: View {
                             .lineLimit(1)
                             .minimumScaleFactor(0.7)
                     }
+                    // Swap the layout footprint before rotating so neighboring tabs do not overlap.
+                    .frame(width: 42, height: 54)
+                    .rotationEffect(.degrees(vertical ? rotationDegrees : 0))
                     .frame(maxWidth: .infinity)
                     .frame(height: 42)
-                    .rotationEffect(.degrees(vertical ? rotationDegrees : 0))
                 } else {
                     HStack(spacing: 5) {
                         Image(systemName: item.icon)
