@@ -48,11 +48,6 @@ enum Compositor {
             return (CGRect(x: 0, y: 0, width: 1, height: 1), pipRectNormalized(cfg: cfg))
         case .split:
             let r = min(max(cfg.splitRatio, 0.2), 0.8)
-            if cfg.aspectRatio > 1 {
-                // Landscape output: main camera on the left, secondary camera on the right.
-                return (CGRect(x: 0, y: 0, width: r, height: 1),
-                        CGRect(x: r, y: 0, width: 1 - r, height: 1))
-            }
             return (CGRect(x: 0, y: 0, width: 1, height: r),
                     CGRect(x: 0, y: r, width: 1, height: 1 - r))
         }
@@ -129,20 +124,6 @@ enum Compositor {
 
         case .split:
             let r = min(max(cfg.splitRatio, 0.2), 0.8)
-            if W > H {
-                let leftW = (W * r / 2).rounded() * 2
-                let leftRect = CGRect(x: 0, y: 0, width: leftW, height: H)
-                let rightRect = CGRect(x: leftW, y: 0, width: W - leftW, height: H)
-                let left = fill(main, into: leftRect)
-                let right: CIImage
-                if let sub = sub {
-                    right = fill(sub, into: rightRect)
-                } else {
-                    right = CIImage(color: CIColor(red: 0, green: 0, blue: 0)).cropped(to: rightRect)
-                }
-                return left.composited(over: right).cropped(to: full)
-            }
-
             let topH = (H * r / 2).rounded() * 2
             let topRect = CGRect(x: 0, y: H - topH, width: W, height: topH)
             let bottomRect = CGRect(x: 0, y: 0, width: W, height: H - topH)
