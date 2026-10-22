@@ -5,6 +5,7 @@ import SwiftUI
 struct ToolPanel: View {
     @Binding var tab: PanelTab
     var isLandscape: Bool = false
+    var rotationDegrees: CGFloat = 90
 
     private var selectedContent: some View {
         Group {
@@ -25,6 +26,7 @@ struct ToolPanel: View {
                 if vertical {
                     VStack(spacing: 3) {
                         Image(systemName: item.icon)
+                            .rotationEffect(.degrees(vertical ? rotationDegrees : 0))
                             .font(.system(size: 15, weight: .semibold))
                         Text(item.rawValue)
                             .font(.system(size: 9, weight: .medium))
@@ -722,7 +724,9 @@ struct QuickParamsTab: View {
                                     withAnimation(.easeOut(duration: 0.15)) { selected = item }
                                 } label: {
                                     VStack(spacing: 4) {
-                                        Image(systemName: item.icon).font(.system(size: 16, weight: .semibold))
+                                        Image(systemName: item.icon)
+                                    .rotationEffect(.degrees(isLandscape ? rotationDegrees : 0))
+                                    .font(.system(size: 16, weight: .semibold))
                                         Text(item.rawValue).font(.system(size: 10, weight: .medium))
                                     }
                                     .foregroundStyle(activeSelection == item ? Color.yellow : Color.white.opacity(0.8))
