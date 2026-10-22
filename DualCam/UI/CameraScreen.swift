@@ -24,6 +24,11 @@ struct CameraScreen: View {
             )
             let canvasOffset = CGSize(width: -insets.leading, height: -insets.top)
             let isLandscape = canvasSize.width > canvasSize.height
+            // Keep the UI's portrait-width layout in the middle of the landscape screen.
+            // The view bounds may be landscape, but the controls must not redistribute across that width.
+            let controlCanvasWidth: CGFloat = isLandscape
+                ? min(canvasSize.height, geo.size.width)
+                : geo.size.width
             let activeOrientation = currentOrientation
             let iconRotationDegrees: CGFloat = activeOrientation == .landscapeLeft
                 ? -90
@@ -76,6 +81,7 @@ struct CameraScreen: View {
                         iconRotationDegrees: iconRotationDegrees
                     )
                 }
+                .frame(width: controlCanvasWidth, maxHeight: .infinity, alignment: .top)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .zIndex(5)
 
