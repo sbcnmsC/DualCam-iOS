@@ -8,6 +8,7 @@ struct CameraScreen: View {
     @State private var showTimerSettings = false
     @State private var timerDraft = 5
     @State private var bottomBarHeight: CGFloat = 222
+    @State private var zoomControlBottom: CGFloat = 0
 
     private let topBarHeight: CGFloat = 56
 
@@ -29,9 +30,16 @@ struct CameraScreen: View {
             // possible frame instead of shrinking to the control-free area.
             let previewSize = fitSize(in: canvasSize)
             let previewBottomLimit = dockTop - 12
-            let previewTop = cam.cfg.aspect == .free
-                ? 0
-                : max(topControlsBottom + 14, previewBottomLimit - previewSize.height)
+            // For 9:16, align the bottom edge of the live preview to the measured bottom
+            // edge of the zoom-control row. This moves the tall frame upward without resizing it.
+            let previewTop: CGFloat
+            if cam.cfg.aspect == .free {
+                previewTop = 0
+            } else if cam.cfg.aspect == .r916 && zoomControlBottom > 0 {
+                previewTop = zoomControlBottom - previewSize.height
+            } else {
+                previewTop = max(topControlsBottom + 14, previewBottomLimit - previewSize.height)
+            }
 
             ZStack(alignment: .topLeading) {
                 Color.black.ignoresSafeArea()
@@ -82,6 +90,10 @@ struct CameraScreen: View {
             .onPreferenceChange(CameraBottomBarHeightPreferenceKey.self) { height in
                 guard height > 0, abs(bottomBarHeight - height) > 1 else { return }
                 bottomBarHeight = height
+            }
+            .onPreferenceChange(CameraZoomBottomPreferenceKey.self) { bottom in
+                guard bottom > 0, abs(zoomControlBottom - bottom) > 0.5 else { return }
+                zoomControlBottom = bottom
             }
         }
         // Preserve Build 94's safe-area measurement and expand the preview canvas explicitly.
@@ -728,6 +740,13 @@ struct TopBar: View {
 
 // MARK: - 底部栏
 
+private struct CameraZoomBottomPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 private struct CameraBottomBarHeightPreferenceKey: PreferenceKey {
     static var defaultValue: CGFloat = 222
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
@@ -752,6 +771,14 @@ struct BottomBar: View {
             Spacer(minLength: 0)
         }
         .padding(.top, 2)
+        // Measure the actual zoom control's bottom edge in screen coordinates.
+        // The 9:16 preview uses this measurement as its lower alignment edge.
+        .background(GeometryReader { proxy in
+            Color.clear.preference(
+                key: CameraZoomBottomPreferenceKey.self,
+                value: proxy.frame(in: .global).maxY
+            )
+        })
     }
 
     private var splitButton: some View {
