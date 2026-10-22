@@ -5,7 +5,7 @@ name: Build IPA
 # - 没配置 → 产出「未签名」IPA，用 Sideloadly / AltStore 用自己的 Apple ID 签名后安装
 on:
   push:
-    branches: [main]
+    branches: [main, optimize/high-res-preview-app-icon]
   workflow_dispatch:
 
 permissions:
@@ -22,8 +22,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: Install build tools
+        run: brew install xcodegen librsvg
+
+      - name: Render App Icon
+        run: ./scripts/generate-app-icon.sh
 
       - name: Generate Xcode project
         run: |

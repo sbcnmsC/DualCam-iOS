@@ -34,6 +34,9 @@ enum CanvasAspect: String, CaseIterable, Identifiable {
     case r916 = "9:16"
     case r34 = "3:4"
     case r11 = "1:1"
+    case r169 = "16:9"
+    case r219 = "21:9"
+    case free = "全屏自由"
     var id: String { rawValue }
     /// 宽 / 高
     var value: CGFloat {
@@ -41,6 +44,9 @@ enum CanvasAspect: String, CaseIterable, Identifiable {
         case .r916: return 9.0 / 16.0
         case .r34: return 3.0 / 4.0
         case .r11: return 1.0
+        case .r169: return 16.0 / 9.0
+        case .r219: return 21.0 / 9.0
+        case .free: return 9.0 / 16.0
         }
     }
 }
@@ -92,7 +98,12 @@ struct Config: Equatable {
     // 布局
     var layout: LayoutMode = .pip
     var swapped = false
-    var aspect: CanvasAspect = .r34
+    var aspect: CanvasAspect = .free
+    /// Updated from the available preview bounds when full-screen free aspect is selected.
+    var freeAspect: CGFloat = 9.0 / 16.0
+    var aspectRatio: CGFloat {
+        aspect == .free ? min(max(freeAspect, 0.2), 4.0) : aspect.value
+    }
     var pipCenter = CGPoint(x: 0.76, y: 0.20)   // 归一化，左上角为原点
     var pipWidth: CGFloat = 0.32                // 占画布宽度的比例
     var pipRatio: PiPRatio = .r34
@@ -107,10 +118,10 @@ struct Config: Equatable {
     var filter: FilterKind = .original
     var filterIntensity: CGFloat = 1
     // 采集
-    var resolution: ResolutionOption = .p1080
+    var resolution: ResolutionOption = .maximum
     var fps = 30
     var outputMode: OutputMode = .original
-    var livePhoto = true
+    var livePhoto = false
     var lowLight = true
     var stabilization = false   // 默认关闭：防抖会让预览多延迟几帧
     var showGrid = true
@@ -199,10 +210,12 @@ struct FocusMarker: Equatable {
     let id: UUID
     var point: CGPoint   // 归一化，相对预览区域
     var exposureBias: Float?
+    var slot: Int?       // 被点按对焦 / 曝光调节的镜头槽位
 
-    init(point: CGPoint, exposureBias: Float? = nil, id: UUID = UUID()) {
+    init(point: CGPoint, exposureBias: Float? = nil, slot: Int? = nil, id: UUID = UUID()) {
         self.id = id
         self.point = point
         self.exposureBias = exposureBias
+        self.slot = slot
     }
 }
