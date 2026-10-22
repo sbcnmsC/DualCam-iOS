@@ -654,7 +654,7 @@ struct QuickParamsTab: View {
                                     VStack(spacing: 3) {
                                         Image(systemName: item.icon)
                                             .font(.system(size: 14, weight: .semibold))
-                                            .rotationEffect(.degrees(90))
+                                            .rotationEffect(.degrees(rotationDegrees))
                                         Text(item.rawValue)
                                             .font(.system(size: 9, weight: .medium))
                                             .lineLimit(1)
