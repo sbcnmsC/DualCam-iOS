@@ -175,16 +175,18 @@ struct CameraScreen: View {
     }
 
     private func resolvedInterfaceOrientation(for size: CGSize) -> UIInterfaceOrientation {
-        let landscapeBounds = size.width > size.height
-        if let scene = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .first(where: { $0.activationState == .foregroundActive }) {
-            let orientation = scene.interfaceOrientation
-            if orientation != .unknown && orientation.isLandscape == landscapeBounds {
-                return orientation
-            }
+        // The app interface is locked to portrait. Read physical device orientation only
+        // for rotating the small symbols; never use it to rotate the preview or rearrange controls.
+        switch UIDevice.current.orientation {
+        case .landscapeLeft:
+            return .landscapeLeft
+        case .landscapeRight:
+            return .landscapeRight
+        case .portrait, .portraitUpsideDown:
+            return .portrait
+        default:
+            return currentOrientation
         }
-        return landscapeBounds ? .landscapeLeft : .portrait
     }
 
     private func updateFreeAspect(for size: CGSize) {
