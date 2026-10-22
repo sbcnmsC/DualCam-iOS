@@ -89,36 +89,70 @@ struct ToolPanel: View {
     var body: some View {
         Group {
             if isLandscape {
-                // This branch is authored in landscape coordinates. CameraScreen rotates the
-                // complete panel 90 degrees, so labels, icons, and controls share the same reading direction.
-                VStack(spacing: 8) {
-                    HStack(spacing: 6) {
+                // Compact landscape layout: a narrow navigation rail on the left,
+                // with the selected tab's complete detail UI on the right.
+                HStack(spacing: 8) {
+                    VStack(spacing: 5) {
                         ForEach(PanelTab.allCases) { item in
-                            tabButton(item, vertical: false, showTitle: true)
-                                .frame(maxWidth: .infinity)
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.18)) { tab = item }
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: item.icon)
+                                        .font(.system(size: 14, weight: .semibold))
+                                        .frame(width: 18)
+                                    Text(item.rawValue)
+                                        .font(.system(size: 11, weight: .medium))
+                                        .lineLimit(1)
+                                    Spacer(minLength: 0)
+                                }
+                                .foregroundStyle(tab == item ? Color.yellow : Color.white.opacity(0.74))
+                                .padding(.horizontal, 9)
+                                .frame(width: 112, height: 38)
+                                .background {
+                                    if tab == item {
+                                        RoundedRectangle(cornerRadius: 10)
+                                            .fill(Color.white.opacity(0.14))
+                                    }
+                                }
+                            }
+                            .buttonStyle(.plain)
                         }
+
+                        Spacer(minLength: 0)
+
                         Button {
                             onClose?()
                         } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 14, weight: .bold))
-                                .frame(width: 34, height: 34)
-                                .background(Circle().fill(Color.white.opacity(0.10)))
+                            HStack(spacing: 8) {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 12, weight: .bold))
+                                    .frame(width: 18)
+                                Text("关闭")
+                                    .font(.system(size: 11, weight: .medium))
+                                Spacer(minLength: 0)
+                            }
+                            .foregroundStyle(Color.white.opacity(0.66))
+                            .padding(.horizontal, 9)
+                            .frame(width: 112, height: 34)
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("关闭参数面板")
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.top, 8)
+                    .frame(width: 112)
+                    .padding(.vertical, 6)
+
+                    Rectangle()
+                        .fill(Color.white.opacity(0.10))
+                        .frame(width: 1)
 
                     ScrollView(.vertical, showsIndicators: false) {
                         selectedContent
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .padding(8)
+                .padding(6)
             } else {
                 VStack(spacing: 8) {
                     HStack(spacing: 4) {
