@@ -38,7 +38,7 @@ struct CameraScreen: View {
             let previewBottomLimit = dockTop - 12
             // For 9:16, align the bottom edge of the live preview to the measured bottom
             // edge of the zoom-control row. This moves the tall frame upward without resizing it.
-            let previewTop: CGFloat = isLandscape || cam.cfg.aspect == .free
+            let previewTop: CGFloat = cam.cfg.aspect == .free
                 ? 0
                 : (cam.cfg.aspect == .r916 && zoomControlBottom > 0
                     ? zoomControlBottom - previewSize.height
@@ -49,11 +49,8 @@ struct CameraScreen: View {
 
                 PreviewStage(size: previewSize, iconRotationDegrees: iconRotationDegrees)
                     .frame(width: previewSize.width, height: previewSize.height)
-                    .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topLeading)
-                    .offset(
-                        x: canvasOffset.width + (isLandscape ? max(0, (canvasSize.width - previewSize.width) / 2) : 0),
-                        y: canvasOffset.height + previewTop
-                    )
+                    .frame(width: canvasSize.width, height: canvasSize.height, alignment: .top)
+                    .offset(x: canvasOffset.width, y: canvasOffset.height + previewTop)
 
                 // Top and bottom controls float above the preview and keep their own hit targets.
                 VStack(spacing: 0) {
@@ -65,8 +62,8 @@ struct CameraScreen: View {
 
                     Spacer(minLength: 0)
 
-                    if showPanel && !isLandscape {
-                        ToolPanel(tab: $panelTab, isLandscape: false)
+                    if showPanel {
+                        ToolPanel(tab: $panelTab, isLandscape: false, rotationDegrees: iconRotationDegrees)
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
 
@@ -74,31 +71,13 @@ struct CameraScreen: View {
                         showPanel: $showPanel,
                         panelTab: $panelTab,
                         onAlbumTap: { openNativePhotos() },
-                        bottomDockPadding: isLandscape ? max(insets.bottom + 8, 12) : max(insets.bottom + 44, 80),
-                        isLandscape: isLandscape,
+                        bottomDockPadding: max(insets.bottom + 44, 80),
+                        isLandscape: false,
                         iconRotationDegrees: iconRotationDegrees
                     )
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .zIndex(5)
-
-                // In landscape, the tool panel moves to a compact side card instead of
-                // competing with the shutter row for the short vertical space.
-                if showPanel && isLandscape {
-                    let panelWidth = min(max(canvasSize.width * 0.36, 280), 360)
-                    let panelHeight = min(220, max(120, dockTop - topControlsBottom - 16))
-                    let panelTop = topControlsBottom + 8
-                    Color.clear
-                        .frame(width: canvasSize.width, height: canvasSize.height)
-                        .overlay(alignment: .topLeading) {
-                            ToolPanel(tab: $panelTab, isLandscape: true, rotationDegrees: iconRotationDegrees)
-                                .frame(width: panelWidth, height: panelHeight)
-                                .offset(x: canvasSize.width - panelWidth - 10, y: panelTop)
-                                .transition(.move(edge: .trailing).combined(with: .opacity))
-                        }
-                        .offset(x: canvasOffset.width, y: canvasOffset.height)
-                        .zIndex(8)
-                }
 
                 OverlayLayer(topSafeAreaInset: insets.top)
                     .frame(width: canvasSize.width, height: canvasSize.height)
@@ -137,7 +116,7 @@ struct CameraScreen: View {
                     withAnimation(.smooth(duration: 0.28)) {
                         currentOrientation = orientation
                     }
-                    // Camera/compositor orientation stays portrait; only UI chrome follows device rotation.
+                    // Keep capture/composition orientation unchanged; only UI icons follow device rotation.
                 }
             }
             .onPreferenceChange(CameraBottomBarHeightPreferenceKey.self) { height in
@@ -153,20 +132,6 @@ struct CameraScreen: View {
         .background(Color.black.ignoresSafeArea())
         .statusBarHidden(true)
         .animation(.easeInOut(duration: 0.22), value: showPanel)
-        .animation(.smooth(duration: 0.28), value: geoOrientationIsLandscape)
-        .animation(.smooth(duration: 0.28), value: iconRotationForAnimation)
-    }
-
-    private var geoOrientationIsLandscape: Bool {
-        currentOrientation.isLandscape
-    }
-
-    private var iconRotationForAnimation: CGFloat {
-        switch currentOrientation {
-        case .landscapeLeft: return -90
-        case .landscapeRight: return 90
-        default: return 0
-        }
     }
 
     /// Open the native iPhone Photos app from the album shortcut.
@@ -188,12 +153,7 @@ struct CameraScreen: View {
     private func fitSize(in size: CGSize) -> CGSize {
         let availableHeight = max(size.height, 100)
         if cam.cfg.aspect == .free {
-            // Keep the camera canvas in its portrait orientation while the controls adapt to landscape.
-            // Centering this unchanged canvas prevents the main feed and PiP geometry from rotating.
-            if size.width > size.height {
-                let width = min(size.width, availableHeight * cam.cfg.aspectRatio)
-                return CGSize(width: width, height: availableHeight)
-            }
+            // Full device canvas; user can crop the saved image later.
             return CGSize(width: size.width, height: availableHeight)
         }
         let aspect = cam.cfg.aspectRatio
@@ -440,6 +400,7 @@ struct FocusMarkerView: View {
                 }
             Image(systemName: isDisabled ? "lock.fill" : "scope")
                 .rotationEffect(.degrees(iconRotationDegrees))
+                .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(Color.yellow)
                 .frame(width: 20, height: 20)
@@ -577,6 +538,7 @@ struct PiPOverlay: View {
                     .overlay(RoundedRectangle(cornerRadius: 16).fill(Color.white.opacity(0.12)))
                     .overlay(Image(systemName: "arrow.up.left.and.arrow.down.right")
                         .rotationEffect(.degrees(iconRotationDegrees))
+                        .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
                         .font(.system(size: 18))
                         .foregroundStyle(.white.opacity(0.85)))
                     .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.35), lineWidth: 1))
@@ -587,6 +549,7 @@ struct PiPOverlay: View {
 
             Image(systemName: "arrow.up.left.and.arrow.down.right")
                 .rotationEffect(.degrees(iconRotationDegrees))
+                .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(Color.white)
                 .frame(width: 24, height: 24)
@@ -711,12 +674,14 @@ struct TimerSettingsOverlay: View {
                 HStack {
                     Image(systemName: "timer")
                         .rotationEffect(.degrees(iconRotationDegrees))
+                        .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
                         .foregroundStyle(Color.yellow)
                     Text("拍摄倒计时").font(.system(size: 17, weight: .semibold))
                     Spacer()
                     Button { isPresented = false } label: {
                         Image(systemName: "xmark.circle.fill")
                             .rotationEffect(.degrees(iconRotationDegrees))
+                            .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
                             .foregroundStyle(.white.opacity(0.65))
                     }
                 }
@@ -724,6 +689,7 @@ struct TimerSettingsOverlay: View {
                     Button { timerDraft = max(1, timerDraft - 1) } label: {
                         Image(systemName: "minus")
                             .rotationEffect(.degrees(iconRotationDegrees))
+                            .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
                             .frame(width: 40, height: 40)
                     }
                     Text("\(timerDraft) 秒")
@@ -732,6 +698,7 @@ struct TimerSettingsOverlay: View {
                     Button { timerDraft = min(60, timerDraft + 1) } label: {
                         Image(systemName: "plus")
                             .rotationEffect(.degrees(iconRotationDegrees))
+                            .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
                             .frame(width: 40, height: 40)
                     }
                 }
@@ -819,6 +786,7 @@ struct TopBar: View {
         Button(action: action) {
             Image(systemName: icon)
                 .rotationEffect(.degrees(iconRotationDegrees))
+                .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(active ? Color.yellow : Color.white)
                 .frame(width: 40, height: 40)
@@ -895,6 +863,7 @@ struct BottomBar: View {
         Button { cam.toggleLayout() } label: {
             Image(systemName: cam.cfg.layout == .pip ? "rectangle.on.rectangle" : "rectangle.split.1x2")
                 .rotationEffect(.degrees(iconRotationDegrees))
+                .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(Color.yellow)
                 .frame(width: sideButtonSize, height: sideButtonSize)
@@ -918,6 +887,7 @@ struct BottomBar: View {
         } label: {
             Image(systemName: "slider.horizontal.3")
                 .rotationEffect(.degrees(iconRotationDegrees))
+                .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(showPanel && panelTab == .params ? Color.yellow : Color.white)
                 .frame(width: sideButtonSize, height: sideButtonSize)
@@ -942,11 +912,13 @@ struct BottomBar: View {
             ZStack(alignment: .bottomTrailing) {
                 Image(systemName: cam.captureMode == .photo ? "video.fill" : "camera.fill")
                     .rotationEffect(.degrees(iconRotationDegrees))
+                    .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
                     .font(.system(size: 17, weight: .semibold))
                     .frame(width: sideButtonSize, height: sideButtonSize)
                     .background(Circle().fill(Color.white.opacity(0.12)))
                 Image(systemName: "arrow.left.arrow.right")
                     .rotationEffect(.degrees(iconRotationDegrees))
+                    .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
                     .font(.system(size: 8, weight: .bold))
                     .padding(3)
                     .background(Circle().fill(Color.black.opacity(0.92)))
@@ -1030,6 +1002,7 @@ struct ThumbnailButton: View {
                                 .overlay {
                                     Image(systemName: "photo.on.rectangle.angled")
                                         .rotationEffect(.degrees(iconRotationDegrees))
+                                        .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
                                         .font(.system(size: 19, weight: .medium))
                                         .foregroundStyle(Color.white.opacity(0.7))
                                 }
@@ -1041,6 +1014,7 @@ struct ThumbnailButton: View {
 
                     Image(systemName: "square.stack")
                         .rotationEffect(.degrees(iconRotationDegrees))
+                        .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
                         .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(.white)
                         .frame(width: 19, height: 19)
