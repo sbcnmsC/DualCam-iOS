@@ -9,6 +9,7 @@ struct CameraScreen: View {
     @State private var timerDraft = 5
     @State private var bottomBarHeight: CGFloat = 222
     @State private var zoomControlBottom: CGFloat = 0
+    @State private var shutterButtonTop: CGFloat = 0
     @State private var currentOrientation: UIInterfaceOrientation = .portrait
 
     private let topBarHeight: CGFloat = 56
@@ -165,6 +166,10 @@ struct CameraScreen: View {
                 guard bottom > 0, abs(zoomControlBottom - bottom) > 0.5 else { return }
                 zoomControlBottom = bottom
             }
+            .onPreferenceChange(CameraShutterTopPreferenceKey.self) { top in
+                guard top > 0, abs(shutterButtonTop - top) > 0.5 else { return }
+                shutterButtonTop = top
+            }
         }
         // Preserve Build 94's safe-area measurement and expand the preview canvas explicitly.
         .background(Color.black.ignoresSafeArea())
@@ -206,14 +211,17 @@ struct CameraScreen: View {
 
     /// 取景框的纵向起点（屏幕坐标）。
     /// - 全屏自由：贴顶铺满。
-    /// - 9:16：底边对齐焦段条底边，但不允许顶出屏幕，否则看不见的那截仍会被拍进照片。
+    /// - 9:16：预览底边与快门按钮外圈上沿相切，按实时测量位置定位。
     /// - 其余比例：在「顶栏下沿 ~ 底栏上沿」之间垂直居中；画面比这块区域还高（如 3:4）时贴着顶栏下沿，
     ///   底部自然压在焦段条下面，和系统相机一致。
     private func previewOriginY(previewHeight: CGFloat, topLimit: CGFloat, bottomLimit: CGFloat) -> CGFloat {
         switch cam.cfg.aspect {
         case .free:
             return 0
+        case .r916 where shutterButtonTop > 0:
+            return max(0, shutterButtonTop - previewHeight)
         case .r916 where zoomControlBottom > 0:
+            // Fallback for the first layout pass before the shutter position is measured.
             return max(0, zoomControlBottom - previewHeight)
         default:
             let free = bottomLimit - topLimit
@@ -1001,6 +1009,13 @@ private struct CameraZoomBottomPreferenceKey: PreferenceKey {
     }
 }
 
+private struct CameraShutterTopPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 private struct CameraBottomBarHeightPreferenceKey: PreferenceKey {
     static var defaultValue: CGFloat = 222
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
@@ -1127,6 +1142,12 @@ struct BottomBar: View {
                 HStack(spacing: 0) {
                     Spacer(minLength: 0)
                     ShutterButton()
+                        .background(GeometryReader { proxy in
+                            Color.clear.preference(
+                                key: CameraShutterTopPreferenceKey.self,
+                                value: proxy.frame(in: .global).minY
+                            )
+                        })
                     Spacer(minLength: 0)
                 }
                 HStack(alignment: .center, spacing: 8) {
