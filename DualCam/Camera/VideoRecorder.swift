@@ -15,6 +15,14 @@ final class VideoRecorder {
     private let queue = DispatchQueue(label: "dualcam.writer")
     private let width: Int
     private let height: Int
+    private let outputColorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+
+    // Bound the number of video buffers in flight. Under encoder pressure, dropping a
+    // late frame is preferable to retaining an unbounded queue of large BGRA buffers.
+    private let pendingVideoLock = NSLock()
+    private var pendingVideoFrames = 0
+    private let maxPendingVideoFrames = 3
+
     // 以下仅在 queue 上访问
     private var sessionStarted = false
     private var finishing = false
@@ -113,24 +121,57 @@ final class VideoRecorder {
         return writer.startWriting()
     }
 
-    /// 把合成后的图像渲染进像素缓冲并写入。在调用线程渲染，在写入队列提交。
+    /// Reserve queue capacity before doing full-resolution pixel work.
+    /// Once the small real-time queue is full, the incoming frame is dropped immediately.
+    private func reserveVideoFrame() -> Bool {
+        pendingVideoLock.lock()
+        defer { pendingVideoLock.unlock() }
+        guard pendingVideoFrames < maxPendingVideoFrames else { return false }
+        pendingVideoFrames += 1
+        return true
+    }
+
+    private func releaseVideoFrame() {
+        pendingVideoLock.lock()
+        pendingVideoFrames = max(0, pendingVideoFrames - 1)
+        pendingVideoLock.unlock()
+    }
+
+    /// Composite frames can be expensive at 4K. Apply back-pressure before allocating or
+    /// rendering, then cap the pixel-buffer pool as a second guard against memory spikes.
     func appendComposite(_ image: CIImage, context: CIContext, time: CMTime) {
-        guard let pool = adaptor.pixelBufferPool else { return }
+        guard reserveVideoFrame() else { return }
+        guard let pool = adaptor.pixelBufferPool else {
+            releaseVideoFrame()
+            return
+        }
         var created: CVPixelBuffer?
-        CVPixelBufferPoolCreatePixelBuffer(nil, pool, &created)
-        guard let buffer = created else { return }
+        let poolLimits: [String: Any] = [
+            kCVPixelBufferPoolAllocationThresholdKey as String: 5
+        ]
+        let result = CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(
+            kCFAllocatorDefault, pool, poolLimits as CFDictionary, &created
+        )
+        guard result == kCVReturnSuccess, let buffer = created else {
+            releaseVideoFrame()
+            return
+        }
         context.render(image, to: buffer, bounds: CGRect(x: 0, y: 0, width: width, height: height),
-                       colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
-        appendBuffer(buffer, time: time)
+                       colorSpace: outputColorSpace)
+        enqueueReservedBuffer(buffer, time: time)
     }
 
-    /// 直接写入一路原始画面。
+    /// Raw camera frames use the same bounded admission policy, avoiding a growing queue
+    /// of retained capture buffers when the encoder cannot keep up.
     func appendRaw(_ buffer: CVPixelBuffer, time: CMTime) {
-        appendBuffer(buffer, time: time)
+        guard reserveVideoFrame() else { return }
+        enqueueReservedBuffer(buffer, time: time)
     }
 
-    private func appendBuffer(_ buffer: CVPixelBuffer, time: CMTime) {
+    /// Caller must hold one reservation; it is released on every exit path.
+    private func enqueueReservedBuffer(_ buffer: CVPixelBuffer, time: CMTime) {
         queue.async {
+            defer { self.releaseVideoFrame() }
             guard !self.finishing, self.writer.status == .writing else { return }
             if !self.sessionStarted {
                 self.writer.startSession(atSourceTime: time)
