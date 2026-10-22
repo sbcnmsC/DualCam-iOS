@@ -160,7 +160,12 @@ struct CameraScreen: View {
     private func fitSize(in size: CGSize) -> CGSize {
         let availableHeight = max(size.height, 100)
         if cam.cfg.aspect == .free {
-            // Full device canvas; user can crop the saved image later.
+            // Portrait in portrait; in landscape preserve that same portrait canvas ratio,
+            // centered in the wider screen so grid, focus and PiP keep one consistent coordinate space.
+            if size.width > size.height {
+                let width = min(size.width, availableHeight * cam.cfg.aspectRatio)
+                return CGSize(width: width, height: width / max(cam.cfg.aspectRatio, 0.1))
+            }
             return CGSize(width: size.width, height: availableHeight)
         }
         let aspect = cam.cfg.aspectRatio
