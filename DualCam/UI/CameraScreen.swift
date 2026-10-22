@@ -6,6 +6,7 @@ struct CameraScreen: View {
     @State private var showPanel = false
     @State private var panelTab: PanelTab = .pip
     @State private var showTimerSettings = false
+    @State private var showPhotoLibrary = false
     @State private var timerDraft = 5
     @State private var bottomBarHeight: CGFloat = 222
 
@@ -56,7 +57,8 @@ struct CameraScreen: View {
 
                     BottomBar(
                         showPanel: $showPanel,
-                        panelTab: $panelTab
+                        panelTab: $panelTab,
+                        onAlbumTap: { showPhotoLibrary = true }
                     )
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -83,9 +85,12 @@ struct CameraScreen: View {
         .background(Color.black.ignoresSafeArea())
         .statusBarHidden(true)
         .animation(.easeInOut(duration: 0.22), value: showPanel)
+        .sheet(isPresented: $showPhotoLibrary) {
+            PhotoLibraryView()
+        }
     }
 
-    private func fitSize(in size: CGSize) -> CGSize {
+    private func fitSize(in size: CGSize) {
         let availableHeight = max(size.height, 100)
         if cam.cfg.aspect == .free {
             // Full device canvas; user can crop the saved image later.
@@ -713,6 +718,7 @@ struct BottomBar: View {
     @EnvironmentObject private var cam: CameraManager
     @Binding var showPanel: Bool
     @Binding var panelTab: PanelTab
+    let onAlbumTap: () -> Void
 
     private var zoomRow: some View {
         HStack {
@@ -723,74 +729,100 @@ struct BottomBar: View {
         .padding(.top, 2)
     }
 
+    private var splitButton: some View {
+        Button { cam.toggleLayout() } label: {
+            Image(systemName: cam.cfg.layout == .pip ? "rectangle.on.rectangle" : "rectangle.split.1x2")
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(Color.yellow)
+                .frame(width: 48, height: 48)
+                .background(Circle().fill(Color.black))
+                .overlay(Circle().stroke(Color.yellow, lineWidth: 2))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(cam.cfg.layout == .pip ? "切换上下分屏" : "切换画中画")
+    }
+
+    private var paramsButton: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.22)) {
+                if showPanel && panelTab == .params {
+                    showPanel = false
+                } else {
+                    panelTab = .params
+                    showPanel = true
+                }
+            }
+        } label: {
+            Image(systemName: "slider.horizontal.3")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(showPanel && panelTab == .params ? Color.yellow : Color.white)
+                .frame(width: 48, height: 48)
+                .background(Circle().fill(Color.white.opacity(0.12)))
+                .overlay(Circle().stroke(
+                    showPanel && panelTab == .params ? Color.yellow.opacity(0.7) : Color.clear,
+                    lineWidth: 1.2
+                ))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("快捷参数")
+    }
+
+    private var cameraSwitchButton: some View {
+        Button { cam.swapCameras() } label: {
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(Color.white)
+                .frame(width: 48, height: 48)
+                .background(Circle().fill(Color.white.opacity(0.12)))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("切换主副摄像头")
+    }
+
     var body: some View {
-        VStack(spacing: 10) {
-            // 参考原生相机：倍率条固定在快门上方，切换画幅不改变按钮顺序。
+        VStack(spacing: 12) {
+            // 倍率条固定在快门上方。
             zoomRow
 
-            // 快门行：左 = 布局，右 = 快捷参数入口
-            HStack {
-                Button { cam.toggleLayout() } label: {
-                    Image(systemName: cam.cfg.layout == .pip ? "rectangle.on.rectangle" : "rectangle.split.1x2")
-                        .font(.system(size: 19, weight: .semibold))
-                        .foregroundStyle(Color.yellow)
-                        .frame(width: 52, height: 52)
-                        .background(Circle().fill(Color.black))
-                        .overlay(Circle().stroke(Color.yellow, lineWidth: 2.5))
+            // 快门行：左侧相册；中央快门；右侧分屏和参数并排。
+            ZStack {
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    ShutterButton()
+                    Spacer(minLength: 0)
                 }
-                .buttonStyle(.plain)
 
-                Spacer()
-                ShutterButton()
-                Spacer()
-
-                Button {
-                    withAnimation(.easeInOut(duration: 0.22)) {
-                        if showPanel && panelTab == .params {
-                            showPanel = false
-                        } else {
-                            panelTab = .params
-                            showPanel = true
-                        }
+                HStack(alignment: .center, spacing: 10) {
+                    ThumbnailButton(action: onAlbumTap)
+                    Spacer(minLength: 8)
+                    HStack(spacing: 8) {
+                        splitButton
+                        paramsButton
                     }
-                } label: {
-                    Image(systemName: "slider.horizontal.3")
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(showPanel && panelTab == .params ? Color.yellow : Color.white)
-                        .frame(width: 52, height: 52)
-                        .background(Circle().fill(Color.white.opacity(0.12)))
-                        .overlay(Circle().stroke(
-                            showPanel && panelTab == .params ? Color.yellow.opacity(0.7) : Color.clear,
-                            lineWidth: 1.2
-                        ))
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("快捷参数")
+                .padding(.horizontal, 22)
             }
-            .padding(.horizontal, 28)
+            .frame(height: 80)
 
-            // 最底部固定为模式切换行，左侧相册入口和右侧镜头交换保留。
-            // 模式行：缩略图 / 视频·照片 / 换主副画面
-            HStack {
-                ThumbnailButton()
-                Spacer()
-                ModePill()
-                Spacer()
-                Button { cam.swapCameras() } label: {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.system(size: 20, weight: .medium))
-                        .foregroundStyle(Color.white)
-                        .frame(width: 52, height: 52)
-                        .background(Circle().fill(Color.white.opacity(0.12)))
+            // 最底行固定为视频/照片切换；摄像头交换按钮保留在右侧。
+            ZStack {
+                HStack {
+                    Spacer(minLength: 0)
+                    cameraSwitchButton
                 }
-                .buttonStyle(.plain)
+                .padding(.horizontal, 28)
+
+                HStack {
+                    Spacer(minLength: 0)
+                    ModePill()
+                    Spacer(minLength: 0)
+                }
             }
-            .padding(.horizontal, 28)
+            .frame(height: 52)
         }
         .padding(.top, 8)
         .padding(.bottom, 8)
-        // Floating camera controls stay legible, while the live image remains visible
-        // underneath them for tall aspect ratios. Short ratios naturally reveal black space.
+        // Gradient is a visual background only; buttons stay above it and fully tappable.
         .background {
             LinearGradient(
                 colors: [Color.black.opacity(0.02), Color.black.opacity(0.72)],
@@ -807,25 +839,48 @@ struct BottomBar: View {
 
 struct ThumbnailButton: View {
     @EnvironmentObject private var cam: CameraManager
+    let action: () -> Void
 
     var body: some View {
-        Button {
-            if let url = URL(string: "photos-redirect://") { UIApplication.shared.open(url) }
-        } label: {
-            ZStack {
-                if let img = cam.lastThumb {
-                    Image(uiImage: img).resizable().scaledToFill()
-                } else {
-                    Color.white.opacity(0.12)
-                    Image(systemName: "photo").foregroundStyle(Color.white.opacity(0.6))
+        Button(action: action) {
+            VStack(spacing: 3) {
+                ZStack(alignment: .bottomTrailing) {
+                    Group {
+                        if let img = cam.lastThumb {
+                            Image(uiImage: img)
+                                .resizable()
+                                .scaledToFill()
+                        } else {
+                            Color.white.opacity(0.12)
+                                .overlay {
+                                    Image(systemName: "photo.on.rectangle.angled")
+                                        .font(.system(size: 19, weight: .medium))
+                                        .foregroundStyle(Color.white.opacity(0.7))
+                                }
+                        }
+                    }
+                    .frame(width: 48, height: 48)
+                    .clipShape(Circle())
+                    .overlay(Circle().stroke(Color.white.opacity(0.25), lineWidth: 1))
+
+                    Image(systemName: "square.stack")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 19, height: 19)
+                        .background(Color.black.opacity(0.78), in: Circle())
+                        .offset(x: 3, y: 1)
                 }
+
+                Text("相册")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Color.white.opacity(0.82))
             }
-            .frame(width: 52, height: 52)
-            .clipShape(Circle())
-            .overlay(Circle().stroke(Color.white.opacity(0.25), lineWidth: 1))
+            .frame(width: 58, height: 66)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("查看相册")
+        .accessibilityLabel("打开相册")
+        .accessibilityHint("在应用内查看已保存的照片和视频")
     }
 }
 
