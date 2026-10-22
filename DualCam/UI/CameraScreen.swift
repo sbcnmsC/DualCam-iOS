@@ -6,7 +6,6 @@ struct CameraScreen: View {
     @State private var showPanel = false
     @State private var panelTab: PanelTab = .pip
     @State private var showTimerSettings = false
-    @State private var showPhotoLibrary = false
     @State private var timerDraft = 5
     @State private var bottomBarHeight: CGFloat = 222
 
@@ -59,7 +58,7 @@ struct CameraScreen: View {
                     BottomBar(
                         showPanel: $showPanel,
                         panelTab: $panelTab,
-                        onAlbumTap: { showPhotoLibrary = true },
+                        onAlbumTap: { openNativePhotos() },
                         bottomDockPadding: max(safeBottom + 44, 80)
                     )
                 }
@@ -90,10 +89,21 @@ struct CameraScreen: View {
         .background(Color.black)
         .statusBarHidden(true)
         .animation(.easeInOut(duration: 0.22), value: showPanel)
-        .sheet(isPresented: $showPhotoLibrary) {
-            PhotoLibraryView()
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
+    }
+
+    /// Open the native iPhone Photos app from the album shortcut.
+    /// These Photos URL schemes are undocumented by Apple, so a fallback is attempted.
+    private func openNativePhotos() {
+        guard let primaryURL = URL(string: "photos-redirect://") else { return }
+        UIApplication.shared.open(primaryURL, options: [:]) { opened in
+            guard !opened, let fallbackURL = URL(string: "photos://") else { return }
+            UIApplication.shared.open(fallbackURL, options: [:]) { fallbackOpened in
+                if !fallbackOpened {
+                    DispatchQueue.main.async {
+                        cam.showToast("无法自动打开系统照片，请从桌面打开“照片”")
+                    }
+                }
+            }
         }
     }
 
