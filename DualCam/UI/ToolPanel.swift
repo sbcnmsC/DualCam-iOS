@@ -12,7 +12,7 @@ struct ToolPanel: View {
             switch tab {
             case .pip: PiPTab()
             case .filter: FilterTab()
-            case .params: QuickParamsTab(isLandscape: isLandscape)
+            case .params: QuickParamsTab(isLandscape: isLandscape, rotationDegrees: rotationDegrees)
             case .settings: SettingsTab()
             }
         }
@@ -623,6 +623,7 @@ private enum QuickParameter: String, CaseIterable, Identifiable {
 struct QuickParamsTab: View {
     @EnvironmentObject private var cam: CameraManager
     var isLandscape: Bool = false
+    var rotationDegrees: CGFloat = 90
     @State private var selected: QuickParameter = .exposure
     @AppStorage("dualcam.quickParameterOrder") private var parameterOrder = "曝光,ISO,快门,对焦,白平衡,变焦,分辨率,帧率,定时器,防抖"
     @AppStorage("dualcam.quickParameterVisible") private var visibleParameters = "曝光,ISO,快门,对焦,白平衡,变焦,分辨率,帧率,定时器,防抖"
