@@ -47,15 +47,14 @@ struct ToolPanel: View {
                 if vertical {
                     VStack(spacing: 3) {
                         Image(systemName: item.icon)
+                            .rotationEffect(.degrees(vertical ? rotationDegrees : 0))
+                            .animation(.smooth(duration: 0.28), value: rotationDegrees)
                             .font(.system(size: 15, weight: .semibold))
                         Text(item.rawValue)
                             .font(.system(size: 9, weight: .medium))
                             .lineLimit(1)
                             .minimumScaleFactor(0.7)
                     }
-                    // Swap the layout footprint before rotating so neighboring tabs do not overlap.
-                    .frame(width: 42, height: 54)
-                    .rotationEffect(.degrees(vertical ? rotationDegrees : 0))
                     .frame(maxWidth: .infinity)
                     .frame(height: 42)
                 } else {
