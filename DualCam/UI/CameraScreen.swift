@@ -81,7 +81,8 @@ struct CameraScreen: View {
                         iconRotationDegrees: iconRotationDegrees
                     )
                 }
-                .frame(width: controlCanvasWidth, maxHeight: .infinity, alignment: .top)
+                .frame(width: controlCanvasWidth)
+                .frame(maxHeight: .infinity, alignment: .top)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .zIndex(5)
 
