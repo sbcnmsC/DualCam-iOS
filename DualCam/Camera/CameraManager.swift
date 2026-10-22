@@ -6,6 +6,110 @@ import Photos
 import SwiftUI
 import UIKit
 
+
+/// Short synthesized camera cues. Preferences are read at playback time so Settings toggles
+/// take effect immediately without rebuilding the capture session or touching its audio route.
+private final class CaptureCuePlayer {
+    enum Cue {
+        case shutter
+        case recordingStart
+        case recordingStop
+
+        var preferenceKey: String {
+            switch self {
+            case .shutter: return "dualcam.sound.shutter"
+            case .recordingStart: return "dualcam.sound.recordingStart"
+            case .recordingStop: return "dualcam.sound.recordingStop"
+            }
+        }
+    }
+
+    static let shared = CaptureCuePlayer()
+    private var players: [AVAudioPlayer] = []
+    private let sampleRate = 44_100.0
+
+    func play(_ cue: Cue) {
+        let enabled = UserDefaults.standard.object(forKey: cue.preferenceKey) as? Bool ?? true
+        guard enabled else { return }
+        let wav = makeWave(for: cue)
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.players.removeAll { !$0.isPlaying }
+            do {
+                let player = try AVAudioPlayer(data: wav)
+                player.volume = 0.78
+                player.prepareToPlay()
+                if player.play() {
+                    self.players.append(player)
+                }
+            } catch {
+                // A prompt sound must never interfere with capturing or saving media.
+            }
+        }
+    }
+
+    private func makeWave(for cue: Cue) -> Data {
+        let toneSequence: [(frequency: Double, duration: Double, gain: Double)]
+        switch cue {
+        case .shutter:
+            // A short two-part, quickly decaying click rather than a long notification beep.
+            toneSequence = [(1_650, 0.018, 0.48), (920, 0.040, 0.27)]
+        case .recordingStart:
+            toneSequence = [(660, 0.072, 0.30), (990, 0.092, 0.32)]
+        case .recordingStop:
+            toneSequence = [(990, 0.072, 0.30), (660, 0.092, 0.32)]
+        }
+
+        var samples = [Int16]()
+        let silenceFrames = Int(sampleRate * 0.018)
+        for (index, tone) in toneSequence.enumerated() {
+            let count = Int(sampleRate * tone.duration)
+            for frame in 0..<count {
+                let time = Double(frame) / sampleRate
+                let fadeIn = min(1.0, time / 0.004)
+                let fadeOut = min(1.0, max(0.0, tone.duration - time) / (cue == .shutter ? 0.012 : 0.020))
+                let envelope = fadeIn * fadeOut
+                let value = sin(2.0 * Double.pi * tone.frequency * time) * tone.gain * envelope
+                samples.append(Int16(max(-1.0, min(1.0, value)) * Double(Int16.max)))
+            }
+            if index < toneSequence.count - 1 {
+                samples.append(contentsOf: repeatElement(Int16(0), count: silenceFrames))
+            }
+        }
+
+        var data = Data()
+        func appendASCII(_ value: String) {
+            data.append(contentsOf: value.utf8)
+        }
+        func appendUInt16(_ value: UInt16) {
+            var littleEndian = value.littleEndian
+            withUnsafeBytes(of: &littleEndian) { data.append(contentsOf: $0) }
+        }
+        func appendUInt32(_ value: UInt32) {
+            var littleEndian = value.littleEndian
+            withUnsafeBytes(of: &littleEndian) { data.append(contentsOf: $0) }
+        }
+
+        let bytes = UInt32(samples.count * MemoryLayout<Int16>.size)
+        appendASCII("RIFF")
+        appendUInt32(36 + bytes)
+        appendASCII("WAVE")
+        appendASCII("fmt ")
+        appendUInt32(16)
+        appendUInt16(1) // PCM
+        appendUInt16(1) // mono
+        appendUInt32(UInt32(sampleRate))
+        appendUInt32(UInt32(sampleRate) * 2)
+        appendUInt16(2)
+        appendUInt16(16)
+        appendASCII("data")
+        appendUInt32(bytes)
+        for sample in samples { appendUInt16(UInt16(bitPattern: sample)) }
+        return data
+    }
+}
+
 final class CameraManager: NSObject, ObservableObject {
 
     // MARK: - 界面状态（只在主线程修改）
@@ -1269,6 +1373,7 @@ final class CameraManager: NSObject, ObservableObject {
 
     func takePhoto() {
         guard !isCapturingPhoto else { return }
+        CaptureCuePlayer.shared.play(.shutter)
         let useFlash = flashEnabled
         let captureConfig = cfg
         // Native still capture is used whenever Live Photo is off. Live Photos stay on the
@@ -1919,6 +2024,7 @@ final class CameraManager: NSObject, ObservableObject {
                 self.recLock.unlock()
                 DispatchQueue.main.async {
                     self.isRecording = true
+                    CaptureCuePlayer.shared.play(.recordingStart)
                     self.recordSeconds = 0
                     self.recTimer?.invalidate()
                     self.recTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -1935,6 +2041,7 @@ final class CameraManager: NSObject, ObservableObject {
     func stopRecording() {
         guard isRecording else { return }
         isRecording = false
+        CaptureCuePlayer.shared.play(.recordingStop)
         recTimer?.invalidate()
         recTimer = nil
         let slot = mainSlot
