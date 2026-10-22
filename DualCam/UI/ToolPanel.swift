@@ -27,6 +27,7 @@ struct ToolPanel: View {
     @Binding var tab: PanelTab
     var isLandscape: Bool = false
     var rotationDegrees: CGFloat = 90
+    var onClose: (() -> Void)? = nil
 
     private var selectedContent: some View {
         Group {
@@ -39,7 +40,7 @@ struct ToolPanel: View {
         }
     }
 
-    private func tabButton(_ item: PanelTab, vertical: Bool) -> some View {
+    private func tabButton(_ item: PanelTab, vertical: Bool, showTitle: Bool = false) -> some View {
         Button {
             withAnimation(.easeInOut(duration: 0.2)) { tab = item }
         } label: {
@@ -63,8 +64,11 @@ struct ToolPanel: View {
                             .rotationEffect(.degrees(rotationDegrees))
                             .animation(.smooth(duration: 0.28), value: rotationDegrees)
                             .font(.system(size: 16, weight: .semibold))
-                        if tab == item {
-                            Text(item.rawValue).font(.system(size: 14, weight: .semibold))
+                        if tab == item || showTitle {
+                            Text(item.rawValue)
+                                .font(.system(size: 12, weight: .semibold))
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
                         }
                     }
                     .padding(.horizontal, 14)
@@ -85,23 +89,36 @@ struct ToolPanel: View {
     var body: some View {
         Group {
             if isLandscape {
-                HStack(alignment: .top, spacing: 8) {
-                    VStack(spacing: 4) {
+                // This branch is authored in landscape coordinates. CameraScreen rotates the
+                // complete panel 90 degrees, so labels, icons, and controls share the same reading direction.
+                VStack(spacing: 8) {
+                    HStack(spacing: 6) {
                         ForEach(PanelTab.allCases) { item in
-                            tabButton(item, vertical: true)
+                            tabButton(item, vertical: false, showTitle: true)
+                                .frame(maxWidth: .infinity)
                         }
+                        Button {
+                            onClose?()
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 14, weight: .bold))
+                                .frame(width: 34, height: 34)
+                                .background(Circle().fill(Color.white.opacity(0.10)))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("关闭参数面板")
                     }
-                    .frame(width: 54)
+                    .padding(.horizontal, 10)
+                    .padding(.top, 8)
 
-                    ScrollView {
+                    ScrollView(.vertical, showsIndicators: false) {
                         selectedContent
-                            .padding(.horizontal, 10)
+                            .padding(.horizontal, 12)
                             .padding(.vertical, 8)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 8)
+                .padding(8)
             } else {
                 VStack(spacing: 8) {
                     HStack(spacing: 4) {
@@ -121,8 +138,9 @@ struct ToolPanel: View {
                 }
             }
         }
-        .environment(\.toolPanelIconRotationDegrees, isLandscape ? rotationDegrees : 0)
-        .labelStyle(RotatingSymbolLabelStyle(degrees: isLandscape ? rotationDegrees : 0))
+        // Landscape mode rotates as a single canvas in CameraScreen, not icon-by-icon.
+        .environment(\.toolPanelIconRotationDegrees, 0)
+        .labelStyle(RotatingSymbolLabelStyle(degrees: 0))
         .foregroundStyle(Color.white)
         .background(RoundedRectangle(cornerRadius: 18).fill(.ultraThinMaterial))
         .padding(.horizontal, isLandscape ? 4 : 8)
