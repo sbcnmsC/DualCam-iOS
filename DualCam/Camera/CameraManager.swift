@@ -75,6 +75,8 @@ final class CameraManager: NSObject, ObservableObject {
     private var audioGranted = false
     private var audioActive = false
     private var restartCount = 0
+    /// 运行时出错（多半是高分辨率扛不住）后，重建时从更低一档开始；用户主动改设置时清零。
+    private var errorStepDown = 0
     private var lensBase: [LensSpec: CGFloat] = [:]
 
     // 渲染线程与主线程共享（用 lock 保护）
@@ -215,7 +217,8 @@ final class CameraManager: NSObject, ObservableObject {
         switch snapshot().resolution {
         case .p720: return [720]
         case .p1080: return [1080, 720]
-        case .maximum: return [2160, 1440, 1080, 720]
+        // 从最大的多摄格式开始，带宽 / 系统压力超限时逐级降档
+        case .maximum: return [3024, 2160, 1440, 1080, 720]
         }
     }
 
@@ -237,7 +240,8 @@ final class CameraManager: NSObject, ObservableObject {
         let specs = [combo.a, combo.b]
         let outputs = [outputA, outputB]
         let heights = targetHeights()
-        let height = heights[min(attempt, heights.count - 1)]
+        let step = attempt + errorStepDown
+        let height = heights[min(step, heights.count - 1)]
         let wantFPS = snapshot().fps
         var usedFPS = wantFPS
         var failure: String? = nil
@@ -295,7 +299,7 @@ final class CameraManager: NSObject, ObservableObject {
             return
         }
 
-        if (session.hardwareCost > 1.0 || session.systemPressureCost > 1.0) && attempt + 1 < heights.count {
+        if (session.hardwareCost > 1.0 || session.systemPressureCost > 1.0) && step + 1 < heights.count {
             rebuild(attempt: attempt + 1, resetStates: resetStates)
             return
         }
@@ -474,7 +478,10 @@ final class CameraManager: NSObject, ObservableObject {
         lock.unlock()
         let new = cfg
         if old.resolution != new.resolution || old.fps != new.fps {
-            sessionQueue.async { self.rebuild() }
+            sessionQueue.async {
+                self.errorStepDown = 0
+                self.rebuild()
+            }
         } else if old.lowLight != new.lowLight || old.stabilization != new.stabilization {
             sessionQueue.async { self.applyCaptureFlags() }
         }
@@ -502,6 +509,7 @@ final class CameraManager: NSObject, ObservableObject {
             self.sessionQueue.async {
                 guard self.restartCount < 3 else { return }
                 self.restartCount += 1
+                self.errorStepDown = min(self.errorStepDown + 1, max(self.targetHeights().count - 1, 0))
                 self.sessionQueue.asyncAfter(deadline: .now() + 0.5) { self.rebuild() }
             }
         }
@@ -591,7 +599,8 @@ final class CameraManager: NSObject, ObservableObject {
         live?.appendComposite(finalImage, context: ciContext, time: pts)
 
         // 预览：GPU 直接渲染进像素缓冲，立即送显示层（无 CPU 回读、无主线程中转）
-        let scale = min(1, 1280 / max(canvas.width, canvas.height))
+        // 预览长边上限 1920（原来 1280）：iPhone 屏幕竖向有 2500+ 像素，1280 放大后会发软
+        let scale = min(1, 1920 / max(canvas.width, canvas.height))
         let pw = max(2, ((canvas.width * scale) / 2).rounded() * 2)
         let ph = max(2, ((canvas.height * scale) / 2).rounded() * 2)
         let previewImage = finalImage.transformed(by: CGAffineTransform(scaleX: pw / canvas.width,
@@ -724,6 +733,7 @@ final class CameraManager: NSObject, ObservableObject {
         ready = false
         sessionQueue.async {
             self.currentCombo = combo
+            self.errorStepDown = 0
             self.rebuild(resetStates: false)
         }
     }
@@ -1028,6 +1038,7 @@ final class CameraManager: NSObject, ObservableObject {
         ready = false
         sessionQueue.async {
             self.currentCombo = combo
+            self.errorStepDown = 0
             self.rebuild(resetStates: true)
         }
     }
@@ -1143,7 +1154,11 @@ final class CameraManager: NSObject, ObservableObject {
             subImage = imgB
         }
 
-        let canvas = Compositor.canvasSize(aspect: c.aspect, resolution: c.resolution, sourceWidth: mainImage.extent.width)
+        // 照片用更大的画布（「最高」档 = 摄像头全部像素）；实况配套视频仍用录像画布，和 processFrame 的出帧尺寸一致
+        let canvas = Compositor.canvasSize(aspect: c.aspect, resolution: c.resolution,
+                                           sourceWidth: mainImage.extent.width, forStill: true)
+        let videoCanvas = Compositor.canvasSize(aspect: c.aspect, resolution: c.resolution,
+                                                sourceWidth: mainImage.extent.width)
         let full = CGRect(origin: .zero, size: canvas)
         let composed = Compositor.compose(main: mainImage, sub: subImage, cfg: c, canvas: canvas)
         let finalImage = c.filter.apply(to: composed, intensity: c.filterIntensity).cropped(to: full)
@@ -1163,7 +1178,7 @@ final class CameraManager: NSObject, ObservableObject {
         // 实况：每张照片配一段 1.6 秒的短视频，写入前先准备好录制器
         if c.livePhoto {
             for i in shots.indices {
-                let size = shots[i].slot.map { sizes[$0] } ?? canvas
+                let size = shots[i].slot.map { sizes[$0] } ?? videoCanvas
                 guard size.width > 0 else { continue }
                 let id = UUID().uuidString
                 if let rec = try? VideoRecorder(width: Int(size.width), height: Int(size.height), fps: fps,
@@ -1242,7 +1257,7 @@ final class CameraManager: NSObject, ObservableObject {
 
     private func jpeg(_ image: CIImage) -> Data? {
         let key = CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String)
-        return ciContext.jpegRepresentation(of: image, colorSpace: srgb, options: [key: 0.95])
+        return ciContext.jpegRepresentation(of: image, colorSpace: srgb, options: [key: 0.98])
     }
 
     /// 实况照片的静态图：JPEG 的 Apple MakerNote 里写入与视频相同的 content identifier。
@@ -1255,7 +1270,7 @@ final class CameraManager: NSObject, ObservableObject {
             return nil
         }
         let props: [CFString: Any] = [
-            kCGImageDestinationLossyCompressionQuality: 0.95,
+            kCGImageDestinationLossyCompressionQuality: 0.98,
             kCGImagePropertyMakerAppleDictionary: ["17": id]
         ]
         CGImageDestinationAddImage(dest, cg, props as CFDictionary)

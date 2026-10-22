@@ -7,12 +7,15 @@ enum Compositor {
 
     // MARK: - 尺寸
 
-    static func canvasSize(aspect: CanvasAspect, resolution: ResolutionOption, sourceWidth: CGFloat) -> CGSize {
+    /// forStill：拍照时的画布可以比录像 / 预览更大（单帧编码 JPEG，不受实时编码器限制），
+    /// 「最高」档会直接用摄像头的全部像素；录像仍封顶 4K 级，避免实时 HEVC 编码跟不上。
+    static func canvasSize(aspect: CanvasAspect, resolution: ResolutionOption, sourceWidth: CGFloat,
+                           forStill: Bool = false) -> CGSize {
         var w: CGFloat
         switch resolution {
         case .p720: w = 720
         case .p1080: w = 1080
-        case .maximum: w = min(max(sourceWidth, 720), 2160)
+        case .maximum: w = min(max(sourceWidth, 720), forStill ? 4032 : 2160)
         }
         // 不超过摄像头实际像素，不做无意义的放大
         if sourceWidth >= 360 { w = min(w, sourceWidth) }

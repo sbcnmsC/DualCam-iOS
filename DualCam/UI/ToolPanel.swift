@@ -457,7 +457,7 @@ struct SettingsTab: View {
                 .pickerStyle(.segmented)
                 .disabled(cam.isRecording)
             }
-            Text("最高分辨率不会超过摄像头实际像素；60 帧更吃性能，部分镜头组合会自动退回 30 帧。")
+            Text("「最高」会选用双摄同时支持的最大格式：照片用摄像头全部像素，录像最高 4K 级；负载过高时自动逐级降档。60 帧更吃性能，部分镜头组合会自动退回 30 帧。")
                 .font(.system(size: 11))
                 .foregroundStyle(Color.white.opacity(0.6))
 
