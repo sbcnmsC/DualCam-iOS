@@ -124,6 +124,7 @@ struct CameraScreen: View {
         .statusBarHidden(true)
         .animation(.easeInOut(duration: 0.22), value: showPanel)
         .animation(.smooth(duration: 0.28), value: geoOrientationIsLandscape)
+    }
 
     private var geoOrientationIsLandscape: Bool {
         guard let scene = UIApplication.shared.connectedScenes
