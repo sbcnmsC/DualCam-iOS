@@ -826,10 +826,14 @@ struct BottomBar: View {
                     Spacer(minLength: 0)
                 }
                 HStack(alignment: .center, spacing: 8) {
+                    // Left cluster: gallery then photo/video mode toggle.
                     ThumbnailButton(action: onAlbumTap)
+                    captureModeSwitchButton
+
                     Spacer(minLength: 4)
+
+                    // Right cluster: split layout and quick parameters stay together.
                     HStack(spacing: 4) {
-                        captureModeSwitchButton
                         splitButton
                         paramsButton
                     }
