@@ -107,8 +107,8 @@ struct ToolPanel: View {
                                     Spacer(minLength: 0)
                                 }
                                 .foregroundStyle(tab == item ? Color.yellow : Color.white.opacity(0.74))
-                                .padding(.horizontal, 9)
-                                .frame(width: 112, height: 38)
+                                .padding(.horizontal, 8)
+                                .frame(width: 96, height: 34)
                                 .background {
                                     if tab == item {
                                         RoundedRectangle(cornerRadius: 10)
@@ -133,13 +133,13 @@ struct ToolPanel: View {
                                 Spacer(minLength: 0)
                             }
                             .foregroundStyle(Color.white.opacity(0.66))
-                            .padding(.horizontal, 9)
-                            .frame(width: 112, height: 34)
+                            .padding(.horizontal, 8)
+                            .frame(width: 96, height: 30)
                         }
                         .buttonStyle(.plain)
                     }
-                    .frame(width: 112)
-                    .padding(.vertical, 6)
+                    .frame(width: 96)
+                    .padding(.vertical, 4)
 
                     Rectangle()
                         .fill(Color.white.opacity(0.10))
@@ -152,7 +152,7 @@ struct ToolPanel: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .padding(6)
+                .padding(5)
             } else {
                 VStack(spacing: 8) {
                     HStack(spacing: 4) {
