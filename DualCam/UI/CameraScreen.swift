@@ -22,6 +22,9 @@ struct CameraScreen: View {
             )
             let canvasOffset = CGSize(width: -insets.leading, height: -insets.top)
             let previewSize = fitSize(in: canvasSize)
+            // Tall/full-screen previews keep zoom chips beneath the shutter, matching the
+            // native camera's control hierarchy. Short fixed ratios place zoom near the frame edge.
+            let zoomBelowShutter = cam.cfg.aspect == .free || previewSize.height > canvasSize.height * 0.78
             // The zoom row is the top edge of the bottom camera dock. Fixed aspect ratios
             // align their preview bottom to this edge; tall ratios extend behind the controls.
             let dockTop = canvasSize.height - insets.bottom - bottomBarHeight
@@ -54,7 +57,11 @@ struct CameraScreen: View {
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
 
-                    BottomBar(showPanel: $showPanel, panelTab: $panelTab)
+                    BottomBar(
+                        showPanel: $showPanel,
+                        panelTab: $panelTab,
+                        zoomBelowShutter: zoomBelowShutter
+                    )
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -709,17 +716,24 @@ struct BottomBar: View {
     @EnvironmentObject private var cam: CameraManager
     @Binding var showPanel: Bool
     @Binding var panelTab: PanelTab
+    var zoomBelowShutter = false
+
+    private var zoomRow: some View {
+        HStack {
+            Spacer(minLength: 0)
+            ZoomChips()
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 2)
+    }
 
     var body: some View {
         VStack(spacing: 10) {
-            HStack {
-                Spacer(minLength: 0)
-                ZoomChips()
-                Spacer(minLength: 0)
+            if !zoomBelowShutter {
+                zoomRow
             }
-            .padding(.top, 2)
 
-            // 快门行：左 = 布局，右 = Build 39 的快捷参数入口
+            // 快门行：左 = 布局，右 = 快捷参数入口
             HStack {
                 Button { cam.toggleLayout() } label: {
                     Image(systemName: cam.cfg.layout == .pip ? "rectangle.on.rectangle" : "rectangle.split.1x2")
@@ -759,6 +773,10 @@ struct BottomBar: View {
                 .accessibilityLabel("快捷参数")
             }
             .padding(.horizontal, 28)
+
+            if zoomBelowShutter {
+                zoomRow
+            }
 
             // 模式行：缩略图 / 视频·照片 / 换主副画面
             HStack {
