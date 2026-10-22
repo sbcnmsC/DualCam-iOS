@@ -4,7 +4,7 @@ private struct ToolPanelIconRotationKey: EnvironmentKey {
     static let defaultValue: CGFloat = 0
 }
 
-private extension EnvironmentValues {
+extension EnvironmentValues {
     var toolPanelIconRotationDegrees: CGFloat {
         get { self[ToolPanelIconRotationKey.self] }
         set { self[ToolPanelIconRotationKey.self] = newValue }
