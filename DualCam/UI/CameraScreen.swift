@@ -32,14 +32,11 @@ struct CameraScreen: View {
             let previewBottomLimit = dockTop - 12
             // For 9:16, align the bottom edge of the live preview to the measured bottom
             // edge of the zoom-control row. This moves the tall frame upward without resizing it.
-            let previewTop: CGFloat
-            if cam.cfg.aspect == .free {
-                previewTop = 0
-            } else if cam.cfg.aspect == .r916 && zoomControlBottom > 0 {
-                previewTop = zoomControlBottom - previewSize.height
-            } else {
-                previewTop = max(topControlsBottom + 14, previewBottomLimit - previewSize.height)
-            }
+            let previewTop: CGFloat = cam.cfg.aspect == .free
+                ? 0
+                : (cam.cfg.aspect == .r916 && zoomControlBottom > 0
+                    ? zoomControlBottom - previewSize.height
+                    : max(topControlsBottom + 14, previewBottomLimit - previewSize.height))
 
             ZStack(alignment: .topLeading) {
                 Color.black.ignoresSafeArea()
