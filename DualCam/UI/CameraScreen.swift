@@ -43,13 +43,11 @@ struct CameraScreen: View {
             // possible frame instead of shrinking to the control-free area.
             let previewSize = fitSize(in: canvasSize)
             let previewBottomLimit = dockTop - 12
-            // For 9:16, align the bottom edge of the live preview to the measured bottom
-            // edge of the zoom-control row. This moves the tall frame upward without resizing it.
-            let previewTop: CGFloat = cam.cfg.aspect == .free
-                ? 0
-                : (cam.cfg.aspect == .r916 && zoomControlBottom > 0
-                    ? zoomControlBottom - previewSize.height
-                    : max(topControlsBottom + 14, previewBottomLimit - previewSize.height))
+            let previewTop = previewOriginY(
+                previewHeight: previewSize.height,
+                topLimit: topControlsBottom + 14,
+                bottomLimit: previewBottomLimit
+            )
 
             ZStack(alignment: .topLeading) {
                 Color.black.ignoresSafeArea()
@@ -58,6 +56,8 @@ struct CameraScreen: View {
                     .frame(width: previewSize.width, height: previewSize.height)
                     .frame(width: canvasSize.width, height: canvasSize.height, alignment: .top)
                     .offset(x: canvasOffset.width, y: canvasOffset.height + previewTop)
+                    // 切换画幅时取景框平滑伸缩 / 移动，而不是瞬间跳变
+                    .animation(.smooth(duration: 0.3), value: cam.cfg.aspect)
 
                 // Top and bottom controls float above the preview and keep their own hit targets.
                 VStack(spacing: 0) {
@@ -204,6 +204,24 @@ struct CameraScreen: View {
         return CGSize(width: w, height: w / aspect)
     }
 
+    /// 取景框的纵向起点（屏幕坐标）。
+    /// - 全屏自由：贴顶铺满。
+    /// - 9:16：底边对齐焦段条底边，但不允许顶出屏幕，否则看不见的那截仍会被拍进照片。
+    /// - 其余比例：在「顶栏下沿 ~ 底栏上沿」之间垂直居中；画面比这块区域还高（如 3:4）时贴着顶栏下沿，
+    ///   底部自然压在焦段条下面，和系统相机一致。
+    private func previewOriginY(previewHeight: CGFloat, topLimit: CGFloat, bottomLimit: CGFloat) -> CGFloat {
+        switch cam.cfg.aspect {
+        case .free:
+            return 0
+        case .r916 where zoomControlBottom > 0:
+            return max(0, zoomControlBottom - previewHeight)
+        default:
+            let free = bottomLimit - topLimit
+            guard previewHeight < free else { return topLimit }
+            return topLimit + (free - previewHeight) / 2
+        }
+    }
+
     private func resolvedInterfaceOrientation(for size: CGSize) -> UIInterfaceOrientation {
         // The app interface is locked to portrait. Read physical device orientation only
         // for rotating the small symbols; never use it to rotate the preview or rearrange controls.
@@ -238,6 +256,7 @@ struct PreviewStage: View {
     @State private var adjusting = false
     @State private var pinching = false
     @State private var zoomStart: CGFloat? = nil
+    @State private var blinkOpacity: Double = 0
 
     var body: some View {
         ZStack {
@@ -298,7 +317,16 @@ struct PreviewStage: View {
                 Spacer()
             }
 
-            if !cam.ready {
+            // 拍照处理 / 切换镜头 / 重建会话时的「处理中」遮罩（先于快门黑场，两者叠加）
+            CaptureProcessingMask()
+
+            // 快门黑场：按下瞬间闪一下，给出即时反馈，同时遮住随后切换会话的第一下停顿
+            Color.black
+                .opacity(blinkOpacity)
+                .allowsHitTesting(false)
+
+            // 首次启动前 / 没有相机权限：沿用原来的空白图标
+            if !cam.ready && (!cam.hasStarted || cam.permissionDenied) {
                 VStack(spacing: 10) {
                     Image(systemName: "camera.aperture").font(.system(size: 44))
                     if cam.permissionDenied {
@@ -316,6 +344,17 @@ struct PreviewStage: View {
         }
         .frame(width: size.width, height: size.height)
         .clipped()
+        .onChange(of: cam.shutterPulse) { _, _ in pulseShutterBlink() }
+    }
+
+    private func pulseShutterBlink() {
+        withAnimation(.easeOut(duration: 0.05)) {
+            blinkOpacity = 0.7
+        } completion: {
+            withAnimation(.easeOut(duration: 0.26)) {
+                blinkOpacity = 0
+            }
+        }
     }
 
     private var backgroundGesture: some Gesture {
@@ -358,6 +397,77 @@ struct PreviewStage: View {
     private func normalized(_ p: CGPoint) -> CGPoint {
         return CGPoint(x: min(max(p.x / max(size.width, 1), 0), 1),
                        y: min(max(p.y / max(size.height, 1), 0), 1))
+    }
+}
+
+/// 拍照处理（切换单摄高清会话、合成、保存）和切换镜头 / 画质重建会话时，预览画面会冻住几百毫秒到数秒。
+/// 这里在冻住的最后一帧上盖一层毛玻璃 + 光圈动画 + 阶段提示，让停顿看起来是「处理中」而不是卡死。
+struct CaptureProcessingMask: View {
+    @EnvironmentObject private var cam: CameraManager
+    @State private var shown = false
+
+    private var wants: Bool {
+        cam.isCapturingPhoto || (!cam.ready && cam.hasStarted && !cam.permissionDenied)
+    }
+
+    private var label: String {
+        if let status = cam.captureStatus { return status }
+        return cam.isCapturingPhoto ? "高清处理中…" : "正在切换…"
+    }
+
+    var body: some View {
+        ZStack {
+            if shown {
+                ZStack {
+                    Rectangle().fill(.ultraThinMaterial)
+                    Color.black.opacity(0.22)
+                    VStack(spacing: 14) {
+                        ApertureSpinner()
+                        Text(label)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Color.white.opacity(0.92))
+                            .contentTransition(.opacity)
+                            .animation(.easeInOut(duration: 0.2), value: label)
+                    }
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.22), value: shown)
+        .onChange(of: wants, initial: true) { _, now in
+            if now {
+                shown = true
+            } else {
+                // 多留一小会儿，等新会话的第一帧上屏，避免遮罩一撤就露出冻住 / 黑屏的画面
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    if !wants { shown = false }
+                }
+            }
+        }
+    }
+}
+
+/// 光圈图标外圈的旋转弧线。
+struct ApertureSpinner: View {
+    @State private var spin = false
+
+    var body: some View {
+        ZStack {
+            Circle().stroke(Color.white.opacity(0.18), lineWidth: 3)
+            Circle()
+                .trim(from: 0, to: 0.28)
+                .stroke(Color.yellow, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                .rotationEffect(.degrees(spin ? 360 : 0))
+            Image(systemName: "camera.aperture")
+                .font(.system(size: 22))
+                .foregroundStyle(Color.white.opacity(0.9))
+        }
+        .frame(width: 58, height: 58)
+        .onAppear {
+            withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) {
+                spin = true
+            }
+        }
     }
 }
 
@@ -654,7 +764,9 @@ struct PiPOverlay: View {
         DragGesture(minimumDistance: 0)
             .onChanged { v in
                 if resizeStart == nil { resizeStart = cam.cfg.pipWidth }
-                let delta = v.translation.width / max(size.width, 1)
+                // pipWidth 在宽画幅下以短边为基准，屏幕上的位移要除回这个系数
+                let scale = Compositor.pipWidthScale(aspect: cam.cfg.aspectRatio)
+                let delta = v.translation.width / max(size.width, 1) / max(scale, 0.1)
                 cam.cfg.pipWidth = min(max((resizeStart ?? 0.32) + delta, 0.16), 0.9)
             }
             .onEnded { _ in resizeStart = nil }
@@ -667,23 +779,44 @@ struct SplitDivider: View {
     @State private var start: CGFloat? = nil
 
     var body: some View {
-        let y = cam.cfg.splitRatio * size.height
-        ZStack {
-            Rectangle().fill(Color.white.opacity(0.55)).frame(height: 1)
-            Capsule().fill(Color.white).frame(width: 46, height: 5)
+        // 宽画幅（16:9 / 21:9）是左右分屏，分隔线竖着放、横向拖动
+        if Compositor.splitIsSideBySide(cfg: cam.cfg) {
+            let x = cam.cfg.splitRatio * size.width
+            ZStack {
+                Rectangle().fill(Color.white.opacity(0.55)).frame(width: 1)
+                Capsule().fill(Color.white).frame(width: 5, height: 46)
+            }
+            .frame(width: 44, height: size.height)
+            .contentShape(Rectangle())
+            .position(x: x, y: size.height / 2)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { v in
+                        if start == nil { start = cam.cfg.splitRatio }
+                        let r = (start ?? 0.5) + v.translation.width / max(size.width, 1)
+                        cam.cfg.splitRatio = min(max(r, 0.25), 0.75)
+                    }
+                    .onEnded { _ in start = nil }
+            )
+        } else {
+            let y = cam.cfg.splitRatio * size.height
+            ZStack {
+                Rectangle().fill(Color.white.opacity(0.55)).frame(height: 1)
+                Capsule().fill(Color.white).frame(width: 46, height: 5)
+            }
+            .frame(width: size.width, height: 44)
+            .contentShape(Rectangle())
+            .position(x: size.width / 2, y: y)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { v in
+                        if start == nil { start = cam.cfg.splitRatio }
+                        let r = (start ?? 0.5) + v.translation.height / max(size.height, 1)
+                        cam.cfg.splitRatio = min(max(r, 0.25), 0.75)
+                    }
+                    .onEnded { _ in start = nil }
+            )
         }
-        .frame(width: size.width, height: 44)
-        .contentShape(Rectangle())
-        .position(x: size.width / 2, y: y)
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { v in
-                    if start == nil { start = cam.cfg.splitRatio }
-                    let r = (start ?? 0.5) + v.translation.height / max(size.height, 1)
-                    cam.cfg.splitRatio = min(max(r, 0.25), 0.75)
-                }
-                .onEnded { _ in start = nil }
-        )
     }
 }
 struct GridOverlay: Shape {
@@ -906,7 +1039,9 @@ struct BottomBar: View {
 
     private var splitButton: some View {
         Button { cam.toggleLayout() } label: {
-            Image(systemName: cam.cfg.layout == .pip ? "rectangle.on.rectangle" : "rectangle.split.1x2")
+            Image(systemName: cam.cfg.layout == .pip
+                  ? "rectangle.on.rectangle"
+                  : (Compositor.splitIsSideBySide(cfg: cam.cfg) ? "rectangle.split.2x1" : "rectangle.split.1x2"))
                 .rotationEffect(.degrees(iconRotationDegrees))
                 .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
                 .font(.system(size: 17, weight: .semibold))
@@ -916,7 +1051,9 @@ struct BottomBar: View {
                 .overlay(Circle().stroke(Color.yellow, lineWidth: 2))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(cam.cfg.layout == .pip ? "切换上下分屏" : "切换画中画")
+        .accessibilityLabel(cam.cfg.layout == .pip
+                            ? (Compositor.splitIsSideBySide(cfg: cam.cfg) ? "切换左右分屏" : "切换上下分屏")
+                            : "切换画中画")
     }
 
     private var paramsButton: some View {
@@ -1032,6 +1169,7 @@ struct ThumbnailButton: View {
     @EnvironmentObject private var cam: CameraManager
     let action: () -> Void
     var iconRotationDegrees: CGFloat = 0
+    @State private var bounce = false
 
     var body: some View {
         Button(action: action) {
@@ -1072,6 +1210,18 @@ struct ThumbnailButton: View {
             .contentShape(Circle())
         }
         .buttonStyle(.plain)
+        // 保存完成、缩略图换成新照片时弹一下，给「已存好」一个看得见的落点
+        .scaleEffect(bounce ? 1.18 : 1)
+        .onChange(of: cam.lastThumb) { _, new in
+            guard new != nil else { return }
+            withAnimation(.spring(response: 0.2, dampingFraction: 0.5)) {
+                bounce = true
+            } completion: {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                    bounce = false
+                }
+            }
+        }
         .accessibilityLabel("打开相册")
         .accessibilityHint("在应用内查看已保存的照片和视频")
     }
@@ -1115,6 +1265,15 @@ struct ZoomChips: View {
         return String(format: "%.1f×", Double(value))
     }
 }
+/// 按下时快门整体缩一点，松开回弹。
+private struct ShutterPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.9 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
 struct ShutterButton: View {
     @EnvironmentObject private var cam: CameraManager
 
@@ -1124,6 +1283,9 @@ struct ShutterButton: View {
                 Circle().stroke(Color.white, lineWidth: 4).frame(width: 76, height: 76)
                 if cam.captureMode == .photo {
                     Circle().fill(Color.white).frame(width: 62, height: 62)
+                        // 处理中内圈收小并轻微呼吸，提示「正在拍」而不是整颗快门变灰
+                        .scaleEffect(cam.isCapturingPhoto ? 0.78 : 1)
+                        .animation(.easeInOut(duration: 0.18), value: cam.isCapturingPhoto)
                 } else {
                     RoundedRectangle(cornerRadius: cam.isRecording ? 8 : 31)
                         .fill(Color.red)
@@ -1132,9 +1294,9 @@ struct ShutterButton: View {
             }
             .animation(.easeInOut(duration: 0.2), value: cam.isRecording)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ShutterPressStyle())
         .disabled(!cam.ready || cam.isCapturingPhoto)
-        .opacity(cam.ready && !cam.isCapturingPhoto ? 1 : 0.4)
+        .opacity(cam.ready ? (cam.isCapturingPhoto ? 0.8 : 1) : 0.4)
         .accessibilityLabel(cam.captureMode == .photo ? "拍照" : (cam.isRecording ? "停止录像" : "开始录像"))
     }
 }

@@ -27,11 +27,22 @@ enum Compositor {
 
     // MARK: - 区域（归一化，左上角为原点）
 
+    /// 宽画幅（16:9 / 21:9）上下分屏会变成两条细带，改为左右分屏。
+    static func splitIsSideBySide(cfg: Config) -> Bool {
+        return cfg.aspectRatio > 1.2
+    }
+
+    /// 小窗宽度以「画布较短的一边」为基准：竖画幅 / 方画幅不变，
+    /// 宽画幅下按 1/比例 缩小，否则 3:4 小窗的高度会占掉画面的大半。
+    static func pipWidthScale(aspect: CGFloat) -> CGFloat {
+        return aspect > 1 ? 1 / aspect : 1
+    }
+
     /// 小窗矩形。圆形强制 1:1，并保证整体落在画布内。
     static func pipRectNormalized(cfg: Config) -> CGRect {
         let ratio: CGFloat = cfg.pipShape == .circle ? 1 : cfg.pipRatio.value
         let canvasAspect = cfg.aspectRatio
-        var w = min(max(cfg.pipWidth, 0.1), 0.95)
+        var w = min(max(cfg.pipWidth, 0.1), 0.95) * pipWidthScale(aspect: canvasAspect)
         var h = w * canvasAspect / ratio
         if h > 0.95 {
             let k = 0.95 / h
@@ -50,6 +61,10 @@ enum Compositor {
             return (CGRect(x: 0, y: 0, width: 1, height: 1), pipRectNormalized(cfg: cfg))
         case .split:
             let r = min(max(cfg.splitRatio, 0.2), 0.8)
+            if splitIsSideBySide(cfg: cfg) {
+                return (CGRect(x: 0, y: 0, width: r, height: 1),
+                        CGRect(x: r, y: 0, width: 1 - r, height: 1))
+            }
             return (CGRect(x: 0, y: 0, width: 1, height: r),
                     CGRect(x: 0, y: r, width: 1, height: 1 - r))
         }
@@ -126,6 +141,20 @@ enum Compositor {
 
         case .split:
             let r = min(max(cfg.splitRatio, 0.2), 0.8)
+            if splitIsSideBySide(cfg: cfg) {
+                // 宽画幅：主画面在左、副画面在右（CI 坐标，左下角为原点）
+                let leftW = (W * r / 2).rounded() * 2
+                let leftRect = CGRect(x: 0, y: 0, width: leftW, height: H)
+                let rightRect = CGRect(x: leftW, y: 0, width: W - leftW, height: H)
+                let left = fill(main, into: leftRect)
+                let right: CIImage
+                if let sub = sub {
+                    right = fill(sub, into: rightRect)
+                } else {
+                    right = CIImage(color: CIColor(red: 0, green: 0, blue: 0)).cropped(to: rightRect)
+                }
+                return left.composited(over: right).cropped(to: full)
+            }
             let topH = (H * r / 2).rounded() * 2
             let topRect = CGRect(x: 0, y: H - topH, width: W, height: topH)
             let bottomRect = CGRect(x: 0, y: 0, width: W, height: H - topH)

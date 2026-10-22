@@ -228,7 +228,7 @@ struct PiPTab: View {
         let isPiP = cam.cfg.layout == .pip
         VStack(alignment: .leading, spacing: 12) {
             if !isPiP {
-                LabeledSlider(title: "上下比例",
+                LabeledSlider(title: Compositor.splitIsSideBySide(cfg: cam.cfg) ? "左右比例" : "上下比例",
                               value: cfgBinding(\.splitRatio),
                               range: 0.25...0.75,
                               valueText: "\(Int(cam.cfg.splitRatio * 100))%")
@@ -577,7 +577,8 @@ struct SettingsTab: View {
                     ForEach(CanvasAspect.allCases) { aspect in
                         let selected = cam.cfg.aspect == aspect
                         Button {
-                            withAnimation(.easeInOut(duration: 0.16)) {
+                            // 预览框、小窗、分屏方向随比例一起平滑过渡
+                            withAnimation(.smooth(duration: 0.3)) {
                                 cam.cfg.aspect = aspect
                             }
                         } label: {

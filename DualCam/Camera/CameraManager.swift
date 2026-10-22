@@ -17,10 +17,18 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var comboIndex = 0
     @Published var statusText = "正在准备相机…"
     @Published var ready = false
+    /// 相机至少成功启动过一次。之后 ready 变回 false 就是「切换中」，用遮罩盖住而不是显示空白图标。
+    @Published var hasStarted = false
     @Published var permissionDenied = false
     @Published var captureMode: CaptureMode = .photo
     @Published var isRecording = false
-    @Published var isCapturingPhoto = false
+    @Published var isCapturingPhoto = false {
+        didSet { if !isCapturingPhoto { captureStatus = nil } }
+    }
+    /// 高清拍照切换 / 合成 / 保存各阶段的提示文字，显示在预览的「处理中」遮罩上。
+    @Published var captureStatus: String? = nil
+    /// 每按一次快门加一，预览据此闪一下快门黑场。
+    @Published var shutterPulse = 0
     @Published var recordSeconds = 0
     @Published var countdown: Int? = nil
     @Published var screenFlash = false
@@ -337,6 +345,7 @@ final class CameraManager: NSObject, ObservableObject {
             self.slotInfos = infos
             self.effectiveFPS = usedFPS
             self.ready = running
+            if running { self.hasStarted = true }
             self.statusText = running ? "" : "相机未能启动"
             if resetStates { self.slotStates = [SlotState(), SlotState()] }
             for i in 0..<2 {
@@ -499,12 +508,22 @@ final class CameraManager: NSObject, ObservableObject {
         lock.unlock()
         let new = cfg
         if old.resolution != new.resolution || old.fps != new.fps {
+            // 重建会话期间预览会停住：先标记未就绪，让预览显示「切换中」遮罩而不是卡死的画面
+            if !combos.isEmpty { ready = false }
             sessionQueue.async {
                 self.errorStepDown = 0
                 self.rebuild()
             }
         } else if old.lowLight != new.lowLight || old.stabilization != new.stabilization {
             sessionQueue.async { self.applyCaptureFlags() }
+        }
+    }
+
+    /// 可在任意线程调用；只在拍照处理中才会显示出来。
+    private func setCaptureStatus(_ text: String?) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, self.isCapturingPhoto else { return }
+            self.captureStatus = text
         }
     }
 
@@ -1255,9 +1274,11 @@ final class CameraManager: NSObject, ObservableObject {
         // Native still capture is used whenever Live Photo is off. Live Photos stay on the
         // existing still/movie pair path so their content identifiers and motion frames remain paired.
         let useHighResolutionCapture = !captureConfig.livePhoto
+        // 快门黑场 + 「处理中」遮罩，盖住切换单摄会话时预览的短暂停顿
+        shutterPulse &+= 1
         if useHighResolutionCapture {
             isCapturingPhoto = true
-            showToast("正在切换至单摄高清拍照，预览会短暂停顿")
+            captureStatus = "切换高清拍摄…"
         }
         if useFlash { flash(on: true) }
 
@@ -1276,6 +1297,7 @@ final class CameraManager: NSObject, ObservableObject {
                         // uses the native still from the displayed main camera and the other camera's
                         // most recent video frame, retaining detail where the sensor still is available.
                         self.videoQueue.async {
+                            self.setCaptureStatus("合成并保存…")
                             var datas: [Data] = []
                             let fallbackForSlot: (Int) -> Data? = {
                                 $0 == 0 ? fallback.primary : fallback.secondary
@@ -1453,6 +1475,9 @@ final class CameraManager: NSObject, ObservableObject {
             return
         }
 
+        let total = highResolutionBatchSlots.count
+        setCaptureStatus(total > 1 ? "拍摄原片 \(highResolutionBatchIndex + 1)/\(total)" : "拍摄高清照片…")
+
         let settings: AVCapturePhotoSettings
         if output.availablePhotoCodecTypes.contains(.jpeg) {
             settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
@@ -1594,6 +1619,7 @@ final class CameraManager: NSObject, ObservableObject {
         highResolutionBatchCompletion = nil
 
         // Restore the original MultiCam graph before returning data to the UI/save pipeline.
+        setCaptureStatus("恢复双摄预览…")
         rebuild(resetStates: false)
         DispatchQueue.main.async {
             completion?(captured)

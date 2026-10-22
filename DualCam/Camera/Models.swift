@@ -3,7 +3,7 @@ import SwiftUI
 
 enum LayoutMode: String, CaseIterable, Identifiable {
     case pip = "画中画"
-    case split = "上下分屏"
+    case split = "分屏"
     var id: String { rawValue }
 }
 
@@ -112,7 +112,7 @@ struct Config: Equatable {
     var pipBorder: CGFloat = 2                  // 0...8，按 390 宽的预览换算
     var pipOpacity: CGFloat = 1
     var pipSnap = true
-    var splitRatio: CGFloat = 0.5               // 上半部分占比
+    var splitRatio: CGFloat = 0.5               // 主画面占比（竖 / 方画幅为上半部分，宽画幅为左半部分）
     var mirrorFront = true
     // 滤镜
     var filter: FilterKind = .original
