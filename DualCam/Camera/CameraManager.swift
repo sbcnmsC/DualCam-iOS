@@ -86,6 +86,8 @@ final class CameraManager: NSObject, ObservableObject {
     private var audioGranted = false
     private var audioActive = false
     private var restartCount = 0
+    /// 运行时出错（多半是高分辨率扛不住）后，重建时从更低一档开始；用户主动改设置时清零。
+    private var errorStepDown = 0
     private var lensBase: [LensSpec: CGFloat] = [:]
 
     // 渲染线程与主线程共享（用 lock 保护）
@@ -231,7 +233,8 @@ final class CameraManager: NSObject, ObservableObject {
         switch snapshot().resolution {
         case .p720: return [720]
         case .p1080: return [1080, 720]
-        case .maximum: return [2160, 1440, 1080, 720]
+        // 从双摄同时支持的最大格式起步，带宽 / 系统压力超限时逐级降档
+        case .maximum: return [3024, 2160, 1440, 1080, 720]
         }
     }
 
@@ -253,7 +256,8 @@ final class CameraManager: NSObject, ObservableObject {
         let specs = [combo.a, combo.b]
         let outputs = [outputA, outputB]
         let heights = targetHeights()
-        let height = heights[min(attempt, heights.count - 1)]
+        let step = attempt + errorStepDown
+        let height = heights[min(step, heights.count - 1)]
         let wantFPS = snapshot().fps
         var usedFPS = wantFPS
         var failure: String? = nil
@@ -314,7 +318,7 @@ final class CameraManager: NSObject, ObservableObject {
             return
         }
 
-        if (session.hardwareCost > 1.0 || session.systemPressureCost > 1.0) && attempt + 1 < heights.count {
+        if (session.hardwareCost > 1.0 || session.systemPressureCost > 1.0) && step + 1 < heights.count {
             rebuild(attempt: attempt + 1, resetStates: resetStates)
             return
         }
@@ -495,7 +499,10 @@ final class CameraManager: NSObject, ObservableObject {
         lock.unlock()
         let new = cfg
         if old.resolution != new.resolution || old.fps != new.fps {
-            sessionQueue.async { self.rebuild() }
+            sessionQueue.async {
+                self.errorStepDown = 0
+                self.rebuild()
+            }
         } else if old.lowLight != new.lowLight || old.stabilization != new.stabilization {
             sessionQueue.async { self.applyCaptureFlags() }
         }
@@ -523,6 +530,7 @@ final class CameraManager: NSObject, ObservableObject {
             self.sessionQueue.async {
                 guard self.restartCount < 3 else { return }
                 self.restartCount += 1
+                self.errorStepDown = min(self.errorStepDown + 1, max(self.targetHeights().count - 1, 0))
                 self.sessionQueue.asyncAfter(deadline: .now() + 0.5) { self.rebuild() }
             }
         }
@@ -659,7 +667,7 @@ final class CameraManager: NSObject, ObservableObject {
         if needsFullResolution {
             renderCanvas = canvas
         } else {
-            let scale = min(1, 1280 / max(canvas.width, canvas.height))
+            let scale = min(1, 1920 / max(canvas.width, canvas.height))
             renderCanvas = CGSize(
                 width: max(2, floor(canvas.width * scale / 2) * 2),
                 height: max(2, floor(canvas.height * scale / 2) * 2)
@@ -683,9 +691,10 @@ final class CameraManager: NSObject, ObservableObject {
         rec?.appendComposite(finalImage, context: ciContext, time: pts)
         live?.appendComposite(finalImage, context: ciContext, time: pts)
 
-        // The display layer only needs up to 1280px on its long edge. During composite recording,
-        // the full-size render above is scaled once here; while idle, no large intermediate is built.
-        let scale = min(1, 1280 / max(renderCanvas.width, renderCanvas.height))
+        // Display layer long edge is capped at 1920px (was 1280, which looked soft on 2500+px-tall screens).
+        // During composite recording, the full-size render above is scaled once here;
+        // while idle, no large intermediate is built.
+        let scale = min(1, 1920 / max(renderCanvas.width, renderCanvas.height))
         let pw = max(2, (renderCanvas.width * scale / 2).rounded() * 2)
         let ph = max(2, (renderCanvas.height * scale / 2).rounded() * 2)
         let previewImage = finalImage.transformed(by: CGAffineTransform(
@@ -820,6 +829,7 @@ final class CameraManager: NSObject, ObservableObject {
         ready = false
         sessionQueue.async {
             self.currentCombo = combo
+            self.errorStepDown = 0
             self.rebuild(resetStates: false)
         }
     }
@@ -1168,6 +1178,7 @@ final class CameraManager: NSObject, ObservableObject {
         ready = false
         sessionQueue.async {
             self.currentCombo = combo
+            self.errorStepDown = 0
             self.rebuild(resetStates: true)
         }
     }
@@ -1623,8 +1634,13 @@ final class CameraManager: NSObject, ObservableObject {
             subImage = imgB
         }
 
+        // 照片用更大的画布（「最高」档 = 摄像头全部像素）；实况配套视频仍用录像画布，
+        // 和 processFrame 的出帧尺寸一致，否则录制器会按错误尺寸裁切
         let canvas = Compositor.canvasSize(aspect: c.aspect, resolution: c.resolution,
-                                           sourceWidth: mainImage.extent.width, aspectRatio: c.aspectRatio)
+                                           sourceWidth: mainImage.extent.width, aspectRatio: c.aspectRatio,
+                                           forStill: true)
+        let videoCanvas = Compositor.canvasSize(aspect: c.aspect, resolution: c.resolution,
+                                                sourceWidth: mainImage.extent.width, aspectRatio: c.aspectRatio)
         let full = CGRect(origin: .zero, size: canvas)
         let composed = Compositor.compose(main: mainImage, sub: subImage, cfg: c, canvas: canvas)
         let finalImage = c.filter.apply(to: composed, intensity: c.filterIntensity).cropped(to: full)
@@ -1644,7 +1660,7 @@ final class CameraManager: NSObject, ObservableObject {
         // 实况：每张照片配一段 1.6 秒的短视频，写入前先准备好录制器
         if c.livePhoto {
             for i in shots.indices {
-                let size = shots[i].slot.map { sizes[$0] } ?? canvas
+                let size = shots[i].slot.map { sizes[$0] } ?? videoCanvas
                 guard size.width > 0 else { continue }
                 let id = UUID().uuidString
                 if let rec = try? VideoRecorder(width: Int(size.width), height: Int(size.height), fps: fps,

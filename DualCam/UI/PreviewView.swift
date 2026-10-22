@@ -21,6 +21,8 @@ final class PreviewUIView: UIView {
 
     func attach(_ l: CALayer) {
         guard hosted !== l else { return }
+        // 独立创建的图层 contentsScale 默认是 1，会按「点」而不是「像素」渲染，画面发软
+        l.contentsScale = traitCollection.displayScale
         l.removeFromSuperlayer()
         layer.addSublayer(l)
         hosted = l
