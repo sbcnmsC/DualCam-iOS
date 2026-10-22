@@ -1,5 +1,28 @@
 import SwiftUI
 
+private struct ToolPanelIconRotationKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 0
+}
+
+private extension EnvironmentValues {
+    var toolPanelIconRotationDegrees: CGFloat {
+        get { self[ToolPanelIconRotationKey.self] }
+        set { self[ToolPanelIconRotationKey.self] = newValue }
+    }
+}
+
+/// Rotate the symbol independently; labels, values and controls remain readable in landscape.
+private struct RotatingSymbolLabelStyle: LabelStyle {
+    let degrees: CGFloat
+
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 6) {
+            configuration.icon.rotationEffect(.degrees(degrees))
+            configuration.title
+        }
+    }
+}
+
 import SwiftUI
 
 struct ToolPanel: View {
@@ -26,7 +49,6 @@ struct ToolPanel: View {
                 if vertical {
                     VStack(spacing: 3) {
                         Image(systemName: item.icon)
-                            .rotationEffect(.degrees(vertical ? rotationDegrees : 0))
                             .font(.system(size: 15, weight: .semibold))
                         Text(item.rawValue)
                             .font(.system(size: 9, weight: .medium))
@@ -35,6 +57,7 @@ struct ToolPanel: View {
                     }
                     .frame(maxWidth: .infinity)
                     .frame(height: 42)
+                    .rotationEffect(.degrees(vertical ? rotationDegrees : 0))
                 } else {
                     HStack(spacing: 5) {
                         Image(systemName: item.icon)
@@ -97,6 +120,8 @@ struct ToolPanel: View {
                 }
             }
         }
+        .environment(\.toolPanelIconRotationDegrees, isLandscape ? rotationDegrees : 0)
+        .labelStyle(RotatingSymbolLabelStyle(degrees: isLandscape ? rotationDegrees : 0))
         .foregroundStyle(Color.white)
         .background(RoundedRectangle(cornerRadius: 18).fill(.ultraThinMaterial))
         .padding(.horizontal, isLandscape ? 4 : 8)
@@ -105,6 +130,7 @@ struct ToolPanel: View {
 }
 
 struct LabeledSlider: View {
+    @Environment(\.toolPanelIconRotationDegrees) private var iconRotationDegrees
     var icon: String? = nil
     let title: String
     @Binding var value: Double
@@ -117,6 +143,7 @@ struct LabeledSlider: View {
             HStack(spacing: 4) {
                 if let icon {
                     Image(systemName: icon)
+                        .rotationEffect(.degrees(iconRotationDegrees))
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Color.yellow)
                         .frame(width: 16)
@@ -218,6 +245,7 @@ struct PiPTab: View {
 
 struct FilterTab: View {
     @EnvironmentObject private var cam: CameraManager
+    @Environment(\.toolPanelIconRotationDegrees) private var iconRotationDegrees
     @State private var pendingFilter: FilterKind = .original
     @State private var pendingIntensity: Double = 1
 
@@ -311,6 +339,7 @@ struct FilterTab: View {
                             .fill(Color.white.opacity(0.12))
                             .overlay {
                                 Image(systemName: "camera.aperture")
+                                    .rotationEffect(.degrees(iconRotationDegrees))
                                     .font(.system(size: 17))
                                     .foregroundStyle(Color.white.opacity(0.35))
                             }
@@ -485,6 +514,7 @@ struct ParamsTab: View {
 
 struct SettingsTab: View {
     @EnvironmentObject private var cam: CameraManager
+    @Environment(\.toolPanelIconRotationDegrees) private var iconRotationDegrees
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -959,6 +989,7 @@ private struct QuickParameterPreferencesSection: View {
             ForEach(Array(orderedItems.enumerated()), id: \.element.id) { index, item in
                 HStack(spacing: 8) {
                     Image(systemName: item.icon)
+                        .rotationEffect(.degrees(iconRotationDegrees))
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(Color.yellow)
                         .frame(width: 22)
@@ -975,6 +1006,7 @@ private struct QuickParameterPreferencesSection: View {
 
                     Button { move(item, offset: -1) } label: {
                         Image(systemName: "arrow.up")
+                            .rotationEffect(.degrees(iconRotationDegrees))
                             .font(.system(size: 11, weight: .semibold))
                             .frame(width: 26, height: 28)
                             .background(Capsule().fill(Color.white.opacity(0.08)))
@@ -986,6 +1018,7 @@ private struct QuickParameterPreferencesSection: View {
 
                     Button { move(item, offset: 1) } label: {
                         Image(systemName: "arrow.down")
+                            .rotationEffect(.degrees(iconRotationDegrees))
                             .font(.system(size: 11, weight: .semibold))
                             .frame(width: 26, height: 28)
                             .background(Capsule().fill(Color.white.opacity(0.08)))
