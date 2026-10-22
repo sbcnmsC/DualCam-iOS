@@ -14,42 +14,34 @@ struct CameraScreen: View {
 
     var body: some View {
         GeometryReader { geo in
-            // Keep the GeometryReader inside the safe area so controls respect the Dynamic Island
-            // and home indicator, while extending only the camera canvas behind them.
-            let insets = geo.safeAreaInsets
-            let canvasSize = CGSize(
-                width: geo.size.width + insets.leading + insets.trailing,
-                height: geo.size.height + insets.top + insets.bottom
-            )
-            let canvasOffset = CGSize(width: -insets.leading, height: -insets.top)
+            // This reader now represents the entire physical display, not the area between
+            // the Dynamic Island and home indicator. On iPhone 16 Pro that is 402 × 874 pt.
+            let canvasSize = geo.size
+            let safeTop = max(geo.safeAreaInsets.top, 62)
+            let safeBottom = max(geo.safeAreaInsets.bottom, 34)
 
-            // Reserve a safe slot between the top controls and the zoom row / bottom camera dock.
-            // Fixed ratios are fitted inside this slot instead of extending underneath tappable controls.
-            let topControlsBottom = insets.top + topBarHeight
-            let dockTop = canvasSize.height - insets.bottom - bottomBarHeight
+            // Fixed aspect presets use only the free area between controls. Full-screen free
+            // aspect uses the complete device canvas, with no letterbox/black bars.
+            let topControlsBottom = safeTop + topBarHeight
+            let dockTop = canvasSize.height - safeBottom - bottomBarHeight
             let previewTopLimit = topControlsBottom + 14
             let previewBottomLimit = dockTop - 12
             let availablePreviewHeight = max(100, previewBottomLimit - previewTopLimit)
             let previewSize = cam.cfg.aspect == .free
                 ? fitSize(in: canvasSize)
                 : fitSize(in: CGSize(width: canvasSize.width, height: availablePreviewHeight))
-            // Short/wide formats remain aligned to the bottom of the available preview slot;
-            // 3:4 and other tall formats shrink proportionally, then move down below the top controls.
-            let previewTop = cam.cfg.aspect == .free
-                ? 0
-                : previewBottomLimit - previewSize.height
+            let previewTop = cam.cfg.aspect == .free ? 0 : previewBottomLimit - previewSize.height
 
             ZStack(alignment: .topLeading) {
-                Color.black.ignoresSafeArea()
+                Color.black
 
-                // Only the preview moves/scales with the selected aspect ratio.
-                // The camera canvas remains edge-to-edge behind the safe-area control layer.
+                // The preview and compositor use exactly the full-screen bounds and ratio.
+                // Controls are a separate overlay and do not reserve canvas space.
                 PreviewStage(size: previewSize)
                     .frame(width: previewSize.width, height: previewSize.height)
                     .frame(width: canvasSize.width, height: canvasSize.height, alignment: .top)
-                    .offset(x: canvasOffset.width, y: canvasOffset.height + previewTop)
+                    .offset(y: previewTop)
 
-                // Controls intentionally stay in the GeometryReader's safe area.
                 VStack(spacing: 0) {
                     TopBar(onTimerTap: {
                         timerDraft = cam.timerSeconds > 0 ? cam.timerSeconds : 5
@@ -68,20 +60,20 @@ struct CameraScreen: View {
                         showPanel: $showPanel,
                         panelTab: $panelTab,
                         onAlbumTap: { showPhotoLibrary = true },
-                        bottomDockPadding: max(insets.bottom + 44, 80)
+                        bottomDockPadding: max(safeBottom + 44, 80)
                     )
                 }
+                .padding(.top, safeTop)
+                .padding(.bottom, safeBottom)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .zIndex(5)
 
-                OverlayLayer(topSafeAreaInset: insets.top)
+                OverlayLayer(topSafeAreaInset: safeTop)
                     .frame(width: canvasSize.width, height: canvasSize.height)
-                    .offset(x: canvasOffset.width, y: canvasOffset.height)
 
                 if showTimerSettings {
                     TimerSettingsOverlay(timerDraft: $timerDraft, isPresented: $showTimerSettings)
                         .frame(width: canvasSize.width, height: canvasSize.height)
-                        .offset(x: canvasOffset.width, y: canvasOffset.height)
                         .zIndex(20)
                 }
             }
@@ -92,7 +84,10 @@ struct CameraScreen: View {
                 bottomBarHeight = height
             }
         }
-        .background(Color.black.ignoresSafeArea())
+        // Critical: expand the GeometryReader itself, not only its background.
+        // This makes both preview dimensions and the free canvas ratio match the device screen.
+        .ignoresSafeArea(.container, edges: .all)
+        .background(Color.black)
         .statusBarHidden(true)
         .animation(.easeInOut(duration: 0.22), value: showPanel)
         .sheet(isPresented: $showPhotoLibrary) {
