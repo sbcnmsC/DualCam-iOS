@@ -87,6 +87,8 @@ struct CameraScreen: View {
         .animation(.easeInOut(duration: 0.22), value: showPanel)
         .sheet(isPresented: $showPhotoLibrary) {
             PhotoLibraryView()
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
         }
     }
 
