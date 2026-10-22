@@ -808,7 +808,7 @@ struct BottomBar: View {
                     .offset(x: 2, y: 2)
             }
             .foregroundStyle(cam.captureMode == .photo ? Color.white : Color.red.opacity(0.95))
-            .frame(width: 44, height: 44)
+            .frame(width: sideButtonSize, height: sideButtonSize)
             .contentShape(Circle())
         }
         .buttonStyle(.plain)
