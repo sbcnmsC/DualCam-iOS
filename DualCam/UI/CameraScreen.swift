@@ -23,6 +23,10 @@ struct CameraScreen: View {
             )
             let canvasOffset = CGSize(width: -insets.leading, height: -insets.top)
             let isLandscape = canvasSize.width > canvasSize.height
+            let activeOrientation = resolvedInterfaceOrientation(for: canvasSize)
+            let iconRotationDegrees: CGFloat = activeOrientation == .landscapeLeft
+                ? -90
+                : (activeOrientation == .landscapeRight ? 90 : 0)
             let topControlsBottom = insets.top + topBarHeight
             let dockTop = canvasSize.height - insets.bottom - bottomBarHeight
 
@@ -42,7 +46,7 @@ struct CameraScreen: View {
             ZStack(alignment: .topLeading) {
                 Color.black.ignoresSafeArea()
 
-                PreviewStage(size: previewSize)
+                PreviewStage(size: previewSize, iconRotationDegrees: iconRotationDegrees)
                     .frame(width: previewSize.width, height: previewSize.height)
                     .frame(width: canvasSize.width, height: canvasSize.height, alignment: .top)
                     .offset(x: canvasOffset.width, y: canvasOffset.height + previewTop)
@@ -52,7 +56,7 @@ struct CameraScreen: View {
                     TopBar(onTimerTap: {
                         timerDraft = cam.timerSeconds > 0 ? cam.timerSeconds : 5
                         showTimerSettings = true
-                    }, isLandscape: isLandscape)
+                    }, iconRotationDegrees: iconRotationDegrees)
                     .frame(height: topBarHeight)
 
                     Spacer(minLength: 0)
@@ -67,7 +71,8 @@ struct CameraScreen: View {
                         panelTab: $panelTab,
                         onAlbumTap: { openNativePhotos() },
                         bottomDockPadding: isLandscape ? max(insets.bottom + 8, 12) : max(insets.bottom + 44, 80),
-                        isLandscape: isLandscape
+                        isLandscape: isLandscape,
+                        iconRotationDegrees: iconRotationDegrees
                     )
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -82,7 +87,7 @@ struct CameraScreen: View {
                     Color.clear
                         .frame(width: canvasSize.width, height: canvasSize.height)
                         .overlay(alignment: .topLeading) {
-                            ToolPanel(tab: $panelTab, isLandscape: true)
+                            ToolPanel(tab: $panelTab, isLandscape: true, rotationDegrees: iconRotationDegrees)
                                 .frame(width: panelWidth, height: panelHeight)
                                 .offset(x: canvasSize.width - panelWidth - 10, y: panelTop)
                                 .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -124,6 +129,7 @@ struct CameraScreen: View {
         .statusBarHidden(true)
         .animation(.easeInOut(duration: 0.22), value: showPanel)
         .animation(.smooth(duration: 0.28), value: geoOrientationIsLandscape)
+        .animation(.smooth(duration: 0.28), value: iconRotationForAnimation)
     }
 
     private var geoOrientationIsLandscape: Bool {
@@ -131,6 +137,17 @@ struct CameraScreen: View {
             .compactMap({ $0 as? UIWindowScene })
             .first(where: { $0.activationState == .foregroundActive }) else { return false }
         return scene.interfaceOrientation.isLandscape
+    }
+
+    private var iconRotationForAnimation: CGFloat {
+        guard let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive }) else { return 0 }
+        switch scene.interfaceOrientation {
+        case .landscapeLeft: return -90
+        case .landscapeRight: return 90
+        default: return 0
+        }
     }
 
     /// Open the native iPhone Photos app from the album shortcut.
@@ -184,6 +201,7 @@ struct CameraScreen: View {
 struct PreviewStage: View {
     @EnvironmentObject private var cam: CameraManager
     let size: CGSize
+    var iconRotationDegrees: CGFloat = 0
 
     @State private var pressing = false
     @State private var adjusting = false
@@ -208,7 +226,7 @@ struct PreviewStage: View {
 
             // 小窗 / 分割线盖在手势层之上，各自的手势优先
             if cam.cfg.layout == .pip {
-                PiPOverlay(size: size)
+                PiPOverlay(size: size, iconRotationDegrees: iconRotationDegrees)
             } else {
                 SplitDivider(size: size)
             }
@@ -506,6 +524,7 @@ private struct FocusReticleCorners: Shape {
 struct PiPOverlay: View {
     @EnvironmentObject private var cam: CameraManager
     let size: CGSize
+    var iconRotationDegrees: CGFloat = 0
 
     @State private var dragOriginCenter: CGPoint? = nil
     @State private var dragCenter: CGPoint? = nil
@@ -535,7 +554,7 @@ struct PiPOverlay: View {
             Color.clear.contentShape(Rectangle()).gesture(moveGesture).simultaneousGesture(pinchGesture)
 
             Image(systemName: "arrow.up.left.and.arrow.down.right")
-                .rotationEffect(.degrees(size.width > size.height ? 90 : 0))
+                .rotationEffect(.degrees(iconRotationDegrees))
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(Color.white)
                 .frame(width: 24, height: 24)
@@ -720,7 +739,7 @@ struct TimerSettingsOverlay: View {
 struct TopBar: View {
     @EnvironmentObject private var cam: CameraManager
     let onTimerTap: () -> Void
-    var isLandscape: Bool = false
+    var iconRotationDegrees: CGFloat = 90
 
     var body: some View {
         ZStack {
@@ -771,7 +790,7 @@ struct TopBar: View {
                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon)
-                .rotationEffect(.degrees(isLandscape ? 90 : 0))
+                .rotationEffect(.degrees(iconRotationDegrees))
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(active ? Color.yellow : Color.white)
                 .frame(width: 40, height: 40)
@@ -822,6 +841,7 @@ struct BottomBar: View {
     let onAlbumTap: () -> Void
     let bottomDockPadding: CGFloat
     var isLandscape: Bool = false
+    var iconRotationDegrees: CGFloat = 90
 
     // Match the visible circles and tap targets on both sides of the shutter.
     private let sideButtonSize: CGFloat = 48
@@ -846,7 +866,7 @@ struct BottomBar: View {
     private var splitButton: some View {
         Button { cam.toggleLayout() } label: {
             Image(systemName: cam.cfg.layout == .pip ? "rectangle.on.rectangle" : "rectangle.split.1x2")
-                .rotationEffect(.degrees(isLandscape ? 90 : 0))
+                .rotationEffect(.degrees(iconRotationDegrees))
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(Color.yellow)
                 .frame(width: sideButtonSize, height: sideButtonSize)
@@ -869,7 +889,7 @@ struct BottomBar: View {
             }
         } label: {
             Image(systemName: "slider.horizontal.3")
-                .rotationEffect(.degrees(isLandscape ? 90 : 0))
+                .rotationEffect(.degrees(iconRotationDegrees))
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(showPanel && panelTab == .params ? Color.yellow : Color.white)
                 .frame(width: sideButtonSize, height: sideButtonSize)
@@ -893,12 +913,12 @@ struct BottomBar: View {
         } label: {
             ZStack(alignment: .bottomTrailing) {
                 Image(systemName: cam.captureMode == .photo ? "video.fill" : "camera.fill")
-                    .rotationEffect(.degrees(isLandscape ? 90 : 0))
+                    .rotationEffect(.degrees(iconRotationDegrees))
                     .font(.system(size: 17, weight: .semibold))
                     .frame(width: sideButtonSize, height: sideButtonSize)
                     .background(Circle().fill(Color.white.opacity(0.12)))
                 Image(systemName: "arrow.left.arrow.right")
-                    .rotationEffect(.degrees(isLandscape ? 90 : 0))
+                    .rotationEffect(.degrees(iconRotationDegrees))
                     .font(.system(size: 8, weight: .bold))
                     .padding(3)
                     .background(Circle().fill(Color.black.opacity(0.92)))
