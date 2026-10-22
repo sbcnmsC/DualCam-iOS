@@ -49,8 +49,11 @@ struct CameraScreen: View {
 
                 PreviewStage(size: previewSize, iconRotationDegrees: iconRotationDegrees)
                     .frame(width: previewSize.width, height: previewSize.height)
-                    .frame(width: canvasSize.width, height: canvasSize.height, alignment: .top)
-                    .offset(x: canvasOffset.width, y: canvasOffset.height + previewTop)
+                    .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topLeading)
+                    .offset(
+                        x: canvasOffset.width + (isLandscape ? max(0, (canvasSize.width - previewSize.width) / 2) : 0),
+                        y: canvasOffset.height + previewTop
+                    )
 
                 // Top and bottom controls float above the preview and keep their own hit targets.
                 VStack(spacing: 0) {
@@ -130,7 +133,7 @@ struct CameraScreen: View {
                     withAnimation(.smooth(duration: 0.28)) {
                         currentOrientation = orientation
                     }
-                    cam.setInterfaceOrientation(orientation)
+                    // Camera/compositor orientation stays portrait; only UI chrome follows device rotation.
                 }
             }
             .onPreferenceChange(CameraBottomBarHeightPreferenceKey.self) { height in
@@ -181,7 +184,12 @@ struct CameraScreen: View {
     private func fitSize(in size: CGSize) -> CGSize {
         let availableHeight = max(size.height, 100)
         if cam.cfg.aspect == .free {
-            // Full device canvas; user can crop the saved image later.
+            // Keep the camera canvas in its portrait orientation while the controls adapt to landscape.
+            // Centering this unchanged canvas prevents the main feed and PiP geometry from rotating.
+            if size.width > size.height {
+                let width = min(size.width, availableHeight * cam.cfg.aspectRatio)
+                return CGSize(width: width, height: availableHeight)
+            }
             return CGSize(width: size.width, height: availableHeight)
         }
         let aspect = cam.cfg.aspectRatio
@@ -203,8 +211,10 @@ struct CameraScreen: View {
     }
 
     private func updateFreeAspect(for size: CGSize) {
+        // The free canvas ratio is defined in portrait and intentionally held during landscape.
+        // This keeps the preview/PiP coordinate space stable while only controls reflow.
+        guard size.width <= size.height else { return }
         cam.updateFreeAspect(width: size.width, height: max(size.height, 100))
-        cam.setInterfaceOrientation(resolvedInterfaceOrientation(for: size))
     }
 }
 
