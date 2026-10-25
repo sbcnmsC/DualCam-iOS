@@ -150,6 +150,9 @@ struct PiPTab: View {
             .disabled(!isPiP)
             .opacity(isPiP ? 1 : 0.4)
         }
+        .onChange(of: cam.cfg.pipShape) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.pipRatio) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.pipSnap) { _, _ in HapticFeedback.play(.selection) }
     }
 
     private func cfgBinding(_ keyPath: WritableKeyPath<Config, CGFloat>) -> Binding<Double> {
