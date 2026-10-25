@@ -1,23 +1,29 @@
-# DualCam Wireless Live Monitor — implementation status
+# DualCam Wireless Live Monitor
 
-This branch is an isolated implementation track based on `feature/iphone16-camera-control`. It does not modify `main`.
+This isolated branch is based on `feature/iphone16-camera-control`; it does not modify `main`.
 
-## Current phase
+## Implemented in this branch
 
-- Adds a fan-out interface for the already-composited preview pixel buffer (`CompositedFrameSource`).
-- Publishes the same bounded-resolution preview buffer used by the local display; no screenshot or CPU readback is added.
-- Adds encrypted MultipeerConnectivity peer discovery, user-confirmed invitations, and a basic pairing sheet.
-- Adds the iOS local-network permission explanation and Bonjour service declarations.
-- Adds a branch-specific unsigned IPA build workflow.
+- A `CompositedFrameSource` taps the already-rendered preview pixel buffer, avoiding screenshots and CPU image readback.
+- `LiveMonitorRTCService` sends that composed frame via WebRTC and receives SDP/ICE signalling through the paired MultipeerConnectivity session.
+- MultipeerConnectivity discovers nearby devices, requires user acceptance, and encrypts pairing/signalling traffic.
+- The monitor sheet offers **Send Composite View** and **Receive View**, shows connection status, supports stopping the stream, and renders remote video.
+- The receiving device suspends its own camera session while monitoring to reduce resource use.
+- WebRTC is pinned to the M155-compatible release line through Swift Package Manager. ICE servers are intentionally empty: this branch attempts LAN host-candidate connectivity only and does not use cloud STUN/TURN relays.
+- Bonjour/local network privacy declarations are included. XcodeGen and GitHub Actions produce an unsigned IPA artifact.
 
-## Important limitation
+## What is included in the transmitted view
 
-**Real-time video transport is not implemented in this phase yet.** Pairing and the frame-source seam are groundwork only; the UI explicitly tells users that video transport is not yet enabled. The next phase should add a pinned WebRTC dependency, feed composited pixel buffers into a WebRTC video source, exchange SDP/ICE through the paired local session, and render the remote track on the receiving iPhone/iPad.
+The sender shares the final composed preview after dual-camera layout and filters, so PiP/split layout, PiP placement, output aspect ratio, and filter appearance travel as one video stream. It does not send two independent raw camera feeds and does not transmit microphone audio.
 
-## Acceptance checks for the next phase
+## How to try it
 
-1. Build on Xcode 16 / iOS SDK 18+ without regressing Camera Control.
-2. Discover and pair two real iOS devices on the same Wi-Fi.
-3. Send only the composited preview (PiP/split/filter/aspect), not both raw camera feeds.
-4. Measure end-to-end latency and verify reconnect, stop, and resource cleanup on-device.
-5. Keep the pull request draft until the real-device tests pass.
+1. Install the same build on both iOS devices and connect both to the same Wi-Fi network.
+2. Open **Wireless Monitor** on both devices and allow local-network access.
+3. On one device, tap **Connect** next to the other device; accept the invitation on the other device.
+4. On the receiving device, tap **Receive View**. On the camera device, tap **Send Composite View**.
+5. Tap **Stop Video** to end the stream. If local Wi-Fi direct connectivity fails, check that the access point does not isolate clients.
+
+## Validation status
+
+GitHub Actions can verify that the source compiles and an unsigned IPA is packaged. This does not replace testing on two physical devices. End-to-end latency, sustained thermal behaviour, reconnects, Wi-Fi client isolation, and signing/install behaviour still need real-device validation. A target below 150 ms is an optimisation goal, not a measured result.
