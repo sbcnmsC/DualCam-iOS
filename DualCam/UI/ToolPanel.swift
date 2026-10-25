@@ -404,6 +404,11 @@ struct ParamsTab: View {
                           range: Double(base)...Double(max(base * info.maxZoom, base + 0.01)),
                           valueText: String(format: "%.1f×", Double(cam.displayZoom(slot: i))))
         }
+        .onChange(of: cam.paramTarget) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.slotStates[i].manualExposure) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.slotStates[i].manualFocus) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.slotStates[i].locked) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.slotStates[i].manualWB) { _, _ in HapticFeedback.play(.selection) }
     }
 
     private func shutterText(info: SlotInfo, t: Double) -> String {
@@ -440,9 +445,12 @@ struct ParamsTab: View {
 
 struct SettingsTab: View {
     @EnvironmentObject private var cam: CameraManager
+    @AppStorage("dualcam.haptics.enabled") private var hapticsEnabled = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            Toggle("触觉反馈（按钮与相机控制）", isOn: $hapticsEnabled)
+                .font(.system(size: 13))
             HStack {
                 Text("画幅").font(.system(size: 13)).frame(width: 64, alignment: .leading)
                 Picker("", selection: $cam.cfg.aspect) {
@@ -511,6 +519,19 @@ struct SettingsTab: View {
             Toggle("前置镜像", isOn: $cam.cfg.mirrorFront).font(.system(size: 13))
             Toggle("三分参考线", isOn: $cam.cfg.showGrid).font(.system(size: 13))
 
+        }
+        .onChange(of: cam.cfg.aspect) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.resolution) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.fps) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.outputMode) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.livePhoto) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.timerSeconds) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.lowLight) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.stabilization) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.mirrorFront) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.showGrid) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: hapticsEnabled) { _, enabled in
+            if enabled { HapticFeedback.play(.selection) }
         }
     }
 }
