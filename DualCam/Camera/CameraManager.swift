@@ -448,6 +448,16 @@ final class CameraManager: NSObject, ObservableObject {
         sharedFPS = usedFPS
         lock.unlock()
 
+        // AVCaptureSession captures microphone input whenever the audio input is attached.
+        // iOS mutes haptics/system sounds during audio input by default; opt in before starting
+        // the capture session so shutter and recording confirmations remain available.
+        if audioActive {
+            do {
+                try AVAudioSession.sharedInstance().setAllowHapticsAndSystemSoundsDuringRecording(true)
+            } catch {
+                NSLog("[DualCam] Unable to enable haptics during audio capture: %@", error.localizedDescription)
+            }
+        }
         session.startRunning()
         restartCount = 0
         let running = session.isRunning
