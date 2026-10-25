@@ -141,11 +141,13 @@ struct WirelessMonitorSheet: View {
         discovery.onSignalReceived = { [weak transport] data in
             transport?.handleSignal(data)
         }
-        transport.onPeerStopped = { [weak transport] in
+        let frameSource = cam.compositedFrameSource
+        let modeBinding = $mode
+        transport.onPeerStopped = {
             // A remote stop should return the local UI to idle and detach its frame sink.
             DispatchQueue.main.async {
-                cam.compositedFrameSource.setSink(nil)
-                mode = .idle
+                frameSource.setSink(nil)
+                modeBinding.wrappedValue = .idle
             }
         }
         transport.onSignal = { [weak discovery, weak transport] data in
