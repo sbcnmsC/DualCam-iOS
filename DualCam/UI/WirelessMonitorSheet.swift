@@ -64,7 +64,7 @@ struct WirelessMonitorSheet: View {
                                     .frame(maxWidth: .infinity)
                             }
                             .buttonStyle(.borderedProminent)
-                            .disabled(service.connectedPeers.isEmpty || mode == .sending)
+                            .disabled(service.connectedPeers.isEmpty || mode != .idle)
 
                             Button {
                                 startReceiving()
@@ -73,7 +73,7 @@ struct WirelessMonitorSheet: View {
                                     .frame(maxWidth: .infinity)
                             }
                             .buttonStyle(.bordered)
-                            .disabled(service.connectedPeers.isEmpty || mode == .receiving)
+                            .disabled(service.connectedPeers.isEmpty || mode != .idle)
                         }
 
                         if mode == .receiving {
@@ -145,10 +145,9 @@ struct WirelessMonitorSheet: View {
         let modeBinding = $mode
         transport.onPeerStopped = {
             // A remote stop should return the local UI to idle and detach its frame sink.
-            DispatchQueue.main.async {
-                frameSource.setSink(nil)
-                modeBinding.wrappedValue = .idle
-            }
+            frameSource.setSink(nil)
+            cam.setLocalCameraCaptureSuspended(false)
+            DispatchQueue.main.async { modeBinding.wrappedValue = .idle }
         }
         transport.onSignal = { [weak discovery, weak transport] data in
             do {
@@ -176,17 +175,20 @@ struct WirelessMonitorSheet: View {
     private func startReceiving() {
         guard !service.connectedPeers.isEmpty else { return }
         mode = .receiving
+        cam.setLocalCameraCaptureSuspended(true)
         rtc.startReceiving()
     }
 
     private func stopVideo() {
         cam.compositedFrameSource.setSink(nil)
+        cam.setLocalCameraCaptureSuspended(false)
         rtc.stopAndNotifyPeer()
         mode = .idle
     }
 
     private func cleanup() {
         cam.compositedFrameSource.setSink(nil)
+        cam.setLocalCameraCaptureSuspended(false)
         rtc.onSignal = nil
         rtc.onPeerStopped = nil
         service.onSignalReceived = nil
