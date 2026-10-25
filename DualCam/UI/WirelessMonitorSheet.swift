@@ -141,7 +141,7 @@ struct WirelessMonitorSheet: View {
         discovery.onSignalReceived = { [weak transport] data in
             transport?.handleSignal(data)
         }
-        transport.onSignal = { [weak discovery] data in
+        transport.onSignal = { [weak discovery, weak transport] data in
             do {
                 try discovery?.sendSignal(data)
             } catch {
