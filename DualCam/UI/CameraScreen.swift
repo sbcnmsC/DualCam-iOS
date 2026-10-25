@@ -5,6 +5,7 @@ struct CameraScreen: View {
     @EnvironmentObject private var cam: CameraManager
     @State private var showPanel = false
     @State private var panelTab: PanelTab = .pip
+    @State private var showWirelessMonitor = false
 
     private let topBarHeight: CGFloat = 56
 
@@ -23,14 +24,18 @@ struct CameraScreen: View {
                 .frame(maxWidth: .infinity)
 
                 VStack(spacing: 0) {
-                    TopBar(paramsActive: showPanel && panelTab == .params) {
-                        if showPanel && panelTab == .params {
-                            showPanel = false
-                        } else {
-                            panelTab = .params
-                            showPanel = true
-                        }
-                    }
+                    TopBar(
+                        paramsActive: showPanel && panelTab == .params,
+                        onParams: {
+                            if showPanel && panelTab == .params {
+                                showPanel = false
+                            } else {
+                                panelTab = .params
+                                showPanel = true
+                            }
+                        },
+                        onWirelessMonitor: { showWirelessMonitor = true }
+                    )
                     .frame(height: topBarHeight)
                     Spacer(minLength: 0)
                     if showPanel {
@@ -46,6 +51,9 @@ struct CameraScreen: View {
         .background(Color.black.ignoresSafeArea())
         .statusBarHidden(true)
         .animation(.easeInOut(duration: 0.22), value: showPanel)
+        .sheet(isPresented: $showWirelessMonitor) {
+            WirelessMonitorSheet()
+        }
         .modifier(HardwareCameraCaptureModifier())
     }
 
@@ -340,6 +348,7 @@ struct TopBar: View {
     @EnvironmentObject private var cam: CameraManager
     var paramsActive = false
     var onParams: () -> Void = {}
+    var onWirelessMonitor: () -> Void = {}
 
     var body: some View {
         ZStack {
@@ -354,7 +363,7 @@ struct TopBar: View {
                 .frame(height: 30)
                 .background(Capsule().fill(Color.red.opacity(0.85)))
             } else {
-                HStack(spacing: 38) {
+                HStack(spacing: 22) {
                     iconButton(cam.flashEnabled ? "bolt.fill" : "bolt.slash", active: cam.flashEnabled) {
                         cam.flashEnabled.toggle()
                     }
@@ -365,6 +374,9 @@ struct TopBar: View {
                     }
                     iconButton("slider.horizontal.3", active: paramsActive) {
                         onParams()
+                    }
+                    iconButton("dot.radiowaves.left.and.right", active: false) {
+                        onWirelessMonitor()
                     }
                 }
             }
