@@ -42,6 +42,7 @@ struct ToolPanel: View {
 
     private func tabButton(_ item: PanelTab, vertical: Bool, showTitle: Bool = false) -> some View {
         Button {
+            if tab != item { HapticFeedback.play(.selection) }
             withAnimation(.easeInOut(duration: 0.2)) { tab = item }
         } label: {
             Group {
@@ -95,6 +96,7 @@ struct ToolPanel: View {
                     VStack(spacing: 5) {
                         ForEach(PanelTab.allCases) { item in
                             Button {
+                                if tab != item { HapticFeedback.play(.selection) }
                                 withAnimation(.easeInOut(duration: 0.18)) { tab = item }
                             } label: {
                                 HStack(spacing: 8) {
@@ -122,6 +124,7 @@ struct ToolPanel: View {
                         Spacer(minLength: 0)
 
                         Button {
+                            HapticFeedback.play(.button)
                             onClose?()
                         } label: {
                             HStack(spacing: 8) {
@@ -207,7 +210,10 @@ struct LabeledSlider: View {
                     .minimumScaleFactor(0.8)
             }
             .frame(width: icon == nil ? 64 : 84, alignment: .leading)
-            Slider(value: $value, in: range)
+            Slider(value: $value, in: range, onEditingChanged: { editing in
+                // Give one short confirmation when the adjustment finishes, never on every drag frame.
+                if !editing { HapticFeedback.play(.selection) }
+            })
                 .accessibilityLabel(title)
                 .accessibilityValue(valueText)
             Text(valueText)
@@ -284,6 +290,9 @@ struct PiPTab: View {
             .disabled(!isPiP)
             .opacity(isPiP ? 1 : 0.4)
         }
+        .onChange(of: cam.cfg.pipShape) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.pipRatio) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.pipSnap) { _, _ in HapticFeedback.play(.selection) }
     }
 
     private func cfgBinding(_ keyPath: WritableKeyPath<Config, CGFloat>) -> Binding<Double> {
@@ -339,6 +348,7 @@ struct FilterTab: View {
 
             HStack(spacing: 8) {
                 Button {
+                    HapticFeedback.play(.button)
                     pendingFilter = cam.cfg.filter
                     pendingIntensity = Double(cam.cfg.filterIntensity)
                 } label: {
@@ -353,6 +363,7 @@ struct FilterTab: View {
                 .disabled(!hasPendingChanges)
 
                 Button {
+                    HapticFeedback.play(.success)
                     cam.applyFilter(pendingFilter, intensity: CGFloat(pendingIntensity))
                 } label: {
                     Label("应用到画面", systemImage: "checkmark")
@@ -377,6 +388,7 @@ struct FilterTab: View {
     private func cell(_ kind: FilterKind) -> some View {
         let selected = pendingFilter == kind
         return Button {
+            if pendingFilter != kind { HapticFeedback.play(.selection) }
             pendingFilter = kind
         } label: {
             VStack(spacing: 5) {
@@ -572,6 +584,7 @@ struct SettingsTab: View {
     @AppStorage("dualcam.sound.shutter") private var shutterSoundEnabled = true
     @AppStorage("dualcam.sound.recordingStart") private var recordingStartSoundEnabled = true
     @AppStorage("dualcam.sound.recordingStop") private var recordingStopSoundEnabled = true
+    @AppStorage("dualcam.haptics.enabled") private var hapticsEnabled = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -672,6 +685,20 @@ struct SettingsTab: View {
             Toggle("三分参考线", isOn: $cam.cfg.showGrid).font(.system(size: 13))
 
             VStack(alignment: .leading, spacing: 8) {
+                Label("触觉反馈", systemImage: "hand.tap.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                Toggle("启用按钮与相机触感", isOn: $hapticsEnabled)
+                    .font(.system(size: 12))
+                    .tint(.yellow)
+                Text("快门、录像、切换镜头、画中画吸附和参数调整使用不同力度的震感。")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.white.opacity(0.6))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.045)))
+
+            VStack(alignment: .leading, spacing: 8) {
                 Label("提示音", systemImage: "speaker.wave.2.fill")
                     .font(.system(size: 13, weight: .semibold))
                 Toggle("启用全部提示音", isOn: $cueSoundsEnabled)
@@ -699,6 +726,19 @@ struct SettingsTab: View {
 
             Divider().overlay(Color.white.opacity(0.12))
             QuickParameterPreferencesSection()
+        }
+        .onChange(of: cam.cfg.aspect) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.resolution) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.fps) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.outputMode) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.livePhoto) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.timerSeconds) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.lowLight) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.stabilization) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.mirrorFront) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.showGrid) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: hapticsEnabled) { _, enabled in
+            if enabled { HapticFeedback.play(.selection) }
         }
     }
 }
