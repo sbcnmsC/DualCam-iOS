@@ -1,5 +1,6 @@
 import Foundation
 import MultipeerConnectivity
+import UIKit
 
 /// Local discovery and encrypted peer pairing. Media transport is deliberately separate:
 /// this session is for discovery/signalling only, not for pushing every video frame.
