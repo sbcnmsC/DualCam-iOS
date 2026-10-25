@@ -47,6 +47,28 @@ final class CameraManager: NSObject, ObservableObject {
 
     var mainSlot: Int { cfg.swapped ? 1 : 0 }
 
+    /// The receiving device should not keep its own dual-camera session running behind the monitor UI.
+    /// All capture-session lifecycle changes stay on sessionQueue.
+    func setLocalCameraCaptureSuspended(_ suspended: Bool) {
+        sessionQueue.async {
+            self.monitorReceiverSuspendsCamera = suspended
+            if suspended {
+                if self.session.isRunning { self.session.stopRunning() }
+                DispatchQueue.main.async {
+                    self.ready = false
+                    self.statusText = "无线监看模式"
+                }
+            } else if self.currentCombo != nil, !self.session.isRunning {
+                self.session.startRunning()
+                let running = self.session.isRunning
+                DispatchQueue.main.async {
+                    self.ready = running
+                    self.statusText = running ? "双摄已启动" : "相机未能启动"
+                }
+            }
+        }
+    }
+
     // MARK: - 采集对象
 
     private let session = AVCaptureMultiCamSession()
@@ -67,6 +89,7 @@ final class CameraManager: NSObject, ObservableObject {
     private let srgb = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
 
     // sessionQueue 独占
+    private var monitorReceiverSuspendsCamera = false
     private var devices: [AVCaptureDevice?] = [nil, nil]
     // 高频滑块只保留最新参数，约 30 次/秒锁定一次设备配置。
     private var pendingDeviceUpdateTokens: [String: UUID] = [:]
@@ -313,7 +336,7 @@ final class CameraManager: NSObject, ObservableObject {
         sharedFPS = usedFPS
         lock.unlock()
 
-        session.startRunning()
+        if !monitorReceiverSuspendsCamera { session.startRunning() }
         restartCount = 0
         let running = session.isRunning
         DispatchQueue.main.async {
@@ -535,7 +558,7 @@ final class CameraManager: NSObject, ObservableObject {
         nc.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: nil) { [weak self] _ in
             guard let self = self else { return }
             self.sessionQueue.async {
-                if self.currentCombo != nil, !self.session.isRunning {
+                if !self.monitorReceiverSuspendsCamera, self.currentCombo != nil, !self.session.isRunning {
                     self.session.startRunning()
                 }
             }
