@@ -45,6 +45,7 @@ struct CameraScreen: View {
         .background(Color.black.ignoresSafeArea())
         .statusBarHidden(true)
         .animation(.easeInOut(duration: 0.22), value: showPanel)
+        .modifier(HardwareCameraCaptureModifier())
     }
 
     private func fitSize(in size: CGSize) -> CGSize {
@@ -619,5 +620,24 @@ struct OverlayLayer: View {
         }
         .animation(.easeInOut(duration: 0.2), value: cam.toast)
         .allowsHitTesting(false)
+    }
+}
+
+/// iOS 18+ hardware capture events (including Camera Control on iPhone 16 and later).
+/// Uses the same shutter path as the on-screen button so photo/video mode, countdown,
+/// recording state, and existing sound preferences remain consistent.
+private struct HardwareCameraCaptureModifier: ViewModifier {
+    @EnvironmentObject private var cam: CameraManager
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.onCameraCaptureEvent(isEnabled: cam.ready, action: { event in
+                guard event.phase == .ended, cam.ready else { return }
+                cam.shutterTapped()
+            })
+        } else {
+            content
+        }
     }
 }
