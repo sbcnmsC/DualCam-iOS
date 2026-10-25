@@ -1697,8 +1697,11 @@ final class CameraManager: NSObject, ObservableObject {
         } else {
             settings = AVCapturePhotoSettings()
         }
+        // Keep the largest supported sensor still dimensions, but use balanced processing:
+        // it substantially reduces capture latency compared with .quality while preserving the
+        // native photo pixel dimensions. The capture output has already prepared this profile.
         settings.maxPhotoDimensions = dimensions
-        settings.photoQualityPrioritization = .quality
+        settings.photoQualityPrioritization = .balanced
 
         let uniqueID = settings.uniqueID
         let delegate = HighResolutionPhotoCaptureDelegate { [weak self] finishedID, data, _ in
@@ -1803,7 +1806,13 @@ final class CameraManager: NSObject, ObservableObject {
             singleSession.addOutput(output)
         }
         output.maxPhotoDimensions = dimensions
+        // Prepare the highest-resolution balanced profile before the shutter is pressed.
+        // Preparation must happen before capture; reusing this settings object for capture is invalid.
         output.maxPhotoQualityPrioritization = .quality
+        let preparedSettings = AVCapturePhotoSettings()
+        preparedSettings.maxPhotoDimensions = dimensions
+        preparedSettings.photoQualityPrioritization = .balanced
+        output.setPreparedPhotoSettingsArray([preparedSettings], completionHandler: nil)
         singleSession.commitConfiguration()
 
         highResolutionPhotoInput = newInput
