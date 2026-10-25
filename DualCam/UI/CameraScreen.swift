@@ -289,7 +289,10 @@ struct PiPOverlay: View {
                 if pinchStart == nil { pinchStart = cam.cfg.pipWidth }
                 cam.cfg.pipWidth = min(max((pinchStart ?? 0.32) * v.magnification, 0.16), 0.9)
             }
-            .onEnded { _ in pinchStart = nil }
+            .onEnded { _ in
+                HapticFeedback.play(.selection)
+                pinchStart = nil
+            }
     }
 
     private var resizeGesture: some Gesture {
@@ -299,7 +302,10 @@ struct PiPOverlay: View {
                 let delta = v.translation.width / max(size.width, 1)
                 cam.cfg.pipWidth = min(max((resizeStart ?? 0.32) + delta, 0.16), 0.9)
             }
-            .onEnded { _ in resizeStart = nil }
+            .onEnded { _ in
+                HapticFeedback.play(.selection)
+                resizeStart = nil
+            }
     }
 }
 
@@ -324,7 +330,10 @@ struct SplitDivider: View {
                     let r = (start ?? 0.5) + v.translation.height / max(size.height, 1)
                     cam.cfg.splitRatio = min(max(r, 0.25), 0.75)
                 }
-                .onEnded { _ in start = nil }
+                .onEnded { _ in
+                    HapticFeedback.play(.selection)
+                    start = nil
+                }
         )
     }
 }
