@@ -40,7 +40,8 @@ enum HapticFeedback {
         case .button:
             impact(.light, intensity: 0.60)
         case .selection:
-            UISelectionFeedbackGenerator().selectionChanged()
+            selectionGenerator.selectionChanged()
+            selectionGenerator.prepare()
         case .focus:
             impact(.light, intensity: 0.80)
         case .shutter:
@@ -57,17 +58,44 @@ enum HapticFeedback {
             // Distinct, firm confirmation at the moment recording is stopped.
             impact(.heavy, intensity: 0.9)
         case .success:
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            notificationGenerator.notificationOccurred(.success)
+            notificationGenerator.prepare()
         case .error:
-            UINotificationFeedbackGenerator().notificationOccurred(.error)
+            notificationGenerator.notificationOccurred(.error)
+            notificationGenerator.prepare()
         case .countdownTick:
             impact(.soft, intensity: 0.40)
         }
     }
 
+    // Generators are kept alive and re-prepared after every event. Creating a new generator and
+    // firing it immediately (the old behaviour) gives the Taptic Engine no time to spin up, which
+    // adds noticeable latency to the shutter tick and can drop the event entirely.
+    // Only ever touched from the main thread (see play(_:)).
+    private static let selectionGenerator = UISelectionFeedbackGenerator()
+    private static let notificationGenerator = UINotificationFeedbackGenerator()
+    private static var impactGenerators: [UIImpactFeedbackGenerator.FeedbackStyle: UIImpactFeedbackGenerator] = [:]
+
     private static func impact(_ style: UIImpactFeedbackGenerator.FeedbackStyle, intensity: CGFloat) {
-        let generator = UIImpactFeedbackGenerator(style: style)
-        generator.prepare()
+        let generator: UIImpactFeedbackGenerator
+        if let existing = impactGenerators[style] {
+            generator = existing
+        } else {
+            generator = UIImpactFeedbackGenerator(style: style)
+            impactGenerators[style] = generator
+        }
         generator.impactOccurred(intensity: intensity)
+        generator.prepare()
+    }
+
+    /// Spin the Taptic Engine up ahead of a likely shutter press (e.g. when a countdown starts).
+    static func prepareShutter() {
+        guard isEnabled else { return }
+        DispatchQueue.main.async {
+            let style = UIImpactFeedbackGenerator.FeedbackStyle.medium
+            let generator = impactGenerators[style] ?? UIImpactFeedbackGenerator(style: style)
+            impactGenerators[style] = generator
+            generator.prepare()
+        }
     }
 }

@@ -391,6 +391,16 @@ final class CameraManager: NSObject, ObservableObject {
         }
     }
 
+    /// iOS mutes haptics and system sounds while the microphone is capturing unless the audio
+    /// session opts in. Safe to call repeatedly.
+    private static func allowHapticsDuringAudioCapture() {
+        do {
+            try AVAudioSession.sharedInstance().setAllowHapticsAndSystemSoundsDuringRecording(true)
+        } catch {
+            NSLog("[DualCam] Unable to enable haptics during audio capture: %@", error.localizedDescription)
+        }
+    }
+
     private func rebuild(attempt: Int = 0, resetStates: Bool = false) {
         guard let combo = currentCombo else { return }
         // Discard delayed device writes from the previous camera graph.
@@ -487,14 +497,15 @@ final class CameraManager: NSObject, ObservableObject {
         // iOS mutes haptics/system sounds during audio input by default; opt in before starting
         // the capture session so shutter and recording confirmations remain available.
         if audioActive {
-            do {
-                try AVAudioSession.sharedInstance().setAllowHapticsAndSystemSoundsDuringRecording(true)
-            } catch {
-                NSLog("[DualCam] Unable to enable haptics during audio capture: %@", error.localizedDescription)
-            }
+            Self.allowHapticsDuringAudioCapture()
         }
         if !monitorReceiverSuspendsCamera {
             session.startRunning()
+            // startRunning() lets the capture session reconfigure the shared audio session, which can
+            // reset the haptics opt-in made above; assert it again once the session is really running.
+            if audioActive {
+                Self.allowHapticsDuringAudioCapture()
+            }
         }
         restartCount = 0
         let running = session.isRunning
@@ -1425,6 +1436,9 @@ final class CameraManager: NSObject, ObservableObject {
         }
         switch captureMode {
         case .photo:
+            // A high-resolution still is still being processed: takePhoto() would ignore this press,
+            // so don't fire a shutter tick for a photo that is never taken (hardware keys repeat easily).
+            guard !isCapturingPhoto else { return }
             let willCountdown = timerSeconds > 0
             HapticFeedback.play(willCountdown ? .button : .shutter)
             runWithCountdown {
@@ -1460,6 +1474,8 @@ final class CameraManager: NSObject, ObservableObject {
                 action()
             } else {
                 HapticFeedback.play(.countdownTick)
+                // The next tick fires the shutter; warm the Taptic Engine so it lands on time.
+                if left == 2 { HapticFeedback.prepareShutter() }
                 self.countdown = left - 1
             }
         }
