@@ -1,0 +1,75 @@
+name: Build IPA - Wireless Monitor
+
+on:
+  push:
+    branches:
+      - optimize/photo-speed-resolution
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      APP_NAME: DualCam
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: brew install xcodegen librsvg
+
+      - name: Render App Icon
+        run: ./scripts/generate-app-icon.sh
+
+      - name: Generate Xcode project
+        run: |
+          xcodegen generate
+          sed -i '' -E 's/objectVersion = 77;/objectVersion = 60;/; s/preferredProjectObjectVersion = 77;/preferredProjectObjectVersion = 60;/' "$APP_NAME.xcodeproj/project.pbxproj"
+
+      - name: Show Xcode and resolve packages
+        run: |
+          xcodebuild -version
+          xcodebuild -resolvePackageDependencies -project "$APP_NAME.xcodeproj" -scheme "$APP_NAME"
+
+      - name: Build unsigned IPA
+        shell: bash
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project "$APP_NAME.xcodeproj" \
+            -scheme "$APP_NAME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee build.log
+
+          APP=$(find build/DerivedData/Build/Products -maxdepth 3 -name "$APP_NAME.app" | head -n 1)
+          test -n "$APP"
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry "$APP_NAME.ipa" Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: DualCam-ipa-wireless-monitor
+          path: DualCam.ipa
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DualCam-build-log-wireless-monitor
+          path: build.log
+          if-no-files-found: ignore
+          retention-days: 30
