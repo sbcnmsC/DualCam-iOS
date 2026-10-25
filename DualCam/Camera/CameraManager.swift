@@ -42,6 +42,8 @@ final class CameraManager: NSObject, ObservableObject {
         l.backgroundColor = UIColor.black.cgColor
         return l
     }()
+    /// Shares the already-composited preview buffer with optional non-blocking consumers.
+    let compositedFrameSource = CompositedFrameSource()
 
     var mainSlot: Int { cfg.swapped ? 1 : 0 }
 
@@ -606,6 +608,7 @@ final class CameraManager: NSObject, ObservableObject {
         let previewImage = finalImage.transformed(by: CGAffineTransform(scaleX: pw / canvas.width,
                                                                         y: ph / canvas.height))
         if let buffer = renderPreviewBuffer(previewImage, width: Int(pw), height: Int(ph)) {
+            compositedFrameSource.publish(buffer, presentationTime: pts)
             display(buffer)
         }
 
