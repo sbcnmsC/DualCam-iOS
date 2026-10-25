@@ -186,6 +186,7 @@ struct CameraScreen: View {
         .background(Color.black.ignoresSafeArea())
         .statusBarHidden(true)
         .animation(.easeInOut(duration: 0.22), value: showPanel)
+        .modifier(HardwareCameraCaptureModifier())
     }
 
     /// Open the native iPhone Photos app from the album shortcut.
@@ -261,6 +262,25 @@ struct CameraScreen: View {
         // This keeps the preview/PiP coordinate space stable while only controls reflow.
         guard size.width <= size.height else { return }
         cam.updateFreeAspect(width: size.width, height: max(size.height, 100))
+    }
+}
+
+
+/// Route iPhone 16 Pro Camera Control capture events through the same shutter path as the UI.
+/// iOS 17 remains supported; Camera Control integration is active on iOS 18 and later.
+private struct HardwareCameraCaptureModifier: ViewModifier {
+    @EnvironmentObject private var cam: CameraManager
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.onCameraCaptureEvent(isEnabled: cam.ready, action: { event in
+                guard event.phase == .ended, cam.ready else { return }
+                cam.shutterTapped()
+            })
+        } else {
+            content
+        }
     }
 }
 
