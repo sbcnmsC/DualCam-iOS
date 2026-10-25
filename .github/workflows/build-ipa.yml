@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 40
     env:
       APP_NAME: DualCam
@@ -31,7 +31,7 @@ jobs:
       - name: Generate Xcode project
         run: |
           xcodegen generate
-          # 新版 XcodeGen 生成 Xcode 16 的工程格式（77），runner 上的 Xcode 15.4 打不开，降到 60
+          # Use the current Xcode 16 SDK for iOS 18 Camera Control APIs; keep project objectVersion compatible with tooling.
           sed -i '' -E 's/objectVersion = 77;/objectVersion = 60;/; s/preferredProjectObjectVersion = 77;/preferredProjectObjectVersion = 60;/' "$APP_NAME.xcodeproj/project.pbxproj"
 
       - name: Xcode version and project info
