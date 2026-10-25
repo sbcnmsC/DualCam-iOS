@@ -24,7 +24,9 @@ final class NetworkMonitorService: ObservableObject {
     var onSignalReceived: ((Data) -> Void)?
 
     private static let serviceType = "_dualcam-monitor._tcp"
-    private static let protocolVersion = "DualCamMonitor/1"
+    // v2: packets are length-prefixed (TCP is a byte stream, not a message stream).
+    private static let protocolVersion = "DualCamMonitor/2"
+    private static let maxPacketSize = 1_000_000
     private let queue = DispatchQueue(label: "com.dualcam.monitor.network", qos: .userInitiated)
     private var listener: NWListener?
     private var browser: NWBrowser?
@@ -43,6 +45,7 @@ final class NetworkMonitorService: ObservableObject {
     private var localConfirmed = false
     private var remoteConfirmed = false
     private var pairedOnQueue = false
+    private var receiveBuffer = Data()
 
     private struct Packet: Codable {
         let type: String
@@ -144,6 +147,10 @@ final class NetworkMonitorService: ObservableObject {
         let parameters = NWParameters.tcp
         parameters.includePeerToPeer = true
         parameters.allowLocalEndpointReuse = true
+        // Signalling packets are tiny and latency-sensitive; don't let Nagle batch them.
+        if let tcp = parameters.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options {
+            tcp.noDelay = true
+        }
         return parameters
     }
 
@@ -221,6 +228,7 @@ final class NetworkMonitorService: ObservableObject {
         localConfirmed = false
         remoteConfirmed = false
         pairedOnQueue = false
+        receiveBuffer.removeAll()
 
         connection.stateUpdateHandler = { [weak self, weak connection] state in
             guard let self, let connection, self.activeConnection === connection else { return }
@@ -262,10 +270,15 @@ final class NetworkMonitorService: ObservableObject {
     }
 
     private func receiveNext(from connection: NWConnection) {
-        connection.receiveMessage { [weak self, weak connection] data, _, isComplete, error in
+        // TCP is a byte stream: one read can hold half a packet or several packets, so packets are
+        // length-prefixed and reassembled here instead of assuming one read equals one message.
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self, weak connection] data, _, isComplete, error in
             guard let self, let connection, self.activeConnection === connection else { return }
             if let data, !data.isEmpty {
-                self.handlePacket(data)
+                self.receiveBuffer.append(data)
+                self.drainReceiveBuffer()
+                // A packet handler may have torn the connection down.
+                guard self.activeConnection === connection else { return }
             }
             if let error {
                 self.activeConnection?.cancel()
@@ -274,7 +287,7 @@ final class NetworkMonitorService: ObservableObject {
                 self.publishStatus("连接中断：\(error.localizedDescription)")
                 return
             }
-            if data == nil && isComplete {
+            if isComplete {
                 self.activeConnection?.cancel()
                 self.activeConnection = nil
                 self.resetHandshake(publishCode: nil)
@@ -282,6 +295,27 @@ final class NetworkMonitorService: ObservableObject {
                 return
             }
             self.receiveNext(from: connection)
+        }
+    }
+
+    /// Split the receive buffer into complete `[4-byte big-endian length][JSON packet]` frames.
+    private func drainReceiveBuffer() {
+        while receiveBuffer.count >= 4 {
+            let length = receiveBuffer.prefix(4).reduce(0) { ($0 << 8) | Int($1) }
+            guard length > 0, length <= Self.maxPacketSize else {
+                receiveBuffer.removeAll()
+                publishStatus("收到无法识别的配对消息")
+                activeConnection?.cancel()
+                return
+            }
+            guard receiveBuffer.count >= 4 + length else { return }
+            let body = receiveBuffer.subdata(in: 4..<(4 + length))
+            receiveBuffer.removeSubrange(0..<(4 + length))
+            handlePacket(body)
+            if activeConnection == nil {
+                receiveBuffer.removeAll()
+                return
+            }
         }
     }
 
@@ -406,7 +440,11 @@ final class NetworkMonitorService: ObservableObject {
 
     private func send(_ packet: Packet) {
         guard let connection = activeConnection,
-              let data = try? JSONEncoder().encode(packet) else { return }
+              let body = try? JSONEncoder().encode(packet),
+              body.count <= Self.maxPacketSize else { return }
+        var lengthPrefix = UInt32(body.count).bigEndian
+        var data = withUnsafeBytes(of: &lengthPrefix) { Data($0) }
+        data.append(body)
         connection.send(content: data, contentContext: .defaultMessage, isComplete: true,
                         completion: .contentProcessed { [weak self] error in
             guard let self, let error else { return }
@@ -426,6 +464,7 @@ final class NetworkMonitorService: ObservableObject {
         remoteConfirmed = false
         pairedOnQueue = false
         didSendHello = false
+        receiveBuffer.removeAll()
         DispatchQueue.main.async {
             self.pairingCode = publishCode
             self.isSecurelyPaired = false

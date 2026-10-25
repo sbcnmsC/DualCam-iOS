@@ -184,6 +184,21 @@ struct WirelessMonitorSheet: View {
             }
             .onAppear { configureAndStart() }
             .onDisappear { cleanup() }
+            .onChange(of: network.pairingCode) { _, code in
+                // A safety code to compare on both screens just appeared; get the user's attention.
+                if code != nil { HapticFeedback.play(.focus) }
+            }
+            .onChange(of: network.isSecurelyPaired) { wasPaired, paired in
+                if paired {
+                    HapticFeedback.play(.success)
+                } else if wasPaired, mode != .idle {
+                    // The peer vanished mid-stream (no "stop" message ever arrives). Without this the
+                    // receiver stays on a black screen with its own camera suspended, and the sender
+                    // keeps pushing frames into a dead connection.
+                    HapticFeedback.play(.error)
+                    stopVideoAfterPeerLoss()
+                }
+            }
         }
     }
 
@@ -205,6 +220,7 @@ struct WirelessMonitorSheet: View {
         let frameSource = cameraManager.compositedFrameSource
         let modeBinding = $mode
         transport.onPeerStopped = {
+            HapticFeedback.play(.button)
             frameSource.setSink(nil)
             cameraManager.setLocalCameraCaptureSuspended(false)
             DispatchQueue.main.async { modeBinding.wrappedValue = .idle }
@@ -234,6 +250,14 @@ struct WirelessMonitorSheet: View {
         cam.compositedFrameSource.setSink(nil)
         cam.setLocalCameraCaptureSuspended(false)
         rtc.stopAndNotifyPeer()
+        mode = .idle
+    }
+
+    /// The secure link dropped underneath a running video session: there is nobody to notify.
+    private func stopVideoAfterPeerLoss() {
+        cam.compositedFrameSource.setSink(nil)
+        cam.setLocalCameraCaptureSuspended(false)
+        rtc.stop()
         mode = .idle
     }
 

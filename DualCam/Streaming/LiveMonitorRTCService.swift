@@ -22,21 +22,26 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
     }()
 
     private let frameQueue = DispatchQueue(label: "com.dualcam.monitor.frames", qos: .userInteractive)
+    // frameLock guards the frame path shared by the camera queue (push), frameQueue (drain) and the
+    // main thread (start/stop): latestFrame, isDrainingFrames, lastQueuedPTS, isSending,
+    // videoSource, frameCapturer and lastAdaptedSize.
     private let frameLock = NSLock()
     private var latestFrame: CompositedFrameSource.Frame?
     private var isDrainingFrames = false
     private var lastQueuedPTS = CMTime.invalid
-
-    private var peerConnection: RTCPeerConnection?
+    private var isSending = false
     private var videoSource: RTCVideoSource?
     private var frameCapturer: CompositedVideoCapturer?
+    private var lastAdaptedSize = CGSize.zero
+
+    // Everything below is main-thread only. WebRTC completion handlers hop back to main first.
+    private var peerConnection: RTCPeerConnection?
     private var localVideoTrack: RTCVideoTrack?
     private var hasRemoteDescription = false
     private var pendingRemoteCandidates: [RTCIceCandidate] = []
-    private var isSending = false
     private var isReceivingEnabled = false
     private var pendingOffer: Signal?
-    private var lastAdaptedSize = CGSize.zero
+    private var announcedConnected = false
 
     private struct Signal: Codable {
         let type: String
@@ -54,13 +59,15 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
             return
         }
 
-        isSending = true
         let source = Self.factory.videoSource()
         let capturer = CompositedVideoCapturer(delegate: source)
         let track = Self.factory.videoTrack(with: source, trackId: "dualcam-composite")
         pc.add(track, streamIds: ["dualcam-stream"])
+        frameLock.lock()
         videoSource = source
         frameCapturer = capturer
+        isSending = true
+        frameLock.unlock()
         localVideoTrack = track
         updateStatus("正在建立局域网视频连接…")
 
@@ -93,14 +100,22 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
     /// Called by the camera queue. Keeps only the newest frame, so encoder backpressure never
     /// grows a queue of stale frames or blocks real-time capture/preview.
     func push(_ frame: CompositedFrameSource.Frame) {
-        guard isSending else { return }
+        frameLock.lock()
+        guard isSending else {
+            frameLock.unlock()
+            return
+        }
+        // Cap at ~30 fps for a 60 fps source. The threshold sits below 1/30 s on purpose: camera
+        // timestamps jitter by a few ms, and an exact 1/30 s cut-off would also drop roughly every
+        // other frame of a plain 30 fps feed.
         if frame.presentationTime.isValid, lastQueuedPTS.isValid {
             let delta = CMTimeGetSeconds(CMTimeSubtract(frame.presentationTime, lastQueuedPTS))
-            if delta >= 0, delta < (1.0 / 30.0) { return }
+            if delta >= 0, delta < (0.8 / 30.0) {
+                frameLock.unlock()
+                return
+            }
         }
         if frame.presentationTime.isValid { lastQueuedPTS = frame.presentationTime }
-
-        frameLock.lock()
         latestFrame = frame
         let shouldStartDrain = !isDrainingFrames
         if shouldStartDrain { isDrainingFrames = true }
@@ -115,12 +130,21 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
         frameLock.lock()
         let frame = latestFrame
         latestFrame = nil
-        frameLock.unlock()
-
-        if let frame, isSending, let source = videoSource, let capturer = frameCapturer {
+        let sending = isSending
+        let source = videoSource
+        let capturer = frameCapturer
+        var needsAdapt = false
+        if let frame {
             let size = CGSize(width: frame.width, height: frame.height)
             if size != lastAdaptedSize {
                 lastAdaptedSize = size
+                needsAdapt = true
+            }
+        }
+        frameLock.unlock()
+
+        if let frame, sending, let source, let capturer {
+            if needsAdapt {
                 source.adaptOutputFormat(toWidth: Int32(frame.width), height: Int32(frame.height), fps: 30)
             }
             capturer.capture(pixelBuffer: frame.pixelBuffer, presentationTime: frame.presentationTime)
@@ -147,15 +171,18 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
             handleOffer(signal)
         case "answer":
             guard let sdp = signal.sdp, let pc = peerConnection else { return }
-            pc.setRemoteDescription(RTCSessionDescription(type: .answer, sdp: sdp)) { [weak self] error in
-                guard let self else { return }
-                if let error {
-                    self.updateStatus("接收连接响应失败：\(error.localizedDescription)")
-                    return
+            pc.setRemoteDescription(RTCSessionDescription(type: .answer, sdp: sdp)) { [weak self, weak pc] error in
+                // WebRTC calls this on its signalling thread; connection state is main-thread only.
+                DispatchQueue.main.async {
+                    guard let self, let pc, self.peerConnection === pc else { return }
+                    if let error {
+                        self.updateStatus("接收连接响应失败：\(error.localizedDescription)")
+                        return
+                    }
+                    self.hasRemoteDescription = true
+                    self.drainRemoteCandidates()
+                    self.updateStatus("正在接收实时视频…")
                 }
-                self.hasRemoteDescription = true
-                self.drainRemoteCandidates()
-                self.updateStatus("正在接收实时视频…")
             }
         case "candidate":
             guard let candidate = signal.candidate, let line = signal.sdpMLineIndex else { return }
@@ -185,23 +212,26 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
     }
 
     func stop() {
+        // Stop the frame path first (under the lock the camera/frame queues use), then tear down WebRTC.
+        frameLock.lock()
         isSending = false
+        videoSource = nil
+        frameCapturer = nil
+        lastAdaptedSize = .zero
+        lastQueuedPTS = .invalid
+        latestFrame = nil
+        frameLock.unlock()
+
         isReceivingEnabled = false
         pendingOffer = nil
         peerConnection?.delegate = nil
         peerConnection?.close()
         peerConnection = nil
-        videoSource = nil
-        frameCapturer = nil
         localVideoTrack = nil
         remoteVideoTrack = nil
         pendingRemoteCandidates.removeAll()
         hasRemoteDescription = false
-        lastAdaptedSize = .zero
-        lastQueuedPTS = .invalid
-        frameLock.lock()
-        latestFrame = nil
-        frameLock.unlock()
+        announcedConnected = false
         updateStatus("视频已停止")
     }
 
@@ -221,28 +251,31 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
         transceiver.direction = .recvOnly
         _ = pc.addTransceiver(of: .video, init: transceiver)
 
-        pc.setRemoteDescription(RTCSessionDescription(type: .offer, sdp: sdp)) { [weak self] error in
-            guard let self else { return }
-            if let error {
-                self.updateStatus("接收视频请求失败：\(error.localizedDescription)")
-                return
-            }
-            self.hasRemoteDescription = true
-            self.drainRemoteCandidates()
-            let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
-            pc.answer(for: constraints) { [weak self] answer, error in
-                guard let self, let answer else {
-                    self?.updateStatus("生成接收端响应失败：\(error?.localizedDescription ?? "未知错误")")
+        pc.setRemoteDescription(RTCSessionDescription(type: .offer, sdp: sdp)) { [weak self, weak pc] error in
+            // WebRTC calls this on its signalling thread; connection state is main-thread only.
+            DispatchQueue.main.async {
+                guard let self, let pc, self.peerConnection === pc else { return }
+                if let error {
+                    self.updateStatus("接收视频请求失败：\(error.localizedDescription)")
                     return
                 }
-                pc.setLocalDescription(answer) { [weak self] error in
-                    guard let self, error == nil else {
-                        self?.updateStatus("设置接收端响应失败：\(error?.localizedDescription ?? "未知错误")")
+                self.hasRemoteDescription = true
+                self.drainRemoteCandidates()
+                let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
+                pc.answer(for: constraints) { [weak self] answer, error in
+                    guard let self, let answer else {
+                        self?.updateStatus("生成接收端响应失败：\(error?.localizedDescription ?? "未知错误")")
                         return
                     }
-                    self.send(Signal(type: "answer", sdp: answer.sdp, sdpType: "answer"))
-                    self.updateStatus("等待接收实时画面…")
-                    self.refreshRemoteTrack(from: pc)
+                    pc.setLocalDescription(answer) { [weak self] error in
+                        guard let self, error == nil else {
+                            self?.updateStatus("设置接收端响应失败：\(error?.localizedDescription ?? "未知错误")")
+                            return
+                        }
+                        self.send(Signal(type: "answer", sdp: answer.sdp, sdpType: "answer"))
+                        self.updateStatus("等待接收实时画面…")
+                        self.refreshRemoteTrack(from: pc)
+                    }
                 }
             }
         }
@@ -295,6 +328,21 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
     private func updateStatus(_ value: String) {
         DispatchQueue.main.async { self.statusText = value }
     }
+
+    /// Tactile confirmation when the live link comes up or drops. Fires once per transition, so
+    /// the repeated `.connected` / `.completed` ICE states don't buzz twice.
+    private func announceConnection(connected: Bool, hapticOnLoss: Bool = false) {
+        DispatchQueue.main.async {
+            if connected {
+                guard !self.announcedConnected else { return }
+                self.announcedConnected = true
+                HapticFeedback.play(.success)
+            } else {
+                self.announcedConnected = false
+                if hapticOnLoss { HapticFeedback.play(.error) }
+            }
+        }
+    }
 }
 
 private final class CompositedVideoCapturer: RTCVideoCapturer {
@@ -325,14 +373,18 @@ extension LiveMonitorRTCService: RTCPeerConnectionDelegate {
         switch newState {
         case .connected, .completed:
             updateStatus("实时画面已连接")
+            announceConnection(connected: true)
         case .checking:
             updateStatus("正在连接设备…")
         case .disconnected:
             updateStatus("视频连接暂时中断")
+            announceConnection(connected: false, hapticOnLoss: false)
         case .failed:
             updateStatus("局域网直连失败；请确认两台设备在同一 Wi-Fi，且路由器未隔离客户端")
+            announceConnection(connected: false, hapticOnLoss: true)
         case .closed:
             updateStatus("视频连接已关闭")
+            announceConnection(connected: false, hapticOnLoss: false)
         default:
             break
         }
