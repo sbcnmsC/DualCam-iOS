@@ -25,7 +25,17 @@ enum HapticFeedback {
 
     static func play(_ event: Event) {
         guard isEnabled else { return }
+        if Thread.isMainThread {
+            perform(event)
+        } else {
+            DispatchQueue.main.async {
+                guard isEnabled else { return }
+                perform(event)
+            }
+        }
+    }
 
+    private static func perform(_ event: Event) {
         switch event {
         case .button:
             impact(.light, intensity: 0.65)
