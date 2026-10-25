@@ -408,6 +408,7 @@ struct PreviewStage: View {
                 cam.setZoom(slot: slot, factor: (zoomStart ?? 1) * v.magnification)
             }
             .onEnded { _ in
+                HapticFeedback.play(.zoom)
                 zoomStart = nil
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { pinching = false }
             }
@@ -875,7 +876,10 @@ struct TimerSettingsOverlay: View {
                         .foregroundStyle(Color.yellow)
                     Text("拍摄倒计时").font(.system(size: 17, weight: .semibold))
                     Spacer()
-                    Button { isPresented = false } label: {
+                    Button {
+                        HapticFeedback.play(.button)
+                        isPresented = false
+                    } label: {
                         Image(systemName: "xmark.circle.fill")
                             .rotationEffect(.degrees(iconRotationDegrees))
                             .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
@@ -883,7 +887,11 @@ struct TimerSettingsOverlay: View {
                     }
                 }
                 HStack(spacing: 14) {
-                    Button { timerDraft = max(1, timerDraft - 1) } label: {
+                    Button {
+                        guard timerDraft > 1 else { HapticFeedback.play(.button); return }
+                        HapticFeedback.play(.selection)
+                        timerDraft = max(1, timerDraft - 1)
+                    } label: {
                         Image(systemName: "minus")
                             .rotationEffect(.degrees(iconRotationDegrees))
                             .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
@@ -892,22 +900,34 @@ struct TimerSettingsOverlay: View {
                     Text("\(timerDraft) 秒")
                         .font(.system(size: 28, weight: .semibold, design: .rounded))
                         .monospacedDigit().frame(minWidth: 90)
-                    Button { timerDraft = min(60, timerDraft + 1) } label: {
+                    Button {
+                        guard timerDraft < 60 else { HapticFeedback.play(.button); return }
+                        HapticFeedback.play(.selection)
+                        timerDraft = min(60, timerDraft + 1)
+                    } label: {
                         Image(systemName: "plus")
                             .rotationEffect(.degrees(iconRotationDegrees))
                             .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
                             .frame(width: 40, height: 40)
                     }
                 }
-                Slider(value: Binding(get: { Double(timerDraft) }, set: { timerDraft = Int($0.rounded()) }), in: 1...60, step: 1)
+                Slider(
+                    value: Binding(get: { Double(timerDraft) }, set: { timerDraft = Int($0.rounded()) }),
+                    in: 1...60, step: 1,
+                    onEditingChanged: { editing in
+                        if !editing { HapticFeedback.play(.selection) }
+                    }
+                )
                 HStack(spacing: 10) {
                     Button("关闭") {
+                        HapticFeedback.play(.button)
                         cam.timerSeconds = 0
                         isPresented = false
                     }
                     .frame(maxWidth: .infinity).padding(.vertical, 11)
                     .background(Color.white.opacity(0.10), in: Capsule())
                     Button("确定") {
+                        HapticFeedback.play(.success)
                         cam.timerSeconds = timerDraft
                         isPresented = false
                     }
@@ -950,18 +970,21 @@ struct TopBar: View {
                     iconButton(cam.flashEnabled ? "bolt.fill" : "bolt.slash",
                                active: cam.flashEnabled,
                                label: cam.flashEnabled ? "关闭闪光灯" : "开启闪光灯") {
+                        HapticFeedback.play(.button)
                         cam.flashEnabled.toggle()
                     }
                     iconButton(cam.cfg.livePhoto ? "livephoto" : "livephoto.slash",
                                active: cam.cfg.livePhoto && cam.captureMode == .photo,
                                dimmed: cam.captureMode == .video,
                                label: "实况照片") {
+                        HapticFeedback.play(.selection)
                         cam.cfg.livePhoto.toggle()
                     }
                     iconButton(cam.timerSeconds == 0 ? "timer" : "timer.circle.fill",
                                active: cam.timerSeconds > 0,
                                label: cam.timerSeconds == 0 ? "设置倒计时" : "倒计时：\(cam.timerSeconds) 秒",
                                badge: cam.timerSeconds == 0 ? nil : "\(cam.timerSeconds)") {
+                        HapticFeedback.play(.button)
                         onTimerTap()
                     }
                     iconButton("arrow.triangle.2.circlepath",
@@ -1084,6 +1107,7 @@ struct BottomBar: View {
 
     private var paramsButton: some View {
         Button {
+            HapticFeedback.play(.button)
             withAnimation(.easeInOut(duration: 0.22)) {
                 if showPanel && panelTab == .params {
                     showPanel = false
@@ -1113,6 +1137,7 @@ struct BottomBar: View {
     private var captureModeSwitchButton: some View {
         Button {
             guard !cam.isRecording else { return }
+            HapticFeedback.play(.selection)
             withAnimation(.easeInOut(duration: 0.15)) {
                 cam.captureMode = cam.captureMode == .photo ? .video : .photo
             }
@@ -1204,7 +1229,10 @@ struct ThumbnailButton: View {
     @State private var bounce = false
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            HapticFeedback.play(.button)
+            action()
+        } label: {
             VStack(spacing: 3) {
                 ZStack(alignment: .bottomTrailing) {
                     Group {
