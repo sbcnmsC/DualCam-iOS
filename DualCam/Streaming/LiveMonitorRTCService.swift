@@ -143,7 +143,7 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
     }
 
     func reportSignallingFailure(_ message: String) {
-        updateStatus("信令发送失败：\\(message)")
+        updateStatus("信令发送失败：\(message)")
     }
 
     func stop() {
