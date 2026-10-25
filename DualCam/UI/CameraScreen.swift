@@ -170,6 +170,7 @@ struct PreviewStage: View {
                 cam.setZoom(slot: slot, factor: (zoomStart ?? 1) * v.magnification)
             }
             .onEnded { _ in
+                HapticFeedback.play(.zoom)
                 zoomStart = nil
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { pinching = false }
             }
@@ -187,6 +188,7 @@ struct OutputModePill: View {
 
     var body: some View {
         Button {
+            HapticFeedback.play(.selection)
             let all = OutputMode.allCases
             let i = all.firstIndex(of: cam.cfg.outputMode) ?? 0
             cam.cfg.outputMode = all[(i + 1) % all.count]
@@ -393,7 +395,10 @@ struct TopBar: View {
 
     private func iconButton(_ icon: String, active: Bool, dimmed: Bool = false,
                             action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        Button {
+            HapticFeedback.play(.button)
+            action()
+        } label: {
             Image(systemName: icon)
                 .font(.system(size: 19, weight: .semibold))
                 .foregroundStyle(active ? Color.yellow : Color.white)
@@ -432,7 +437,10 @@ struct BottomBar: View {
                 ShutterButton()
                 Spacer()
 
-                Button { showPanel.toggle() } label: {
+                Button {
+                    HapticFeedback.play(.button)
+                    showPanel.toggle()
+                } label: {
                     Image(systemName: "circle.grid.2x3.fill")
                         .font(.system(size: 20))
                         .foregroundStyle(showPanel ? Color.yellow : Color.white)
@@ -471,6 +479,7 @@ struct ThumbnailButton: View {
 
     var body: some View {
         Button {
+            HapticFeedback.play(.button)
             if let url = URL(string: "photos-redirect://") { UIApplication.shared.open(url) }
         } label: {
             ZStack {
@@ -505,8 +514,14 @@ struct ModePill: View {
             DragGesture(minimumDistance: 20)
                 .onEnded { v in
                     guard !cam.isRecording else { return }
-                    if v.translation.width < -20 { cam.captureMode = .photo }
-                    if v.translation.width > 20 { cam.captureMode = .video }
+                    if v.translation.width < -20, cam.captureMode != .photo {
+                        HapticFeedback.play(.selection)
+                        cam.captureMode = .photo
+                    }
+                    if v.translation.width > 20, cam.captureMode != .video {
+                        HapticFeedback.play(.selection)
+                        cam.captureMode = .video
+                    }
                 }
         )
     }
@@ -514,7 +529,10 @@ struct ModePill: View {
     private func item(_ mode: CaptureMode) -> some View {
         let selected = cam.captureMode == mode
         return Button {
-            if !cam.isRecording { cam.captureMode = mode }
+            if !cam.isRecording, cam.captureMode != mode {
+                HapticFeedback.play(.selection)
+                cam.captureMode = mode
+            }
         } label: {
             Text(mode == .video ? "视频" : "照片")
                 .font(.system(size: 16, weight: .semibold))
