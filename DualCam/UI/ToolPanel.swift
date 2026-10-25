@@ -448,7 +448,10 @@ struct ParamsTab: View {
                     Label("曝光与测光", systemImage: "sun.max")
                         .font(.system(size: 12, weight: .semibold))
                     Spacer()
-                    Button("归零") { cam.resetExposureBias(i) }
+                    Button("归零") {
+                    HapticFeedback.play(.selection)
+                    cam.resetExposureBias(i)
+                }
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Color.yellow)
                         .disabled(st.manualExposure || st.locked)
@@ -486,7 +489,10 @@ struct ParamsTab: View {
                     Label("对焦", systemImage: "scope")
                         .font(.system(size: 12, weight: .semibold))
                     Spacer()
-                    Button("自动对焦") { cam.setAutoFocus(i) }
+                    Button("自动对焦") {
+                    HapticFeedback.play(.selection)
+                    cam.setAutoFocus(i)
+                }
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Color.yellow)
                 }
@@ -913,12 +919,23 @@ struct QuickParamsTab: View {
                 }
             }
         }
+        .onChange(of: selected) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.paramTarget) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.slotStates[i].manualExposure) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.slotStates[i].manualFocus) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.slotStates[i].locked) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.slotStates[i].manualWB) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.resolution) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.fps) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.timerSeconds) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.stabilization) { _, _ in HapticFeedback.play(.selection) }
     }
 
     private func parameterActionBar(slot: Int) -> some View {
         HStack(spacing: 8) {
             Button {
                 guard !cam.isRecording else { return }
+                HapticFeedback.play(.success)
                 cam.resetParameterDefaults(slot)
             } label: {
                 Label("恢复默认", systemImage: "arrow.counterclockwise")
@@ -931,6 +948,7 @@ struct QuickParamsTab: View {
             .disabled(cam.isRecording)
 
             Button {
+                HapticFeedback.play(.selection)
                 controlsLocked.toggle()
             } label: {
                 Label(controlsLocked ? "解锁参数" : "锁定参数",
@@ -959,7 +977,10 @@ struct QuickParamsTab: View {
                 Spacer()
                 Text(String(format: "%+.1f EV", Double(st.exposureBias)))
                     .font(.system(size: 11, design: .monospaced)).foregroundStyle(Color.yellow)
-                Button("归零") { cam.resetExposureBias(i) }
+                Button("归零") {
+                    HapticFeedback.play(.selection)
+                    cam.resetExposureBias(i)
+                }
                     .font(.system(size: 11, weight: .semibold)).tint(.yellow)
             }
             LabeledSlider(title: "EV", value: numberBinding(i, \.exposureBias) { cam.applyExposure($0) },
@@ -1004,7 +1025,10 @@ struct QuickParamsTab: View {
                 Toggle("手动对焦", isOn: boolBinding(i, \.manualFocus) { cam.applyFocus($0) })
                     .font(.system(size: 12))
                 Spacer()
-                Button("自动对焦") { cam.setAutoFocus(i) }
+                Button("自动对焦") {
+                    HapticFeedback.play(.selection)
+                    cam.setAutoFocus(i)
+                }
                     .font(.system(size: 11, weight: .semibold)).tint(.yellow)
             }
             if st.manualFocus {
