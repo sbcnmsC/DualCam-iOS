@@ -261,7 +261,7 @@ private final class CompositedVideoCapturer: RTCVideoCapturer {
             rotation: ._0,
             timeStampNs: Int64(time.value)
         )
-        delegate.capturer(self, didCapture: frame)
+        delegate?.capturer(self, didCapture: frame)
     }
 }
 
