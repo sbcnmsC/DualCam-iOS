@@ -1122,12 +1122,12 @@ final class CameraManager: NSObject, ObservableObject {
         countdownTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] t in
             guard let self = self else { t.invalidate(); return }
             guard let left = self.countdown else { t.invalidate(); return }
-            HapticFeedback.play(.countdownTick)
             if left <= 1 {
                 t.invalidate()
                 self.countdown = nil
                 action()
             } else {
+                HapticFeedback.play(.countdownTick)
                 self.countdown = left - 1
             }
         }
