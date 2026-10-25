@@ -137,6 +137,15 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
         }
     }
 
+    func stopAndNotifyPeer() {
+        send(Signal(type: "stop"))
+        stop()
+    }
+
+    func reportSignallingFailure(_ message: String) {
+        updateStatus("信令发送失败：\\(message)")
+    }
+
     func stop() {
         isSending = false
         isReceivingEnabled = false
