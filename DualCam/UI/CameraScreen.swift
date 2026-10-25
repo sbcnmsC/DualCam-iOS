@@ -629,7 +629,7 @@ struct FocusMarkerView: View {
                         guard !isDisabled else { return }
                         if !isDragging {
                             isDragging = true
-                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            HapticFeedback.play(.button)
                         }
                         let y = min(max(value.location.y - 8, 0), trackHeight)
                         let fraction = 1 - Float(y / max(trackHeight, 1))
@@ -638,6 +638,7 @@ struct FocusMarkerView: View {
                         onExposureChanged(next)
                     }
                     .onEnded { _ in
+                        if isDragging { HapticFeedback.play(.selection) }
                         isDragging = false
                         dragBias = nil
                     }
@@ -652,7 +653,7 @@ struct FocusMarkerView: View {
                 .contentShape(Rectangle())
                 .onTapGesture(count: 2) {
                     guard !isDisabled else { return }
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    HapticFeedback.play(.selection)
                     dragBias = 0
                     onExposureChanged(0)
                 }
@@ -746,7 +747,7 @@ struct PiPOverlay: View {
                     dragOriginCenter = cam.cfg.pipCenter
                     isDraggingPiP = true
                     cam.setPiPDragPreviewActive(true)
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    HapticFeedback.play(.button)
                 }
                 guard let origin = dragOriginCenter else { return }
                 let next = CGPoint(
@@ -777,7 +778,10 @@ struct PiPOverlay: View {
                 if pinchStart == nil { pinchStart = cam.cfg.pipWidth }
                 cam.cfg.pipWidth = min(max((pinchStart ?? 0.32) * v.magnification, 0.16), 0.9)
             }
-            .onEnded { _ in pinchStart = nil }
+            .onEnded { _ in
+                if pinchStart != nil { HapticFeedback.play(.selection) }
+                pinchStart = nil
+            }
     }
 
     private var resizeGesture: some Gesture {
@@ -789,7 +793,10 @@ struct PiPOverlay: View {
                 let delta = v.translation.width / max(size.width, 1) / max(scale, 0.1)
                 cam.cfg.pipWidth = min(max((resizeStart ?? 0.32) + delta, 0.16), 0.9)
             }
-            .onEnded { _ in resizeStart = nil }
+            .onEnded { _ in
+                if resizeStart != nil { HapticFeedback.play(.selection) }
+                resizeStart = nil
+            }
     }
 }
 
@@ -816,7 +823,12 @@ struct SplitDivider: View {
                         let r = (start ?? 0.5) + v.translation.width / max(size.width, 1)
                         cam.cfg.splitRatio = min(max(r, 0.25), 0.75)
                     }
-                    .onEnded { _ in start = nil }
+                    .onEnded { _ in
+                        if let start, abs(cam.cfg.splitRatio - start) > 0.003 {
+                            HapticFeedback.play(.selection)
+                        }
+                        start = nil
+                    }
             )
         } else {
             let y = cam.cfg.splitRatio * size.height
