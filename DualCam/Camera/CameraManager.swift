@@ -740,8 +740,8 @@ final class CameraManager: NSObject, ObservableObject {
     func selectStop(_ stop: ZoomStop) {
         guard comboIndex < combos.count else { return }
         let current = combos[comboIndex]
-        HapticFeedback.play(.zoom)
         if current.a == stop.spec {
+            HapticFeedback.play(.zoom)
             setZoom(slot: 0, factor: stop.zoom)
             return
         }
@@ -753,6 +753,7 @@ final class CameraManager: NSObject, ObservableObject {
         if target == nil { target = combos.firstIndex(where: { $0.a == stop.spec && $0.b == .front }) }
         if target == nil { target = combos.firstIndex(where: { $0.a == stop.spec }) }
         guard let idx = target else { return }
+        HapticFeedback.play(.zoom)
         comboIndex = idx
         let combo = combos[idx]
         slotStates[0] = SlotState(zoom: stop.zoom)
