@@ -610,73 +610,9 @@ struct FocusMarkerView: View {
 
     private var exposureRail: some View {
         VStack(spacing: 4) {
-            Text("EV")
-                .font(.system(size: 9, weight: .bold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.72))
-
-            ZStack {
-                Capsule()
-                    .fill(Color.white.opacity(isDisabled ? 0.16 : 0.22))
-                    .frame(width: 4, height: trackHeight)
-
-                ForEach(0..<5, id: \.self) { tick in
-                    Capsule()
-                        .fill(Color.white.opacity(tick == 2 ? 0.78 : 0.38))
-                        .frame(width: tick == 2 ? 13 : 7, height: 1)
-                        .offset(y: (CGFloat(tick) / 4 - 0.5) * trackHeight)
-                }
-
-                Circle()
-                    .fill(Color.black.opacity(0.8))
-                    .frame(width: 25, height: 25)
-                    .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 0.7))
-                    .overlay {
-                        Circle()
-                            .fill(disabledTint)
-                            .frame(width: 11, height: 11)
-                    }
-                    .overlay(Circle().stroke(Color.white.opacity(0.9), lineWidth: 1.2)
-                        .frame(width: 25, height: 25))
-                    .shadow(color: .black.opacity(0.45), radius: 4, y: 2)
-                    .offset(y: handleOffset)
-                    .allowsHitTesting(false)
-            }
-            .frame(width: railWidth, height: trackHeight + 16)
-            .contentShape(Rectangle())
-            .highPriorityGesture(
-                DragGesture(minimumDistance: 0, coordinateSpace: .local)
-                    .onChanged { value in
-                        guard !isDisabled else { return }
-                        if !isDragging {
-                            isDragging = true
-                            HapticFeedback.play(.button)
-                        }
-                        let y = min(max(value.location.y - 8, 0), trackHeight)
-                        let fraction = 1 - Float(y / max(trackHeight, 1))
-                        let next = minBias + fraction * (maxBias - minBias)
-                        dragBias = next
-                        onExposureChanged(next)
-                    }
-                    .onEnded { _ in
-                        if isDragging { HapticFeedback.play(.selection) }
-                        isDragging = false
-                        dragBias = nil
-                    }
-            )
-            .accessibilityLabel("曝光补偿")
-            .accessibilityValue(String(format: "%+.1f EV", Double(displayedBias)))
-            .accessibilityHint(isDisabled ? "先关闭手动曝光或锁定状态" : "上下滑动调节曝光，双击数值可归零")
-
-            Text(String(format: "%+.1f", Double(displayedBias)))
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundStyle(isDisabled ? Color.white.opacity(0.45) : Color.yellow)
-                .contentShape(Rectangle())
-                .onTapGesture(count: 2) {
-                    guard !isDisabled else { return }
-                    HapticFeedback.play(.selection)
-                    dragBias = 0
-                    onExposureChanged(0)
-                }
+            exposureRailTitle
+            exposureTrack
+            exposureValue
         }
         .padding(.horizontal, 2)
         .padding(.vertical, 5)
@@ -684,6 +620,95 @@ struct FocusMarkerView: View {
         .overlay(Capsule().stroke(Color.white.opacity(isDragging ? 0.36 : 0.13), lineWidth: 0.8))
         .opacity(isDisabled ? 0.72 : 1)
         .frame(width: railWidth, height: max(reticleSize, trackHeight + 50))
+    }
+
+    private var exposureRailTitle: some View {
+        Text("EV")
+            .font(.system(size: 9, weight: .bold, design: .rounded))
+            .foregroundStyle(Color.white.opacity(0.72))
+    }
+
+    private var exposureTrack: some View {
+        ZStack {
+            Capsule()
+                .fill(Color.white.opacity(isDisabled ? 0.16 : 0.22))
+                .frame(width: 4, height: trackHeight)
+
+            ForEach(0..<5, id: \.self) { tick in
+                Capsule()
+                    .fill(Color.white.opacity(tick == 2 ? 0.78 : 0.38))
+                    .frame(width: tick == 2 ? 13 : 7, height: 1)
+                    .offset(y: (CGFloat(tick) / 4 - 0.5) * trackHeight)
+            }
+
+            exposureHandle
+        }
+        .frame(width: railWidth, height: trackHeight + 16)
+        .contentShape(Rectangle())
+        .highPriorityGesture(exposureDragGesture)
+        .accessibilityLabel("曝光补偿")
+        .accessibilityValue(String(format: "%+.1f EV", Double(displayedBias)))
+        .accessibilityHint(isDisabled ? "先关闭手动曝光或锁定状态" : "上下滑动调节曝光，双击数值可归零")
+    }
+
+    private var exposureHandle: some View {
+        Circle()
+            .fill(Color.black.opacity(0.8))
+            .frame(width: 25, height: 25)
+            .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 0.7))
+            .overlay {
+                Circle()
+                    .fill(disabledTint)
+                    .frame(width: 11, height: 11)
+            }
+            .overlay(
+                Circle()
+                    .stroke(Color.white.opacity(0.9), lineWidth: 1.2)
+                    .frame(width: 25, height: 25)
+            )
+            .shadow(color: .black.opacity(0.45), radius: 4, y: 2)
+            .offset(y: handleOffset)
+            .allowsHitTesting(false)
+    }
+
+    private var exposureValue: some View {
+        Text(String(format: "%+.1f", Double(displayedBias)))
+            .font(.system(size: 10, weight: .bold, design: .monospaced))
+            .foregroundStyle(isDisabled ? Color.white.opacity(0.45) : Color.yellow)
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2, perform: resetExposureToZero)
+    }
+
+    private var exposureDragGesture: some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .local)
+            .onChanged(handleExposureDragChanged)
+            .onEnded { _ in handleExposureDragEnded() }
+    }
+
+    private func handleExposureDragChanged(_ value: DragGesture.Value) {
+        guard !isDisabled else { return }
+        if !isDragging {
+            isDragging = true
+            HapticFeedback.play(.button)
+        }
+        let y = min(max(value.location.y - 8, 0), trackHeight)
+        let fraction = 1 - Float(y / max(trackHeight, 1))
+        let next = minBias + fraction * (maxBias - minBias)
+        dragBias = next
+        onExposureChanged(next)
+    }
+
+    private func handleExposureDragEnded() {
+        if isDragging { HapticFeedback.play(.selection) }
+        isDragging = false
+        dragBias = nil
+    }
+
+    private func resetExposureToZero() {
+        guard !isDisabled else { return }
+        HapticFeedback.play(.selection)
+        dragBias = 0
+        onExposureChanged(0)
     }
 }
 
