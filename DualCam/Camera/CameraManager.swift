@@ -158,7 +158,33 @@ final class CameraManager: NSObject, ObservableObject {
         return l
     }()
 
+    /// Publishes the already-composited preview buffer to the optional wireless monitor sink.
+    /// When no receiver is connected, this source performs no extra rendering or frame copies.
+    let compositedFrameSource = CompositedFrameSource()
+
     var mainSlot: Int { cfg.swapped ? 1 : 0 }
+
+    /// Suspend local capture when this device is only displaying a remote monitor stream.
+    /// AVCaptureSession lifecycle is owned by sessionQueue.
+    func setLocalCameraCaptureSuspended(_ suspended: Bool) {
+        sessionQueue.async {
+            self.monitorReceiverSuspendsCamera = suspended
+            if suspended {
+                if self.session.isRunning { self.session.stopRunning() }
+                DispatchQueue.main.async {
+                    self.ready = false
+                    self.statusText = "无线监看接收模式"
+                }
+            } else if self.currentCombo != nil, !self.session.isRunning {
+                self.session.startRunning()
+                let running = self.session.isRunning
+                DispatchQueue.main.async {
+                    self.ready = running
+                    self.statusText = running ? "" : "相机未能恢复"
+                }
+            }
+        }
+    }
 
     // MARK: - 采集对象
 
@@ -201,6 +227,8 @@ final class CameraManager: NSObject, ObservableObject {
     private var lastDeviceUpdateAt: [String: UInt64] = [:]
     private var deviceConfigGeneration: UInt64 = 0
     private var currentCombo: LensCombo?
+    /// sessionQueue only: do not restart the local camera while acting as a wireless receiver.
+    private var monitorReceiverSuspendsCamera = false
     private var audioGranted = false
     private var audioActive = false
     private var restartCount = 0
@@ -458,7 +486,9 @@ final class CameraManager: NSObject, ObservableObject {
                 NSLog("[DualCam] Unable to enable haptics during audio capture: %@", error.localizedDescription)
             }
         }
-        session.startRunning()
+        if !monitorReceiverSuspendsCamera {
+            session.startRunning()
+        }
         restartCount = 0
         let running = session.isRunning
         DispatchQueue.main.async {
@@ -847,6 +877,9 @@ final class CameraManager: NSObject, ObservableObject {
             y: ph / renderCanvas.height
         ))
         if let buffer = renderPreviewBuffer(previewImage, width: Int(pw), height: Int(ph)) {
+            // Fan out this exact preview buffer: composition, PiP/split, crop/aspect and filter
+            // have already been applied. The sink must return immediately and never block videoQueue.
+            compositedFrameSource.publish(buffer, presentationTime: pts)
             display(buffer)
         }
 
