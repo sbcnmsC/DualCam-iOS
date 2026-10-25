@@ -1096,9 +1096,10 @@ final class CameraManager: NSObject, ObservableObject {
         }
         switch captureMode {
         case .photo:
-            HapticFeedback.play(timerSeconds == 0 ? .shutter : .button)
+            let willCountdown = timerSeconds > 0
+            HapticFeedback.play(willCountdown ? .button : .shutter)
             runWithCountdown {
-                if self.timerSeconds > 0 { HapticFeedback.play(.shutter) }
+                if willCountdown { HapticFeedback.play(.shutter) }
                 self.takePhoto()
             }
         case .video:
