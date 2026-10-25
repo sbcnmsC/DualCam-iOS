@@ -172,7 +172,7 @@ struct WirelessMonitorSheet: View {
 
     private func stopVideo() {
         cam.compositedFrameSource.setSink(nil)
-        rtc.stop()
+        rtc.stopAndNotifyPeer()
         mode = .idle
     }
 
