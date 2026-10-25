@@ -10,13 +10,20 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-14
+    # Xcode 15 / iOS 17 SDK does not include SwiftUI onCameraCaptureEvent.
+    # macOS 15 provides an Xcode 16 toolchain with the iOS 18 SDK.
+    runs-on: macos-15
     timeout-minutes: 40
     env:
       APP_NAME: DualCam
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Show Xcode and SDK versions
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
 
       - name: Install XcodeGen
         run: brew install xcodegen
