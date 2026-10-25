@@ -8,6 +8,7 @@ struct ToolPanel: View {
             HStack(spacing: 4) {
                 ForEach(PanelTab.allCases) { t in
                     Button {
+                        if tab != t { HapticFeedback.play(.selection) }
                         withAnimation(.easeInOut(duration: 0.2)) { tab = t }
                     } label: {
                         HStack(spacing: 5) {
@@ -203,6 +204,7 @@ struct FilterTab: View {
 
             HStack(spacing: 8) {
                 Button {
+                    HapticFeedback.play(.button)
                     pendingFilter = cam.cfg.filter
                     pendingIntensity = Double(cam.cfg.filterIntensity)
                 } label: {
@@ -217,6 +219,7 @@ struct FilterTab: View {
                 .disabled(!hasPendingChanges)
 
                 Button {
+                    HapticFeedback.play(.success)
                     cam.applyFilter(pendingFilter, intensity: CGFloat(pendingIntensity))
                 } label: {
                     Label("应用到画面", systemImage: "checkmark")
@@ -241,6 +244,7 @@ struct FilterTab: View {
     private func cell(_ kind: FilterKind) -> some View {
         let selected = pendingFilter == kind
         return Button {
+            if pendingFilter != kind { HapticFeedback.play(.selection) }
             pendingFilter = kind
         } label: {
             VStack(spacing: 5) {
@@ -299,7 +303,10 @@ struct ParamsTab: View {
                     Label("曝光与测光", systemImage: "sun.max")
                         .font(.system(size: 12, weight: .semibold))
                     Spacer()
-                    Button("归零") { cam.resetExposureBias(i) }
+                    Button("归零") {
+                        HapticFeedback.play(.selection)
+                        cam.resetExposureBias(i)
+                    }
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Color.yellow)
                         .disabled(st.manualExposure || st.locked)
@@ -337,7 +344,10 @@ struct ParamsTab: View {
                     Label("对焦", systemImage: "scope")
                         .font(.system(size: 12, weight: .semibold))
                     Spacer()
-                    Button("自动对焦") { cam.setAutoFocus(i) }
+                    Button("自动对焦") {
+                        HapticFeedback.play(.selection)
+                        cam.setAutoFocus(i)
+                    }
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Color.yellow)
                 }
