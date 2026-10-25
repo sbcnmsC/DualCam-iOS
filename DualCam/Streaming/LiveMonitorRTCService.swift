@@ -28,6 +28,8 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
     private var hasRemoteDescription = false
     private var pendingRemoteCandidates: [RTCIceCandidate] = []
     private var isSending = false
+    private var isReceivingEnabled = false
+    private var pendingOffer: Signal?
     private var lastAdaptedSize = CGSize.zero
 
     private struct Signal: Codable {
@@ -75,6 +77,16 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
         }
     }
 
+    func startReceiving() {
+        isReceivingEnabled = true
+        if let offer = pendingOffer {
+            pendingOffer = nil
+            handleOffer(offer)
+        } else {
+            updateStatus("已准备接收画面，请在相机端启动发送")
+        }
+    }
+
     func push(_ frame: CompositedFrameSource.Frame) {
         guard isSending, let source = videoSource, let capturer = frameCapturer else { return }
         let size = CGSize(width: frame.width, height: frame.height)
@@ -89,6 +101,11 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
         guard let signal = try? JSONDecoder().decode(Signal.self, from: data) else { return }
         switch signal.type {
         case "offer":
+            guard isReceivingEnabled else {
+                pendingOffer = signal
+                updateStatus("检测到对端视频请求，点击“接收画面”开始")
+                return
+            }
             handleOffer(signal)
         case "answer":
             guard let sdp = signal.sdp, let pc = peerConnection else { return }
@@ -122,6 +139,8 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
 
     func stop() {
         isSending = false
+        isReceivingEnabled = false
+        pendingOffer = nil
         peerConnection?.delegate = nil
         peerConnection?.close()
         peerConnection = nil
@@ -137,7 +156,10 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
 
     private func handleOffer(_ signal: Signal) {
         guard let sdp = signal.sdp else { return }
+        let queuedCandidates = pendingRemoteCandidates
         stop()
+        isReceivingEnabled = true
+        pendingRemoteCandidates = queuedCandidates
         guard let pc = makePeerConnection() else {
             updateStatus("无法创建接收端连接")
             return
