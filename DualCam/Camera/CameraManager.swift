@@ -212,6 +212,13 @@ final class CameraManager: NSObject, ObservableObject {
     private var highResolutionBatchIndex = 0
     private var highResolutionBatchData: [Int: Data] = [:]
     private var highResolutionBatchCompletion: (([Int: Data]) -> Void)?
+    /// sessionQueue-owned bookkeeping for the temporary single-camera still session.
+    private var highResolutionBatchActive = false
+    private var highResolutionBatchToken: UInt64 = 0
+    private var highResolutionBatchFlashSlot: Int? = nil
+    /// If a still never reports back (interruption, camera taken by another app), give up on that
+    /// lens after this many seconds so the MultiCam preview is always restored.
+    private static let highResolutionCaptureTimeout: TimeInterval = 8
     private let audioOutput = AVCaptureAudioDataOutput()
     private let ciContext = CIContext(options: [.cacheIntermediates: false, .highQualityDownsample: true])
     /// 缩略图专用，和实时渲染互不干扰。
@@ -723,7 +730,9 @@ final class CameraManager: NSObject, ObservableObject {
         nc.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: nil) { [weak self] _ in
             guard let self = self else { return }
             self.sessionQueue.async {
-                if self.currentCombo != nil, !self.session.isRunning {
+                // A high-resolution still batch keeps the MultiCam session stopped on purpose;
+                // restarting it here would fight the single-camera session for the hardware.
+                if self.currentCombo != nil, !self.session.isRunning, !self.highResolutionBatchActive {
                     self.session.startRunning()
                 }
             }
@@ -1499,21 +1508,29 @@ final class CameraManager: NSObject, ObservableObject {
             guard let self = self else { return }
             if useHighResolutionCapture {
                 self.videoQueue.async {
-                    let fallback = self.fallbackOriginalData()
+                    // Only keep references to the latest video frames here. Encoding them to JPEG
+                    // before the shutter fires used to delay every high-resolution capture by two
+                    // full-frame encodes; now a frame is encoded only if its native still is missing.
+                    let fallbackFrames = self.snapshotFallbackFrames()
                     let primarySlot = captureConfig.swapped ? 1 : 0
                     let slots = captureConfig.outputMode.savesOriginal
                         ? [primarySlot, 1 - primarySlot]
                         : [primarySlot]
 
-                    self.captureHighResolutionPhotos(slots: slots) { highResolutionPhotos in
+                    self.captureHighResolutionPhotos(
+                        slots: slots,
+                        flashSlot: useFlash ? primarySlot : nil
+                    ) { highResolutionPhotos in
                         // Do image composition and JPEG encoding off the main thread. A composite
                         // uses the native still from the displayed main camera and the other camera's
                         // most recent video frame, retaining detail where the sensor still is available.
                         self.videoQueue.async {
                             self.setCaptureStatus("合成并保存…")
                             var datas: [Data] = []
-                            let fallbackForSlot: (Int) -> Data? = {
-                                $0 == 0 ? fallback.primary : fallback.secondary
+                            let fallbackForSlot: (Int) -> Data? = { slot in
+                                guard fallbackFrames.indices.contains(slot),
+                                      let buffer = fallbackFrames[slot] else { return nil }
+                                return self.jpeg(self.orient(CIImage(cvPixelBuffer: buffer)))
                             }
 
                             if captureConfig.outputMode.savesOriginal {
@@ -1528,10 +1545,9 @@ final class CameraManager: NSObject, ObservableObject {
 
                             if captureConfig.outputMode.savesComposite {
                                 let mainData = highResolutionPhotos[primarySlot] ?? fallbackForSlot(primarySlot)
-                                let secondaryData = fallbackForSlot(1 - primarySlot)
                                 if let composite = self.highResolutionCompositeJPEG(
                                     mainPhotoData: mainData,
-                                    secondaryFrameData: secondaryData,
+                                    secondaryFrame: fallbackFrames[1 - primarySlot],
                                     config: captureConfig,
                                     mainSlot: primarySlot
                                 ) {
@@ -1581,7 +1597,7 @@ final class CameraManager: NSObject, ObservableObject {
     /// current video frame. Output dimensions fit inside the native still instead of upscaling it.
     private func highResolutionCompositeJPEG(
         mainPhotoData: Data?,
-        secondaryFrameData: Data?,
+        secondaryFrame: CVPixelBuffer?,
         config: Config,
         mainSlot: Int
     ) -> Data? {
@@ -1599,8 +1615,9 @@ final class CameraManager: NSObject, ObservableObject {
         }
 
         var sub: CIImage? = nil
-        if let data = secondaryFrameData, var secondary = CIImage(data: data, options: [.applyOrientationProperty: true]) {
-            secondary = orient(secondary)
+        if let buffer = secondaryFrame {
+            // Use the live frame directly instead of a JPEG encode/decode round trip.
+            var secondary = orient(CIImage(cvPixelBuffer: buffer))
             let subSlot = 1 - mainSlot
             if front.indices.contains(subSlot), front[subSlot] && config.mirrorFront {
                 secondary = secondary.oriented(.upMirrored)
@@ -1619,28 +1636,31 @@ final class CameraManager: NSObject, ObservableObject {
         return jpeg(filtered)
     }
 
-    /// Fallback frames preserve the previous behavior if a camera/format cannot supply a native still.
-    private func fallbackOriginalData() -> (primary: Data?, secondary: Data?) {
+    /// Latest video frame per slot, retained without encoding. They preserve the previous behavior
+    /// if a camera/format cannot supply a native still, and feed the composite's secondary image.
+    private func snapshotFallbackFrames() -> [CVPixelBuffer?] {
         lock.lock()
-        let a = latest[0]
-        let b = latest[1]
+        let frames: [CVPixelBuffer?] = [latest[0], latest[1]]
         lock.unlock()
-        let primary = a.flatMap { jpeg(orient(CIImage(cvPixelBuffer: $0))) }
-        let secondary = b.flatMap { jpeg(orient(CIImage(cvPixelBuffer: $0))) }
-        return (primary, secondary)
+        return frames
     }
 
     /// Capture stills using a regular AVCaptureSession rather than the restricted MultiCam formats.
     /// The live dual-camera preview is temporarily interrupted and rebuilt once the batch finishes.
     private func captureHighResolutionPhotos(
         slots: [Int],
+        flashSlot: Int?,
         completion: @escaping ([Int: Data]) -> Void
     ) {
         sessionQueue.async { [weak self] in
-            guard let self = self, !slots.isEmpty, self.currentCombo != nil, self.session.isRunning else {
+            guard let self = self, !slots.isEmpty, self.currentCombo != nil, self.session.isRunning,
+                  !self.highResolutionBatchActive else {
                 DispatchQueue.main.async { completion([:]) }
                 return
             }
+            self.highResolutionBatchActive = true
+            self.highResolutionBatchToken &+= 1
+            self.highResolutionBatchFlashSlot = flashSlot
 
             // Drain coalesced device writes and release the MultiCam inputs before opening the
             // single-camera session. The previous video frames were already snapshotted for fallback.
@@ -1702,12 +1722,26 @@ final class CameraManager: NSObject, ObservableObject {
         // native photo pixel dimensions. The capture output has already prepared this profile.
         settings.maxPhotoDimensions = dimensions
         settings.photoQualityPrioritization = .balanced
+        // The preview torch isn't guaranteed to survive tearing down the MultiCam graph, so ask the
+        // photo pipeline itself to fire the flash for the main camera. Front cameras have no flash
+        // and keep using the screen flash.
+        if highResolutionBatchFlashSlot == slot,
+           device.hasFlash,
+           output.supportedFlashModes.contains(.on) {
+            settings.flashMode = .on
+        }
 
         let uniqueID = settings.uniqueID
+        let token = highResolutionBatchToken
+        let stepIndex = highResolutionBatchIndex
         let delegate = HighResolutionPhotoCaptureDelegate { [weak self] finishedID, data, _ in
             guard let self = self else { return }
             self.sessionQueue.async {
                 self.pendingPhotoDelegates.removeValue(forKey: finishedID)
+                // A late callback for a step the watchdog already skipped must not advance twice.
+                guard self.highResolutionBatchActive,
+                      self.highResolutionBatchToken == token,
+                      self.highResolutionBatchIndex == stepIndex else { return }
                 if let data = data {
                     self.highResolutionBatchData[slot] = data
                 }
@@ -1717,6 +1751,19 @@ final class CameraManager: NSObject, ObservableObject {
         }
         pendingPhotoDelegates[uniqueID] = delegate
         output.capturePhoto(with: settings, delegate: delegate)
+
+        // Watchdog: without it a still that never completes leaves the UI on the "processing"
+        // overlay and the MultiCam preview permanently stopped.
+        sessionQueue.asyncAfter(deadline: .now() + Self.highResolutionCaptureTimeout) { [weak self] in
+            guard let self = self,
+                  self.highResolutionBatchActive,
+                  self.highResolutionBatchToken == token,
+                  self.highResolutionBatchIndex == stepIndex else { return }
+            NSLog("[DualCam] High-resolution still for slot %ld timed out; skipping", Int(slot))
+            self.pendingPhotoDelegates.removeValue(forKey: uniqueID)
+            self.highResolutionBatchIndex += 1
+            self.advanceHighResolutionCaptureBatch()
+        }
     }
 
     /// Select the format with the largest supported still-image dimensions, even if that format
@@ -1817,7 +1864,10 @@ final class CameraManager: NSObject, ObservableObject {
 
         highResolutionPhotoInput = newInput
         if let connection = output.connection(with: .video) {
-            if connection.isVideoRotationAngleSupported(90) { connection.videoRotationAngle = 90 }
+            // Match the MultiCam connections instead of hard-coding portrait, so the still and the
+            // live frame used in the composite share the same orientation.
+            let rotationAngle = Self.rotationAngle(for: interfaceOrientationSnapshot())
+            if connection.isVideoRotationAngleSupported(rotationAngle) { connection.videoRotationAngle = rotationAngle }
             if connection.isVideoMirroringSupported {
                 connection.automaticallyAdjustsVideoMirroring = false
                 connection.isVideoMirrored = false
@@ -1839,6 +1889,8 @@ final class CameraManager: NSObject, ObservableObject {
         highResolutionBatchIndex = 0
         highResolutionBatchData = [:]
         highResolutionBatchCompletion = nil
+        highResolutionBatchFlashSlot = nil
+        highResolutionBatchActive = false
 
         // Restore the original MultiCam graph before returning data to the UI/save pipeline.
         setCaptureStatus("恢复双摄预览…")
