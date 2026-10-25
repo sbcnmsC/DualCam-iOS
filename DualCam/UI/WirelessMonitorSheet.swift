@@ -42,7 +42,10 @@ struct WirelessMonitorSheet: View {
                                     Text("DualCam · 局域网").font(.caption).foregroundStyle(.secondary)
                                 }
                                 Spacer()
-                                Button("连接") { service.connect(to: peer) }
+                                Button("连接") {
+                                    HapticFeedback.play(.button)
+                                    service.connect(to: peer)
+                                }
                                     .buttonStyle(.borderedProminent)
                                     .disabled(service.connectedPeers.contains(peer))
                             }
@@ -58,6 +61,7 @@ struct WirelessMonitorSheet: View {
 
                         HStack(spacing: 12) {
                             Button {
+                                HapticFeedback.play(.button)
                                 startSending()
                             } label: {
                                 Label("发送合成画面", systemImage: "dot.radiowaves.left.and.right")
@@ -67,6 +71,7 @@ struct WirelessMonitorSheet: View {
                             .disabled(service.connectedPeers.isEmpty || mode != .idle)
 
                             Button {
+                                HapticFeedback.play(.button)
                                 startReceiving()
                             } label: {
                                 Label("接收画面", systemImage: "play.rectangle")
@@ -97,6 +102,7 @@ struct WirelessMonitorSheet: View {
 
                         if mode != .idle {
                             Button(role: .destructive) {
+                                HapticFeedback.play(.button)
                                 stopVideo()
                             } label: {
                                 Label("停止视频", systemImage: "stop.fill")
@@ -119,6 +125,7 @@ struct WirelessMonitorSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("完成") {
+                        HapticFeedback.play(.button)
                         cleanup()
                         dismiss()
                     }

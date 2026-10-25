@@ -8,6 +8,7 @@ struct ToolPanel: View {
             HStack(spacing: 4) {
                 ForEach(PanelTab.allCases) { t in
                     Button {
+                        if tab != t { HapticFeedback.play(.selection) }
                         withAnimation(.easeInOut(duration: 0.2)) { tab = t }
                     } label: {
                         HStack(spacing: 5) {
@@ -149,6 +150,9 @@ struct PiPTab: View {
             .disabled(!isPiP)
             .opacity(isPiP ? 1 : 0.4)
         }
+        .onChange(of: cam.cfg.pipShape) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.pipRatio) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.pipSnap) { _, _ in HapticFeedback.play(.selection) }
     }
 
     private func cfgBinding(_ keyPath: WritableKeyPath<Config, CGFloat>) -> Binding<Double> {
@@ -203,6 +207,7 @@ struct FilterTab: View {
 
             HStack(spacing: 8) {
                 Button {
+                    HapticFeedback.play(.button)
                     pendingFilter = cam.cfg.filter
                     pendingIntensity = Double(cam.cfg.filterIntensity)
                 } label: {
@@ -217,6 +222,7 @@ struct FilterTab: View {
                 .disabled(!hasPendingChanges)
 
                 Button {
+                    HapticFeedback.play(.success)
                     cam.applyFilter(pendingFilter, intensity: CGFloat(pendingIntensity))
                 } label: {
                     Label("应用到画面", systemImage: "checkmark")
@@ -241,6 +247,7 @@ struct FilterTab: View {
     private func cell(_ kind: FilterKind) -> some View {
         let selected = pendingFilter == kind
         return Button {
+            if pendingFilter != kind { HapticFeedback.play(.selection) }
             pendingFilter = kind
         } label: {
             VStack(spacing: 5) {
@@ -299,7 +306,10 @@ struct ParamsTab: View {
                     Label("曝光与测光", systemImage: "sun.max")
                         .font(.system(size: 12, weight: .semibold))
                     Spacer()
-                    Button("归零") { cam.resetExposureBias(i) }
+                    Button("归零") {
+                        HapticFeedback.play(.selection)
+                        cam.resetExposureBias(i)
+                    }
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Color.yellow)
                         .disabled(st.manualExposure || st.locked)
@@ -337,7 +347,10 @@ struct ParamsTab: View {
                     Label("对焦", systemImage: "scope")
                         .font(.system(size: 12, weight: .semibold))
                     Spacer()
-                    Button("自动对焦") { cam.setAutoFocus(i) }
+                    Button("自动对焦") {
+                        HapticFeedback.play(.selection)
+                        cam.setAutoFocus(i)
+                    }
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Color.yellow)
                 }
@@ -394,6 +407,11 @@ struct ParamsTab: View {
                           range: Double(base)...Double(max(base * info.maxZoom, base + 0.01)),
                           valueText: String(format: "%.1f×", Double(cam.displayZoom(slot: i))))
         }
+        .onChange(of: cam.paramTarget) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.slotStates[i].manualExposure) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.slotStates[i].manualFocus) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.slotStates[i].locked) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.slotStates[i].manualWB) { _, _ in HapticFeedback.play(.selection) }
     }
 
     private func shutterText(info: SlotInfo, t: Double) -> String {
@@ -430,9 +448,12 @@ struct ParamsTab: View {
 
 struct SettingsTab: View {
     @EnvironmentObject private var cam: CameraManager
+    @AppStorage("dualcam.haptics.enabled") private var hapticsEnabled = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            Toggle("触觉反馈（按钮与相机控制）", isOn: $hapticsEnabled)
+                .font(.system(size: 13))
             HStack {
                 Text("画幅").font(.system(size: 13)).frame(width: 64, alignment: .leading)
                 Picker("", selection: $cam.cfg.aspect) {
@@ -501,6 +522,19 @@ struct SettingsTab: View {
             Toggle("前置镜像", isOn: $cam.cfg.mirrorFront).font(.system(size: 13))
             Toggle("三分参考线", isOn: $cam.cfg.showGrid).font(.system(size: 13))
 
+        }
+        .onChange(of: cam.cfg.aspect) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.resolution) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.fps) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.outputMode) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.livePhoto) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.timerSeconds) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.lowLight) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.stabilization) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.mirrorFront) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: cam.cfg.showGrid) { _, _ in HapticFeedback.play(.selection) }
+        .onChange(of: hapticsEnabled) { _, enabled in
+            if enabled { HapticFeedback.play(.selection) }
         }
     }
 }
