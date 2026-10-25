@@ -12,6 +12,7 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
 
     var onSignal: ((Data) -> Void)?
     var onStatus: ((String) -> Void)?
+    var onPeerStopped: (() -> Void)?
 
     private static let factory: RTCPeerConnectionFactory = {
         RTCInitializeSSL()
@@ -132,6 +133,7 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
             }
         case "stop":
             stop()
+            DispatchQueue.main.async { self.onPeerStopped?() }
         default:
             break
         }
@@ -173,6 +175,8 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
             updateStatus("无法创建接收端连接")
             return
         }
+        // makePeerConnection resets stale candidates; preserve candidates received while the user was deciding.
+        pendingRemoteCandidates = queuedCandidates + pendingRemoteCandidates
         let transceiver = RTCRtpTransceiverInit()
         transceiver.direction = .recvOnly
         _ = pc.addTransceiver(of: .video, init: transceiver)
