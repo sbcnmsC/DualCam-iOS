@@ -12,6 +12,7 @@ final class MonitorDiscoveryService: NSObject, ObservableObject {
     @Published private(set) var connectedPeers: [MCPeerID] = []
     @Published private(set) var incomingPeerName: String?
     @Published private(set) var statusText = "尚未连接"
+    var onSignalReceived: ((Data) -> Void)?
 
     private let localPeer = MCPeerID(displayName: MonitorDiscoveryService.makeDisplayName())
     private var session: MCSession!
@@ -150,7 +151,8 @@ extension MonitorDiscoveryService: MCSessionDelegate {
     }
 
     func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
-        // WebRTC offer/answer and ICE signalling will be routed here in the media-transport phase.
+        // Signalling messages are small JSON payloads; video frames never traverse this session.
+        DispatchQueue.main.async { self.onSignalReceived?(data) }
     }
 
     func session(_ session: MCSession, didReceive stream: InputStream, withName streamName: String, fromPeer peerID: MCPeerID) {}
