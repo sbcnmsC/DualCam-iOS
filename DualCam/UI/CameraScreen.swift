@@ -6,6 +6,7 @@ struct CameraScreen: View {
     @State private var showPanel = false
     @State private var panelTab: PanelTab = .pip
     @State private var showTimerSettings = false
+    @State private var showWirelessMonitor = false
     @State private var timerDraft = 5
     @State private var bottomBarHeight: CGFloat = 222
     @State private var zoomControlBottom: CGFloat = 0
@@ -76,6 +77,8 @@ struct CameraScreen: View {
                     TopBar(onTimerTap: {
                         timerDraft = cam.timerSeconds > 0 ? cam.timerSeconds : 5
                         showTimerSettings = true
+                    }, onWirelessMonitorTap: {
+                        showWirelessMonitor = true
                     }, iconRotationDegrees: iconRotationDegrees)
                     .frame(height: topBarHeight)
 
@@ -186,6 +189,10 @@ struct CameraScreen: View {
         .background(Color.black.ignoresSafeArea())
         .statusBarHidden(true)
         .animation(.easeInOut(duration: 0.22), value: showPanel)
+        .sheet(isPresented: $showWirelessMonitor) {
+            WirelessMonitorSheet()
+                .environmentObject(cam)
+        }
         .modifier(HardwareCameraCaptureModifier())
     }
 
@@ -1008,6 +1015,7 @@ struct TimerSettingsOverlay: View {
 struct TopBar: View {
     @EnvironmentObject private var cam: CameraManager
     let onTimerTap: () -> Void
+    let onWirelessMonitorTap: () -> Void
     var iconRotationDegrees: CGFloat = 90
 
     var body: some View {
@@ -1048,6 +1056,12 @@ struct TopBar: View {
                                active: false,
                                label: "切换主副摄像头") {
                         cam.swapCameras()
+                    }
+                    iconButton("dot.radiowaves.left.and.right",
+                               active: false,
+                               label: "无线监看") {
+                        HapticFeedback.play(.button)
+                        onWirelessMonitorTap()
                     }
                 }
             }
