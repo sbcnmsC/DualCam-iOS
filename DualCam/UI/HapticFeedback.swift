@@ -50,9 +50,12 @@ enum HapticFeedback {
         case .snap:
             impact(.rigid, intensity: 0.90)
         case .recordingStart:
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            // Notification haptics can feel too subtle as a camera-recording confirmation.
+            // Use a strong impact when the writer has actually started successfully.
+            impact(.heavy, intensity: 1.0)
         case .recordingStop:
-            impact(.rigid, intensity: 0.85)
+            // Distinct, firm confirmation at the moment recording is stopped.
+            impact(.heavy, intensity: 0.9)
         case .success:
             UINotificationFeedbackGenerator().notificationOccurred(.success)
         case .error:
