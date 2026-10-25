@@ -962,6 +962,8 @@ final class CameraManager: NSObject, ObservableObject {
         guard comboIndex < combos.count else { return }
         let current = combos[comboIndex]
         if current.a == stop.spec {
+            guard abs(slotStates[0].zoom - stop.zoom) > 0.015 else { return }
+            HapticFeedback.play(.zoom)
             setZoom(slot: 0, factor: stop.zoom)
             return
         }
@@ -973,6 +975,7 @@ final class CameraManager: NSObject, ObservableObject {
         if target == nil { target = combos.firstIndex(where: { $0.a == stop.spec && $0.b == .front }) }
         if target == nil { target = combos.firstIndex(where: { $0.a == stop.spec }) }
         guard let idx = target else { return }
+        HapticFeedback.play(.zoom)
         comboIndex = idx
         let combo = combos[idx]
         slotStates[0] = SlotState(zoom: stop.zoom)
@@ -1154,6 +1157,7 @@ final class CameraManager: NSObject, ObservableObject {
     // MARK: - 点按对焦 / 曝光
 
     func focus(atNormalized p: CGPoint) {
+        HapticFeedback.play(.focus)
         let c = cfg
         let regions = Compositor.regions(cfg: c)
         let mainSlot = c.swapped ? 1 : 0
@@ -1271,14 +1275,17 @@ final class CameraManager: NSObject, ObservableObject {
     // MARK: - 布局操作
 
     func toggleLayout() {
+        HapticFeedback.play(.selection)
         cfg.layout = cfg.layout == .pip ? .split : .pip
     }
 
     func swapCameras() {
+        HapticFeedback.play(.selection)
         cfg.swapped.toggle()
     }
 
     func resetPiP() {
+        HapticFeedback.play(.selection)
         clearPiPDragPreview()
         cfg.pipCenter = CGPoint(x: 0.76, y: 0.20)
         cfg.pipWidth = 0.32
@@ -1307,6 +1314,7 @@ final class CameraManager: NSObject, ObservableObject {
 
     func snapPiP() {
         guard cfg.pipSnap else { return }
+        let oldCenter = cfg.pipCenter
         let r = Compositor.pipRectNormalized(cfg: cfg)
         let margin: CGFloat = 0.03
         let threshold: CGFloat = 0.07
@@ -1318,10 +1326,15 @@ final class CameraManager: NSObject, ObservableObject {
         if r.minY < threshold { cy = margin + r.height / 2 }
         else if 1 - r.maxY < threshold { cy = 1 - margin - r.height / 2 }
         else if abs(r.midY - 0.5) < 0.05 { cy = 0.5 }
-        cfg.pipCenter = CGPoint(x: cx, y: cy)
+        let newCenter = CGPoint(x: cx, y: cy)
+        if abs(oldCenter.x - newCenter.x) > 0.001 || abs(oldCenter.y - newCenter.y) > 0.001 {
+            HapticFeedback.play(.snap)
+        }
+        cfg.pipCenter = newCenter
     }
 
     func cycleTimer() {
+        HapticFeedback.play(.selection)
         timerSeconds = timerSeconds == 0 ? 3 : (timerSeconds == 3 ? 10 : 0)
     }
 
@@ -1332,6 +1345,7 @@ final class CameraManager: NSObject, ObservableObject {
 
     func selectCombo(_ index: Int) {
         guard !isRecording, combos.indices.contains(index), index != comboIndex else { return }
+        HapticFeedback.play(.selection)
         comboIndex = index
         let combo = combos[index]
         slotStates = [SlotState(), SlotState()]
@@ -1349,19 +1363,30 @@ final class CameraManager: NSObject, ObservableObject {
 
     func shutterTapped() {
         if countdown != nil {
+            HapticFeedback.play(.button)
             cancelCountdown()
             return
         }
-        guard ready else { return }
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        guard ready else {
+            HapticFeedback.play(.error)
+            return
+        }
         switch captureMode {
         case .photo:
-            runWithCountdown { self.takePhoto() }
+            let willCountdown = timerSeconds > 0
+            HapticFeedback.play(willCountdown ? .button : .shutter)
+            runWithCountdown {
+                if willCountdown { HapticFeedback.play(.shutter) }
+                self.takePhoto()
+            }
         case .video:
             if isRecording {
                 stopRecording()
             } else {
-                runWithCountdown { self.startRecording() }
+                runWithCountdown {
+                    if self.timerSeconds > 0 { HapticFeedback.play(.shutter) }
+                    self.startRecording()
+                }
             }
         }
     }
@@ -1382,6 +1407,7 @@ final class CameraManager: NSObject, ObservableObject {
                 self.countdown = nil
                 action()
             } else {
+                HapticFeedback.play(.countdownTick)
                 self.countdown = left - 1
             }
         }
@@ -2067,6 +2093,7 @@ final class CameraManager: NSObject, ObservableObject {
                 self.rawRecorders = raws
                 self.recLock.unlock()
                 DispatchQueue.main.async {
+                    HapticFeedback.play(.recordingStart)
                     self.isRecording = true
                     self.recordSeconds = 0
                     self.recTimer?.invalidate()
@@ -2083,6 +2110,7 @@ final class CameraManager: NSObject, ObservableObject {
 
     func stopRecording() {
         guard isRecording else { return }
+        HapticFeedback.play(.recordingStop)
         isRecording = false
         recTimer?.invalidate()
         recTimer = nil
