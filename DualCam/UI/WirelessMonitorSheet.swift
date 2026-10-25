@@ -141,6 +141,13 @@ struct WirelessMonitorSheet: View {
         discovery.onSignalReceived = { [weak transport] data in
             transport?.handleSignal(data)
         }
+        transport.onPeerStopped = { [weak transport] in
+            // A remote stop should return the local UI to idle and detach its frame sink.
+            DispatchQueue.main.async {
+                cam.compositedFrameSource.setSink(nil)
+                mode = .idle
+            }
+        }
         transport.onSignal = { [weak discovery, weak transport] data in
             do {
                 try discovery?.sendSignal(data)
@@ -179,6 +186,7 @@ struct WirelessMonitorSheet: View {
     private func cleanup() {
         cam.compositedFrameSource.setSink(nil)
         rtc.onSignal = nil
+        rtc.onPeerStopped = nil
         service.onSignalReceived = nil
         rtc.stop()
         service.stop()
