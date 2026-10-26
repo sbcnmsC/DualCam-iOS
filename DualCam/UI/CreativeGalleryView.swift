@@ -41,12 +41,18 @@ struct CreativeGalleryView: View {
             GalleryShareSheet(items: shareItems)
                 .ignoresSafeArea()
         }
-        .sheet(item: $detailItem) { item in
-            PhotoDetailSheet(url: item.url, onShare: { share([item.url]) }, onExport: { exportToSystemPhotos([item.url]) }, onDelete: {
-                cam.deleteCompositePhoto(item.url)
-                detailItem = nil
-            })
-            .presentationBackground(.black)
+        .fullScreenCover(item: $detailItem) { item in
+            PhotoDetailSheet(
+                url: item.url,
+                pipRegion: cam.archivedPiPRegion(for: item.url),
+                secondaryPreviewURL: cam.archivedSecondaryPreviewURL(for: item.url),
+                onShare: { share([item.url]) },
+                onExport: { exportToSystemPhotos([item.url]) },
+                onDelete: {
+                    cam.deleteCompositePhoto(item.url)
+                    detailItem = nil
+                }
+            )
         }
         .alert("系统照片图库", isPresented: $exportAlert) {
             Button("好", role: .cancel) {}
@@ -84,9 +90,9 @@ struct CreativeGalleryView: View {
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 16)
-        .padding(.bottom, 16)
+        .padding(.horizontal, 18)
+        .padding(.top, 8)
+        .padding(.bottom, 12)
     }
 
     private var title: String {
@@ -177,8 +183,9 @@ struct CreativeGalleryView: View {
                             } label: {
                                 ZStack(alignment: .topTrailing) {
                                     GalleryThumbnail(url: url)
-                                        .aspectRatio(0.78, contentMode: .fill)
                                         .frame(maxWidth: .infinity)
+                                        .aspectRatio(1, contentMode: .fit)
+                                        .background(Color.black)
                                         .clipped()
                                     if selectionMode {
                                         Image(systemName: selectedForBatch.contains(url.path) ? "checkmark.circle.fill" : "circle")
@@ -219,12 +226,17 @@ struct CreativeGalleryView: View {
                     Button { shareSelected() } label: {
                         Label("分享", systemImage: "square.and.arrow.up")
                     }
+                    .fixedSize()
                     Button { exportToSystemPhotos(cam.compositePhotoURLs.filter { selectedForBatch.contains($0.path) }) } label: {
-                        Label("导出到系统相册", systemImage: "photo.badge.arrow.down")
+                        Label("导出", systemImage: "photo.badge.arrow.down")
                     }
+                    .fixedSize()
+                    .accessibilityLabel("导出到系统相册")
                     Button(role: .destructive) { showingDeleteConfirm = true } label: {
-                        Label("删除", systemImage: "trash")
+                        Image(systemName: "trash")
                     }
+                    .fixedSize()
+                    .accessibilityLabel("删除所选作品")
                 }
                 .font(.system(size: 12, weight: .semibold))
                 .padding(14)
@@ -453,12 +465,20 @@ private struct GalleryThumbnail: View {
     @State private var image: UIImage?
 
     var body: some View {
-        Group {
-            if let image {
-                Image(uiImage: image).resizable().scaledToFill()
-            } else {
-                Rectangle().fill(Color.white.opacity(0.07))
-                    .overlay(Image(systemName: "photo").foregroundStyle(.white.opacity(0.3)))
+        GeometryReader { geometry in
+            ZStack {
+                Color.black
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .interpolation(.high)
+                        .scaledToFit()
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                } else {
+                    Image(systemName: "photo")
+                        .font(.system(size: 18))
+                        .foregroundStyle(.white.opacity(0.3))
+                }
             }
         }
         .task(id: url) {
@@ -492,55 +512,208 @@ private struct GalleryLargePreview: View {
 
 private struct PhotoDetailSheet: View {
     let url: URL
+    let pipRegion: CGRect?
+    let secondaryPreviewURL: URL?
     let onShare: () -> Void
     let onExport: () -> Void
     let onDelete: () -> Void
+
     @Environment(\.dismiss) private var dismiss
     @State private var image: UIImage?
+    @State private var secondaryImage: UIImage?
+    @State private var showingSubwindow = false
     @State private var zoom: CGFloat = 1
+    @State private var loadFailed = false
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            VStack(spacing: 0) {
-                HStack {
-                    Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 40, height: 40) }
-                    Spacer()
-                    Text("作品预览").font(.system(size: 14, weight: .semibold))
-                    Spacer()
-                    Menu {
-                        Button(action: onShare) { Label("分享", systemImage: "square.and.arrow.up") }
-                        Button(action: onExport) { Label("导出到系统相册", systemImage: "photo.badge.arrow.down") }
-                        Button(role: .destructive, action: onDelete) { Label("删除作品", systemImage: "trash") }
-                    } label: {
-                        Image(systemName: "ellipsis").frame(width: 40, height: 40)
-                    }
-                }
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 12)
-                GeometryReader { geo in
-                    if let image {
-                        ScrollView([.horizontal, .vertical]) {
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFit()
-                                .frame(width: geo.size.width * zoom, height: geo.size.height * zoom)
-                                .frame(minWidth: geo.size.width, minHeight: geo.size.height)
-                        }
-                        .gesture(MagnificationGesture().onChanged { zoom = min(max($0, 1), 5) })
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Button {
+                    if showingSubwindow {
+                        showingSubwindow = false
+                        zoom = 1
                     } else {
-                        ProgressView().tint(.yellow).frame(maxWidth: .infinity, maxHeight: .infinity)
+                        dismiss()
+                    }
+                } label: {
+                    Image(systemName: showingSubwindow ? "chevron.left" : "xmark")
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(width: 42, height: 42)
+                        .background(Circle().fill(Color.white.opacity(0.09)))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(showingSubwindow ? "返回合成照片" : "关闭预览")
+                Spacer(minLength: 0)
+                VStack(spacing: 2) {
+                    Text(showingSubwindow ? "小窗单独预览" : "合成照片")
+                        .font(.system(size: 15, weight: .semibold))
+                    Text(showingSubwindow ? "副摄画面" : "点小窗即可分开预览")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.52))
+                }
+                Spacer(minLength: 0)
+                Menu {
+                    Button(action: onShare) { Label("分享合成照片", systemImage: "square.and.arrow.up") }
+                    Button(action: onExport) { Label("导出到系统照片", systemImage: "photo.badge.arrow.down") }
+                    Button(role: .destructive, action: onDelete) { Label("删除作品", systemImage: "trash") }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(width: 42, height: 42)
+                        .background(Circle().fill(Color.white.opacity(0.09)))
+                }
+                .buttonStyle(.plain)
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14)
+            .padding(.top, 4)
+            .padding(.bottom, 8)
+
+            GeometryReader { geo in
+                ZStack {
+                    Color.black
+                    if showingSubwindow, let secondaryImage {
+                        Image(uiImage: secondaryImage)
+                            .resizable()
+                            .interpolation(.high)
+                            .scaledToFit()
+                            .frame(width: geo.size.width * zoom, height: geo.size.height * zoom)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if let image {
+                        let fitted = fittedSize(image.size, in: geo.size)
+                        Image(uiImage: image)
+                            .resizable()
+                            .interpolation(.high)
+                            .scaledToFit()
+                            .frame(width: fitted.width * zoom, height: fitted.height * zoom)
+                            .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                            .allowsHitTesting(false)
+
+                        if !showingSubwindow, zoom <= 1.05, let pipRegion {
+                            let hitRect = displayRect(for: pipRegion, fittedSize: fitted, containerSize: geo.size)
+                            Button(action: showSecondaryPreview) {
+                                RoundedRectangle(cornerRadius: 7)
+                                    .fill(Color.clear)
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 7)
+                                            .stroke(Color.yellow, lineWidth: 2)
+                                    }
+                                    .overlay(alignment: .bottomTrailing) {
+                                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                            .font(.system(size: 10, weight: .black))
+                                            .foregroundStyle(.black)
+                                            .frame(width: 22, height: 22)
+                                            .background(Circle().fill(Color.yellow))
+                                            .offset(x: 5, y: 5)
+                                    }
+                            }
+                            .buttonStyle(.plain)
+                            .frame(width: max(hitRect.width, 36), height: max(hitRect.height, 36))
+                            .position(x: hitRect.midX, y: hitRect.midY)
+                            .accessibilityLabel("点按小窗，单独预览副摄画面")
+                        }
+                    } else if loadFailed {
+                        VStack(spacing: 10) {
+                            Image(systemName: "exclamationmark.triangle").font(.system(size: 30))
+                            Text("无法读取这张照片").font(.system(size: 14, weight: .medium))
+                        }
+                        .foregroundStyle(.white.opacity(0.65))
+                    } else {
+                        ProgressView().tint(.yellow)
                     }
                 }
-                .padding(.horizontal, 8)
+                .contentShape(Rectangle())
+                .simultaneousGesture(
+                    MagnificationGesture()
+                        .onChanged { value in zoom = min(max(value, 1), 5) }
+                        .onEnded { _ in if zoom < 1.05 { zoom = 1 } }
+                )
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            HStack(spacing: 8) {
+                Image(systemName: showingSubwindow ? "rectangle.on.rectangle" : "hand.tap")
+                    .foregroundStyle(Color.yellow)
+                Text(showingSubwindow
+                     ? "正在单独预览小窗画面"
+                     : (pipRegion == nil ? "双摄合成作品" : "轻点黄色框内的小窗，单独查看副摄"))
+                    .foregroundStyle(.white.opacity(0.62))
+                Spacer(minLength: 0)
+                if showingSubwindow {
+                    Button("返回合成") {
+                        showingSubwindow = false
+                        zoom = 1
+                    }
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.yellow)
+                    .fixedSize()
+                }
+            }
+            .font(.system(size: 11, weight: .medium))
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 12)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black.ignoresSafeArea())
         .task {
-            let path = url.path
-            image = await Task.detached(priority: .userInitiated) { UIImage(contentsOfFile: path) }.value
+            let photoPath = url.path
+            let sourcePath = secondaryPreviewURL?.path
+            let loaded = await Task.detached(priority: .userInitiated) {
+                (UIImage(contentsOfFile: photoPath),
+                 sourcePath.flatMap { UIImage(contentsOfFile: $0) })
+            }.value
+            image = loaded.0
+            secondaryImage = loaded.1
+            loadFailed = loaded.0 == nil
         }
         .preferredColorScheme(.dark)
+    }
+
+    private func fittedSize(_ imageSize: CGSize, in container: CGSize) -> CGSize {
+        guard imageSize.width > 0, imageSize.height > 0,
+              container.width > 0, container.height > 0 else { return .zero }
+        let scale = min(container.width / imageSize.width, container.height / imageSize.height)
+        return CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
+    }
+
+    private func displayRect(for normalized: CGRect, fittedSize: CGSize, containerSize: CGSize) -> CGRect {
+        CGRect(
+            x: (containerSize.width - fittedSize.width) / 2 + normalized.minX * fittedSize.width,
+            y: (containerSize.height - fittedSize.height) / 2 + normalized.minY * fittedSize.height,
+            width: normalized.width * fittedSize.width,
+            height: normalized.height * fittedSize.height
+        )
+    }
+
+    private func showSecondaryPreview() {
+        if let secondaryImage {
+            showingSubwindow = true
+            zoom = 1
+            return
+        }
+        guard let image, let pipRegion, let cropped = crop(image, normalized: pipRegion) else { return }
+        secondaryImage = cropped
+        showingSubwindow = true
+        zoom = 1
+    }
+
+    /// Older saved photos have no source companion, so crop the inset as a fallback.
+    private func crop(_ image: UIImage, normalized: CGRect) -> UIImage? {
+        let renderer = UIGraphicsImageRenderer(size: image.size)
+        let upright = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: image.size)) }
+        guard let cgImage = upright.cgImage else { return nil }
+        let bounded = normalized.intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
+        guard !bounded.isNull, bounded.width > 0, bounded.height > 0 else { return nil }
+        let cropRect = CGRect(
+            x: bounded.minX * CGFloat(cgImage.width),
+            y: bounded.minY * CGFloat(cgImage.height),
+            width: bounded.width * CGFloat(cgImage.width),
+            height: bounded.height * CGFloat(cgImage.height)
+        ).integral.intersection(CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height))
+        guard cropRect.width > 1, cropRect.height > 1,
+              let cropped = cgImage.cropping(to: cropRect) else { return nil }
+        return UIImage(cgImage: cropped, scale: upright.scale, orientation: .up)
     }
 }
 

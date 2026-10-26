@@ -1559,6 +1559,7 @@ final class CameraManager: NSObject, ObservableObject {
                             self.setCaptureStatus("合成并保存…")
                             var datas: [Data] = []
                             var compositeDatas: [Data] = []
+                            var compositeSecondaryDatas: [Data?] = []
                             let fallbackForSlot: (Int) -> Data? = { slot in
                                 guard fallbackFrames.indices.contains(slot),
                                       let buffer = fallbackFrames[slot] else { return nil }
@@ -1585,10 +1586,21 @@ final class CameraManager: NSObject, ObservableObject {
                                 ) {
                                     datas.append(composite)
                                     compositeDatas.append(composite)
+                                    compositeSecondaryDatas.append(
+                                        self.highResolutionSecondaryJPEG(
+                                            secondaryFrame: fallbackFrames[1 - primarySlot],
+                                            config: captureConfig,
+                                            slot: 1 - primarySlot
+                                        )
+                                    )
                                 }
                             }
 
-                            self.saveCompositeArchive(compositeDatas)
+                            self.saveCompositeArchive(
+                                compositeDatas,
+                                config: captureConfig,
+                                secondaryImages: compositeSecondaryDatas
+                            )
                             DispatchQueue.main.async {
                                 self.flash(on: false)
                                 guard !datas.isEmpty else {
@@ -1660,6 +1672,12 @@ final class CameraManager: NSObject, ObservableObject {
 
                     var outputPhotos: [Data] = []
                     var compositePhotos: [Data] = []
+                    var compositeSecondaryPhotos: [Data?] = []
+                    let secondaryPreview = self.highResolutionSecondaryJPEG(
+                        secondaryFrame: fallbackFrames[1 - primarySlot],
+                        config: captureConfig,
+                        slot: 1 - primarySlot
+                    )
                     if captureConfig.outputMode.savesOriginal {
                         outputPhotos.append(contentsOf: capturedPhotos)
                     }
@@ -1672,12 +1690,17 @@ final class CameraManager: NSObject, ObservableObject {
                                 mainSlot: primarySlot
                             ) {
                                 compositePhotos.append(composite)
+                                compositeSecondaryPhotos.append(secondaryPreview)
                                 outputPhotos.append(composite)
                             }
                         }
                     }
 
-                    self.saveCompositeArchive(compositePhotos)
+                    self.saveCompositeArchive(
+                        compositePhotos,
+                        config: captureConfig,
+                        secondaryImages: compositeSecondaryPhotos
+                    )
                     if !outputPhotos.isEmpty {
                         // Also save using the app's established Photos-library permission path.
                         self.saveImages(outputPhotos)
@@ -1706,6 +1729,23 @@ final class CameraManager: NSObject, ObservableObject {
 
     /// Create a high-detail composite still from a native primary photo and the other camera's
     /// current video frame. Output dimensions fit inside the native still instead of upscaling it.
+    private func highResolutionSecondaryJPEG(
+        secondaryFrame: CVPixelBuffer?,
+        config: Config,
+        slot: Int
+    ) -> Data? {
+        guard let secondaryFrame else { return nil }
+        var image = orient(CIImage(cvPixelBuffer: secondaryFrame))
+        lock.lock()
+        let front = slotFront
+        lock.unlock()
+        if front.indices.contains(slot), front[slot] && config.mirrorFront {
+            image = image.oriented(.upMirrored)
+        }
+        image = config.filter.apply(to: image, intensity: config.filterIntensity)
+        return jpeg(image)
+    }
+
     private func highResolutionCompositeJPEG(
         mainPhotoData: Data?,
         secondaryFrame: CVPixelBuffer?,
@@ -2082,12 +2122,19 @@ final class CameraManager: NSObject, ObservableObject {
         let composed = Compositor.compose(main: mainImage, sub: subImage, cfg: c, canvas: canvas)
         let finalImage = c.filter.apply(to: composed, intensity: c.filterIntensity).cropped(to: full)
 
+        let pipSecondaryData: Data? = {
+            guard c.layout == .pip, let subImage else { return nil }
+            return jpeg(c.filter.apply(to: subImage, intensity: c.filterIntensity))
+        }()
+
         // 原图直出：每颗镜头各存一张未镜像、未加滤镜、未裁切、未合成的画面；合成图是预览里看到的样子
         var shots: [StillShot] = []
-        if c.outputMode.savesComposite { shots.append(StillShot(image: finalImage, slot: nil)) }
+        if c.outputMode.savesComposite {
+            shots.append(StillShot(image: finalImage, slot: nil, captureConfig: c, secondaryPreviewData: pipSecondaryData))
+        }
         if c.outputMode.savesOriginal && includeOriginals {
-            shots.append(StillShot(image: rawA, slot: 0))
-            if let rb = rawB { shots.append(StillShot(image: rb, slot: 1)) }
+            shots.append(StillShot(image: rawA, slot: 0, captureConfig: c))
+            if let rb = rawB { shots.append(StillShot(image: rb, slot: 1, captureConfig: c)) }
         }
         guard !shots.isEmpty else {
             showToast("生成照片失败")
@@ -2132,7 +2179,12 @@ final class CameraManager: NSObject, ObservableObject {
                 showToast("生成照片失败")
                 return
             }
-            saveCompositeArchive(shots.filter { $0.slot == nil }.compactMap { $0.data })
+            let compositeShots = shots.filter { $0.slot == nil }
+            saveCompositeArchive(
+                compositeShots.compactMap { $0.data },
+                config: c,
+                secondaryImages: compositeShots.map { $0.secondaryPreviewData }
+            )
             saveImages(datas, successMessage: silentSave ? "" : nil)
             return
         }
@@ -2170,7 +2222,15 @@ final class CameraManager: NSObject, ObservableObject {
         group.notify(queue: .global(qos: .userInitiated)) { [weak self] in
             var items: [SavedItem] = []
             for (i, s) in shots.enumerated() {
-                if let d = s.data { items.append(SavedItem(photo: d, movie: box.get(i), isComposite: s.slot == nil)) }
+                if let d = s.data {
+                    items.append(SavedItem(
+                        photo: d,
+                        movie: box.get(i),
+                        isComposite: s.slot == nil,
+                        captureConfig: s.captureConfig ?? self.cfg,
+                        secondaryPreviewData: s.secondaryPreviewData
+                    ))
+                }
             }
             self?.saveLivePhotos(items)
         }
@@ -2210,7 +2270,14 @@ final class CameraManager: NSObject, ObservableObject {
             .appendingPathComponent("DualCamCompositePhotos", isDirectory: true)
     }
 
-    /// Loads only photos archived by DualCam; it never enumerates the user's system Photos library.
+    private func archiveLayoutURL(for photoURL: URL) -> URL {
+        photoURL.appendingPathExtension("layout.json")
+    }
+
+    private func archiveSecondaryURL(for photoURL: URL) -> URL {
+        photoURL.deletingPathExtension().appendingPathExtension("sub.jpg")
+    }
+
     private func loadCompositeArchive() {
         let directory = compositeArchiveDirectory
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -2225,26 +2292,71 @@ final class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    /// Store original JPEG bytes so the internal gallery does not downscale full-resolution output.
-    private func saveCompositeArchive(_ images: [Data]) {
+    /// Exact normalized hit-target for this photo's PiP, saved at capture time.
+    func archivedPiPRegion(for url: URL) -> CGRect? {
+        if let data = try? Data(contentsOf: archiveLayoutURL(for: url)),
+           let metadata = try? JSONDecoder().decode(ArchivedCompositeLayout.self, from: data) {
+            guard metadata.layout == LayoutMode.pip.rawValue,
+                  let x = metadata.x, let y = metadata.y,
+                  let width = metadata.width, let height = metadata.height else { return nil }
+            return CGRect(x: x, y: y, width: width, height: height)
+        }
+        // Older archive entries have no sidecar. Fall back to the currently selected PiP geometry.
+        guard cfg.layout == .pip else { return nil }
+        return Compositor.pipRectNormalized(cfg: cfg)
+    }
+
+    func archivedSecondaryPreviewURL(for url: URL) -> URL? {
+        let candidate = archiveSecondaryURL(for: url)
+        return FileManager.default.fileExists(atPath: candidate.path) ? candidate : nil
+    }
+
+    /// Original JPEGs are kept as-is; newest photo is at index zero and a burst is newest-first.
+    private func saveCompositeArchive(
+        _ images: [Data],
+        config: Config? = nil,
+        secondaryImages: [Data?] = []
+    ) {
         guard !images.isEmpty else { return }
         let directory = compositeArchiveDirectory
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             var names = UserDefaults.standard.stringArray(forKey: compositeArchiveKey) ?? []
-            for data in images.reversed() {
+            for (index, data) in images.enumerated() {
                 let name = "\(UUID().uuidString).jpg"
-                try data.write(to: directory.appendingPathComponent(name), options: .atomic)
+                let photoURL = directory.appendingPathComponent(name)
+                try data.write(to: photoURL, options: .atomic)
+                if let config {
+                    let rect = Compositor.pipRectNormalized(cfg: config)
+                    let metadata = ArchivedCompositeLayout(
+                        layout: config.layout.rawValue,
+                        x: config.layout == .pip ? Double(rect.minX) : nil,
+                        y: config.layout == .pip ? Double(rect.minY) : nil,
+                        width: config.layout == .pip ? Double(rect.width) : nil,
+                        height: config.layout == .pip ? Double(rect.height) : nil
+                    )
+                    if let data = try? JSONEncoder().encode(metadata) {
+                        try? data.write(to: archiveLayoutURL(for: photoURL), options: .atomic)
+                    }
+                }
+                if secondaryImages.indices.contains(index), let source = secondaryImages[index] {
+                    try? source.write(to: archiveSecondaryURL(for: photoURL), options: .atomic)
+                }
                 names.insert(name, at: 0)
             }
+
             let retained = Array(names.prefix(300))
             let retainedSet = Set(retained)
             for name in names where !retainedSet.contains(name) {
-                try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))
+                let oldURL = directory.appendingPathComponent(name)
+                try? FileManager.default.removeItem(at: oldURL)
+                try? FileManager.default.removeItem(at: archiveLayoutURL(for: oldURL))
+                try? FileManager.default.removeItem(at: archiveSecondaryURL(for: oldURL))
             }
             UserDefaults.standard.set(retained, forKey: compositeArchiveKey)
-            let urls = retained.map { directory.appendingPathComponent($0) }
-            DispatchQueue.main.async { self.compositePhotoURLs = urls }
+            DispatchQueue.main.async {
+                self.compositePhotoURLs = retained.map { directory.appendingPathComponent($0) }
+            }
             if let newest = images.last { setThumb(data: newest) }
         } catch {
             showToast("照片未能归档到 DualCam，请检查可用存储空间")
@@ -2255,7 +2367,11 @@ final class CameraManager: NSObject, ObservableObject {
         let current = compositePhotoURLs
         let removed = Set(offsets.compactMap { current.indices.contains($0) ? current[$0] : nil })
         guard !removed.isEmpty else { return }
-        for url in removed { try? FileManager.default.removeItem(at: url) }
+        for url in removed {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(at: archiveLayoutURL(for: url))
+            try? FileManager.default.removeItem(at: archiveSecondaryURL(for: url))
+        }
         let remaining = current.filter { !removed.contains($0) }
         UserDefaults.standard.set(remaining.map { $0.lastPathComponent }, forKey: compositeArchiveKey)
         compositePhotoURLs = remaining
@@ -2273,7 +2389,12 @@ final class CameraManager: NSObject, ObservableObject {
 
     private func saveLivePhotos(_ items: [SavedItem]) {
         guard !items.isEmpty else { return }
-        saveCompositeArchive(items.filter { $0.isComposite }.map { $0.photo })
+        let compositeItems = items.filter { $0.isComposite }
+        saveCompositeArchive(
+            compositeItems.map { $0.photo },
+            config: compositeItems.first?.captureConfig ?? cfg,
+            secondaryImages: compositeItems.map { $0.secondaryPreviewData }
+        )
         PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self] status in
             guard let self = self else { return }
             guard status == .authorized || status == .limited else {
@@ -2555,12 +2676,24 @@ private struct StillShot {
     var liveID: String? = nil
     var recorder: VideoRecorder? = nil
     var data: Data? = nil
+    var captureConfig: Config? = nil
+    var secondaryPreviewData: Data? = nil
 }
 
 private struct SavedItem {
     let photo: Data
     let movie: URL?
     let isComposite: Bool
+    let captureConfig: Config
+    let secondaryPreviewData: Data?
+}
+
+private struct ArchivedCompositeLayout: Codable {
+    let layout: String
+    let x: Double?
+    let y: Double?
+    let width: Double?
+    let height: Double?
 }
 
 /// 多个录制器的完成回调在不同线程，用它收集各自的输出文件。
