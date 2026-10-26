@@ -34,6 +34,10 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var focusMarker: FocusMarker? = nil
     @Published var zoomStops: [ZoomStop] = []
     @Published var lastThumb: UIImage? = nil
+    /// App-owned archive containing only DualCam composite still photos, newest first.
+    @Published var compositePhotoURLs: [URL] = []
+
+    private let compositeArchiveKey = "DualCam.CompositePhotoFilenames"
 
     /// 合成后的预览画面直接送进这个显示层（GPU 渲染 → 像素缓冲 → 显示层，不经过 CPU 回读和主线程）。
     let displayLayer: AVSampleBufferDisplayLayer = {
@@ -115,6 +119,7 @@ final class CameraManager: NSObject, ObservableObject {
 
     override init() {
         super.init()
+        loadCompositeArchive()
         observeNotifications()
         requestPermissionsAndStart()
     }
@@ -1208,12 +1213,11 @@ final class CameraManager: NSObject, ObservableObject {
         }
 
         guard shots.contains(where: { $0.recorder != nil }) else {
-            let datas = shots.compactMap { $0.data }
-            guard !datas.isEmpty else {
+            guard shots.contains(where: { $0.data != nil }) else {
                 showToast("生成照片失败")
                 return
             }
-            saveImages(datas)
+            saveImages(shots)
             return
         }
 
@@ -1249,7 +1253,7 @@ final class CameraManager: NSObject, ObservableObject {
         group.notify(queue: .global(qos: .userInitiated)) { [weak self] in
             var items: [SavedItem] = []
             for (i, s) in shots.enumerated() {
-                if let d = s.data { items.append(SavedItem(photo: d, movie: box.get(i))) }
+                if let d = s.data { items.append(SavedItem(photo: d, movie: box.get(i), isComposite: s.slot == nil)) }
             }
             self?.saveLivePhotos(items)
         }
@@ -1284,6 +1288,55 @@ final class CameraManager: NSObject, ObservableObject {
         DispatchQueue.main.async { self.lastThumb = thumb }
     }
 
+    private var compositeArchiveDirectory: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("DualCamCompositePhotos", isDirectory: true)
+    }
+
+    /// Loads only photos DualCam itself archived as composite outputs.
+    /// This deliberately does not enumerate the system Photos library.
+    private func loadCompositeArchive() {
+        let directory = compositeArchiveDirectory
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let names = UserDefaults.standard.stringArray(forKey: compositeArchiveKey) ?? []
+        let urls = names.map { directory.appendingPathComponent($0) }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+        DispatchQueue.main.async {
+            self.compositePhotoURLs = urls
+            if let first = urls.first, let data = try? Data(contentsOf: first) {
+                self.setThumb(data: data)
+            }
+        }
+    }
+
+    /// Stores a local full-resolution copy for in-app viewing, independently of Photos read permission.
+    private func saveCompositeArchive(_ images: [Data]) {
+        guard !images.isEmpty else { return }
+        let directory = compositeArchiveDirectory
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            var names = UserDefaults.standard.stringArray(forKey: compositeArchiveKey) ?? []
+            for data in images {
+                let name = "\(UUID().uuidString).jpg"
+                try data.write(to: directory.appendingPathComponent(name), options: .atomic)
+                names.insert(name, at: 0)
+            }
+
+            // Bound app-private storage; remove files that age out of the in-app gallery.
+            let retained = Array(names.prefix(300))
+            let retainedSet = Set(retained)
+            for name in names where !retainedSet.contains(name) {
+                try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))
+            }
+            UserDefaults.standard.set(retained, forKey: compositeArchiveKey)
+            let urls = retained.map { directory.appendingPathComponent($0) }
+            DispatchQueue.main.async { self.compositePhotoURLs = urls }
+            if let first = images.first { setThumb(data: first) }
+        } catch {
+            showToast("合成照片已保存，但应用内归档失败")
+        }
+    }
+
     private func saveLivePhotos(_ items: [SavedItem]) {
         guard !items.isEmpty else { return }
         PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self] status in
@@ -1315,13 +1368,20 @@ final class CameraManager: NSObject, ObservableObject {
                     if let m = item.movie { try? FileManager.default.removeItem(at: m) }
                     if let p = photoURLs[i] { try? FileManager.default.removeItem(at: p) }
                 }
+                if ok {
+                    self.saveCompositeArchive(items.filter { $0.isComposite }.map { $0.photo })
+                }
                 self.showToast(ok ? "实况照片已保存（\(items.count) 张）" : "保存失败：\(error?.localizedDescription ?? "未知错误")")
             })
-            if let first = items.first { self.setThumb(data: first.photo) }
         }
     }
 
-    private func saveImages(_ datas: [Data]) {
+    private func saveImages(_ shots: [StillShot]) {
+        let validShots = shots.filter { $0.data != nil }
+        guard !validShots.isEmpty else {
+            showToast("生成照片失败")
+            return
+        }
         PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self] status in
             guard let self = self else { return }
             guard status == .authorized || status == .limited else {
@@ -1329,14 +1389,17 @@ final class CameraManager: NSObject, ObservableObject {
                 return
             }
             PHPhotoLibrary.shared().performChanges({
-                for d in datas {
+                for shot in validShots {
+                    guard let data = shot.data else { continue }
                     let req = PHAssetCreationRequest.forAsset()
-                    req.addResource(with: .photo, data: d, options: nil)
+                    req.addResource(with: .photo, data: data, options: nil)
                 }
             }, completionHandler: { ok, error in
-                self.showToast(ok ? "照片已保存（\(datas.count) 张）" : "保存失败：\(error?.localizedDescription ?? "未知错误")")
+                if ok {
+                    self.saveCompositeArchive(validShots.filter { $0.slot == nil }.compactMap { $0.data })
+                }
+                self.showToast(ok ? "照片已保存（\(validShots.count) 张）" : "保存失败：\(error?.localizedDescription ?? "未知错误")")
             })
-            if let first = datas.first { self.setThumb(data: first) }
         }
     }
 
@@ -1453,14 +1516,6 @@ final class CameraManager: NSObject, ObservableObject {
                 try? FileManager.default.removeItem(at: url)
                 return
             }
-            // 缩略图取视频第一帧
-            let gen = AVAssetImageGenerator(asset: AVURLAsset(url: url))
-            gen.appliesPreferredTrackTransform = true
-            gen.maximumSize = CGSize(width: 320, height: 320)
-            if let cg = try? gen.copyCGImage(at: .zero, actualTime: nil) {
-                let thumb = UIImage(cgImage: cg)
-                DispatchQueue.main.async { self.lastThumb = thumb }
-            }
             PHPhotoLibrary.shared().performChanges({
                 PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
             }, completionHandler: { ok, error in
@@ -1518,6 +1573,7 @@ private struct StillShot {
 private struct SavedItem {
     let photo: Data
     let movie: URL?
+    let isComposite: Bool
 }
 
 /// 多个录制器的完成回调在不同线程，用它收集各自的输出文件。
