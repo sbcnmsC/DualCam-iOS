@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct CameraScreen: View {
     @EnvironmentObject private var cam: CameraManager
@@ -541,45 +542,81 @@ private struct CompositePhotoViewer: View {
     }
 }
 
-private struct ZoomableCompositePhoto: View {
+/// UIScrollView supplies native pinch zoom + panning, avoiding the gesture conflict
+/// caused by combining MagnificationGesture with a paging TabView.
+private struct ZoomableCompositePhoto: UIViewRepresentable {
     let url: URL
-    @State private var scale: CGFloat = 1
-    @State private var lastScale: CGFloat = 1
 
-    var body: some View {
-        GeometryReader { geo in
-            Group {
-                if let image = UIImage(contentsOfFile: url.path) {
-                    Image(uiImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: geo.size.width, height: geo.size.height)
-                        .scaleEffect(scale)
-                        .contentShape(Rectangle())
-                        .onTapGesture(count: 2) {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                scale = scale > 1 ? 1 : 2.5
-                                lastScale = scale
-                            }
-                        }
-                        .gesture(
-                            MagnificationGesture()
-                                .onChanged { value in
-                                    scale = min(max(lastScale * value, 1), 5)
-                                }
-                                .onEnded { _ in
-                                    lastScale = scale
-                                }
-                        )
-                } else {
-                    ProgressView().tint(.white)
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> UIScrollView {
+        let scrollView = UIScrollView()
+        scrollView.backgroundColor = .black
+        scrollView.delegate = context.coordinator
+        scrollView.minimumZoomScale = 1
+        scrollView.maximumZoomScale = 5
+        scrollView.bouncesZoom = true
+        scrollView.showsHorizontalScrollIndicator = false
+        scrollView.showsVerticalScrollIndicator = false
+        scrollView.contentInsetAdjustmentBehavior = .never
+
+        let imageView = UIImageView(frame: scrollView.bounds)
+        imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        imageView.contentMode = .scaleAspectFit
+        imageView.backgroundColor = .black
+        imageView.isUserInteractionEnabled = true
+        scrollView.addSubview(imageView)
+        context.coordinator.imageView = imageView
+        context.coordinator.scrollView = scrollView
+
+        let doubleTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleDoubleTap(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        imageView.addGestureRecognizer(doubleTap)
+
+        // Avoid synchronous disk reads and image decoding on the camera UI thread.
+        let imageURL = url
+        DispatchQueue.global(qos: .userInitiated).async {
+            let image = UIImage(contentsOfFile: imageURL.path)
+            DispatchQueue.main.async {
+                guard context.coordinator.url == imageURL else { return }
+                imageView.image = image
+                if image == nil {
+                    imageView.accessibilityLabel = "照片加载失败"
                 }
             }
-            .frame(width: geo.size.width, height: geo.size.height)
-            .clipped()
         }
-        .background(Color.black)
-        .id(url)
+        context.coordinator.url = url
+        return scrollView
+    }
+
+    func updateUIView(_ scrollView: UIScrollView, context: Context) {}
+
+    final class Coordinator: NSObject, UIScrollViewDelegate {
+        weak var imageView: UIImageView?
+        weak var scrollView: UIScrollView?
+        var url: URL?
+
+        func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+
+        func scrollViewDidZoom(_ scrollView: UIScrollView) {
+            guard let imageView = imageView else { return }
+            let horizontal = max(0, (scrollView.bounds.width - imageView.frame.width) / 2)
+            let vertical = max(0, (scrollView.bounds.height - imageView.frame.height) / 2)
+            scrollView.contentInset = UIEdgeInsets(top: vertical, left: horizontal, bottom: vertical, right: horizontal)
+        }
+
+        @objc func handleDoubleTap(_ recognizer: UITapGestureRecognizer) {
+            guard let scrollView = scrollView, let imageView = imageView else { return }
+            if scrollView.zoomScale > scrollView.minimumZoomScale + 0.05 {
+                scrollView.setZoomScale(scrollView.minimumZoomScale, animated: true)
+            } else {
+                let point = recognizer.location(in: imageView)
+                let width = scrollView.bounds.width / 2.5
+                let height = scrollView.bounds.height / 2.5
+                let rect = CGRect(x: point.x - width / 2, y: point.y - height / 2, width: width, height: height)
+                scrollView.zoom(to: rect, animated: true)
+            }
+        }
     }
 }
 
