@@ -13,7 +13,7 @@ struct CreativeGalleryView: View {
     @State private var showingShare = false
     @State private var showingDeleteConfirm = false
     @State private var compareFilter: String?
-    @State private var detailURL: URL?
+    @State private var detailItem: GalleryDetailItem?
 
     private let columns = [GridItem(.flexible(), spacing: 3), GridItem(.flexible(), spacing: 3), GridItem(.flexible(), spacing: 3)]
 
@@ -38,10 +38,10 @@ struct CreativeGalleryView: View {
             GalleryShareSheet(items: shareItems)
                 .ignoresSafeArea()
         }
-        .sheet(item: $detailURL) { url in
-            PhotoDetailSheet(url: url, onShare: { share([url]) }, onDelete: {
-                cam.deleteCompositePhoto(url)
-                detailURL = nil
+        .sheet(item: $detailItem) { item in
+            PhotoDetailSheet(url: item.url, onShare: { share([item.url]) }, onDelete: {
+                cam.deleteCompositePhoto(item.url)
+                detailItem = nil
             })
             .presentationBackground(.black)
         }
@@ -164,7 +164,7 @@ struct CreativeGalleryView: View {
                                     if selectedForBatch.contains(url.path) { selectedForBatch.remove(url.path) }
                                     else { selectedForBatch.insert(url.path) }
                                 } else {
-                                    detailURL = url
+                                    detailItem = GalleryDetailItem(url: url)
                                 }
                             } label: {
                                 ZStack(alignment: .topTrailing) {
@@ -475,4 +475,10 @@ private struct GalleryShareSheet: UIViewControllerRepresentable {
         UIActivityViewController(activityItems: items, applicationActivities: nil)
     }
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
+
+private struct GalleryDetailItem: Identifiable {
+    let url: URL
+    var id: String { url.path }
 }
