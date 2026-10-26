@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import Photos
 
 /// Private, app-owned creative workspace. It intentionally does not query or write to Photos.
 struct CreativeGalleryView: View {
@@ -14,6 +15,8 @@ struct CreativeGalleryView: View {
     @State private var showingDeleteConfirm = false
     @State private var compareFilter: String?
     @State private var detailItem: GalleryDetailItem?
+    @State private var exportAlert = false
+    @State private var exportMessage = ""
 
     private let columns = [GridItem(.flexible(), spacing: 3), GridItem(.flexible(), spacing: 3), GridItem(.flexible(), spacing: 3)]
 
@@ -39,11 +42,16 @@ struct CreativeGalleryView: View {
                 .ignoresSafeArea()
         }
         .sheet(item: $detailItem) { item in
-            PhotoDetailSheet(url: item.url, onShare: { share([item.url]) }, onDelete: {
+            PhotoDetailSheet(url: item.url, onShare: { share([item.url]) }, onExport: { exportToSystemPhotos([item.url]) }, onDelete: {
                 cam.deleteCompositePhoto(item.url)
                 detailItem = nil
             })
             .presentationBackground(.black)
+        }
+        .alert("系统照片图库", isPresented: $exportAlert) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(exportMessage)
         }
         .confirmationDialog("删除所选作品？", isPresented: $showingDeleteConfirm, titleVisibility: .visible) {
             Button("删除 \(selectedForBatch.count) 张", role: .destructive) { deleteSelected() }
@@ -209,7 +217,10 @@ struct CreativeGalleryView: View {
                         .font(.system(size: 12, weight: .semibold))
                     Spacer()
                     Button { shareSelected() } label: {
-                        Label("分享 / 导出", systemImage: "square.and.arrow.up")
+                        Label("分享", systemImage: "square.and.arrow.up")
+                    }
+                    Button { exportToSystemPhotos(cam.compositePhotoURLs.filter { selectedForBatch.contains($0.path) }) } label: {
+                        Label("导出到系统相册", systemImage: "photo.badge.arrow.down")
                     }
                     Button(role: .destructive) { showingDeleteConfirm = true } label: {
                         Label("删除", systemImage: "trash")
@@ -391,6 +402,40 @@ struct CreativeGalleryView: View {
         showingShare = true
     }
 
+    /// Explicit export: captures remain app-private unless the user chooses this action.
+    private func exportToSystemPhotos(_ urls: [URL]) {
+        let existing = urls.filter { FileManager.default.fileExists(atPath: $0.path) }
+        guard !existing.isEmpty else {
+            exportMessage = "找不到可导出的照片文件。"
+            exportAlert = true
+            return
+        }
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+            guard status == .authorized else {
+                DispatchQueue.main.async {
+                    exportMessage = status == .denied || status == .restricted
+                        ? "没有照片图库写入权限。请在系统设置中允许 DualCam 添加照片后重试。"
+                        : "未获得照片图库写入权限，照片仍保留在 DualCam 内部。"
+                    exportAlert = true
+                }
+                return
+            }
+            PHPhotoLibrary.shared().performChanges({
+                for url in existing {
+                    let request = PHAssetCreationRequest.forAsset()
+                    request.addResource(with: .photo, fileURL: url, options: nil)
+                }
+            }, completionHandler: { success, error in
+                DispatchQueue.main.async {
+                    exportMessage = success
+                        ? "已将 \(existing.count) 张照片导出到系统照片图库。"
+                        : "导出失败：\(error?.localizedDescription ?? "未知错误")。原照片仍保留在 DualCam 内部。"
+                    exportAlert = true
+                }
+            })
+        }
+    }
+
     private func deleteSelected() {
         let offsets = IndexSet(cam.compositePhotoURLs.indices.filter { selectedForBatch.contains(cam.compositePhotoURLs[$0].path) })
         cam.deleteCompositePhotos(at: offsets)
@@ -448,6 +493,7 @@ private struct GalleryLargePreview: View {
 private struct PhotoDetailSheet: View {
     let url: URL
     let onShare: () -> Void
+    let onExport: () -> Void
     let onDelete: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var image: UIImage?
@@ -463,7 +509,8 @@ private struct PhotoDetailSheet: View {
                     Text("作品预览").font(.system(size: 14, weight: .semibold))
                     Spacer()
                     Menu {
-                        Button(action: onShare) { Label("分享 / 导出", systemImage: "square.and.arrow.up") }
+                        Button(action: onShare) { Label("分享", systemImage: "square.and.arrow.up") }
+                        Button(action: onExport) { Label("导出到系统相册", systemImage: "photo.badge.arrow.down") }
                         Button(role: .destructive, action: onDelete) { Label("删除作品", systemImage: "trash") }
                     } label: {
                         Image(systemName: "ellipsis").frame(width: 40, height: 40)
