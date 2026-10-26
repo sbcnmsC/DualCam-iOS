@@ -1360,10 +1360,25 @@ final class CameraManager: NSObject, ObservableObject {
         guard !items.isEmpty else { return }
         // Keep the composite still in DualCam's private archive. Do not write to the system Photos library.
         saveCompositeArchive(items.filter { $0.isComposite }.map { $0.photo })
-        for item in items {
-            if let movie = item.movie { try? FileManager.default.removeItem(at: movie) }
+        let liveDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("DualCamLiveMovies", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: liveDirectory, withIntermediateDirectories: true)
+            for item in items {
+                guard let movie = item.movie else { continue }
+                let destination = liveDirectory.appendingPathComponent("DualCam-Live-\(UUID().uuidString).mov")
+                try FileManager.default.moveItem(at: movie, to: destination)
+            }
+            showToast("已保存到 DualCam 内部（\(items.filter { $0.isComposite }.count) 张合成照片）")
+        } catch {
+            // Keep the still image even if archiving the paired motion resource fails.
+            for item in items {
+                if let movie = item.movie, FileManager.default.fileExists(atPath: movie.path) {
+                    try? FileManager.default.removeItem(at: movie)
+                }
+            }
+            showToast("合成照片已归档，实况动态文件保存失败")
         }
-        showToast("已保存到 DualCam 相册（\(items.filter { $0.isComposite }.count) 张合成照片）")
     }
 
     private func saveImages(_ shots: [StillShot]) {
