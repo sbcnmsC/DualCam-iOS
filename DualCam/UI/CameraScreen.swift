@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct CameraScreen: View {
     @EnvironmentObject private var cam: CameraManager
@@ -454,10 +455,12 @@ struct BottomBar: View {
 
 struct ThumbnailButton: View {
     @EnvironmentObject private var cam: CameraManager
+    @State private var showViewer = false
 
     var body: some View {
         Button {
-            if let url = URL(string: "photos-redirect://") { UIApplication.shared.open(url) }
+            guard !cam.compositePhotoURLs.isEmpty else { return }
+            showViewer = true
         } label: {
             ZStack {
                 if let img = cam.lastThumb {
@@ -466,12 +469,154 @@ struct ThumbnailButton: View {
                     Color.white.opacity(0.12)
                     Image(systemName: "photo").foregroundStyle(Color.white.opacity(0.6))
                 }
+                if cam.compositePhotoURLs.isEmpty {
+                    Color.black.opacity(0.12)
+                }
             }
             .frame(width: 52, height: 52)
             .clipShape(Circle())
             .overlay(Circle().stroke(Color.white.opacity(0.25), lineWidth: 1))
         }
         .buttonStyle(.plain)
+        .disabled(cam.compositePhotoURLs.isEmpty)
+        .fullScreenCover(isPresented: $showViewer) {
+            CreativeGalleryView()
+                .environmentObject(cam)
+        }
+    }
+}
+
+private struct CompositePhotoViewer: View {
+    @EnvironmentObject private var cam: CameraManager
+    @Environment(\.dismiss) private var dismiss
+    @State private var selection = 0
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            if cam.compositePhotoURLs.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.system(size: 42))
+                    Text("还没有合成照片")
+                        .font(.system(size: 16, weight: .medium))
+                }
+                .foregroundStyle(.white.opacity(0.8))
+            } else {
+                TabView(selection: $selection) {
+                    ForEach(cam.compositePhotoURLs.indices, id: \.self) { index in
+                        ZoomableCompositePhoto(url: cam.compositePhotoURLs[index])
+                            .tag(index)
+                    }
+                }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                .ignoresSafeArea()
+                VStack {
+                    HStack {
+                        Button {
+                            dismiss()
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 15, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 40, height: 40)
+                                .background(Circle().fill(Color.white.opacity(0.16)))
+                        }
+                        .buttonStyle(.plain)
+                        Spacer()
+                        Text("\(min(selection + 1, cam.compositePhotoURLs.count)) / \(cam.compositePhotoURLs.count)")
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
+                            .background(Capsule().fill(Color.white.opacity(0.16)))
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.top, 12)
+                    Spacer()
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+        .statusBarHidden()
+    }
+}
+
+/// UIScrollView supplies native pinch zoom + panning, avoiding the gesture conflict
+/// caused by combining MagnificationGesture with a paging TabView.
+private struct ZoomableCompositePhoto: UIViewRepresentable {
+    let url: URL
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> UIScrollView {
+        let scrollView = UIScrollView()
+        scrollView.backgroundColor = .black
+        scrollView.delegate = context.coordinator
+        scrollView.minimumZoomScale = 1
+        scrollView.maximumZoomScale = 5
+        scrollView.bouncesZoom = true
+        scrollView.showsHorizontalScrollIndicator = false
+        scrollView.showsVerticalScrollIndicator = false
+        scrollView.contentInsetAdjustmentBehavior = .never
+
+        let imageView = UIImageView(frame: scrollView.bounds)
+        imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        imageView.contentMode = .scaleAspectFit
+        imageView.backgroundColor = .black
+        imageView.isUserInteractionEnabled = true
+        scrollView.addSubview(imageView)
+        context.coordinator.imageView = imageView
+        context.coordinator.scrollView = scrollView
+
+        let doubleTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleDoubleTap(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        imageView.addGestureRecognizer(doubleTap)
+
+        // Avoid synchronous disk reads and image decoding on the camera UI thread.
+        let imageURL = url
+        DispatchQueue.global(qos: .userInitiated).async {
+            let image = UIImage(contentsOfFile: imageURL.path)
+            DispatchQueue.main.async {
+                guard context.coordinator.url == imageURL else { return }
+                imageView.image = image
+                if image == nil {
+                    imageView.accessibilityLabel = "照片加载失败"
+                }
+            }
+        }
+        context.coordinator.url = url
+        return scrollView
+    }
+
+    func updateUIView(_ scrollView: UIScrollView, context: Context) {}
+
+    final class Coordinator: NSObject, UIScrollViewDelegate {
+        weak var imageView: UIImageView?
+        weak var scrollView: UIScrollView?
+        var url: URL?
+
+        func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+
+        func scrollViewDidZoom(_ scrollView: UIScrollView) {
+            guard let imageView = imageView else { return }
+            let horizontal = max(0, (scrollView.bounds.width - imageView.frame.width) / 2)
+            let vertical = max(0, (scrollView.bounds.height - imageView.frame.height) / 2)
+            scrollView.contentInset = UIEdgeInsets(top: vertical, left: horizontal, bottom: vertical, right: horizontal)
+        }
+
+        @objc func handleDoubleTap(_ recognizer: UITapGestureRecognizer) {
+            guard let scrollView = scrollView, let imageView = imageView else { return }
+            if scrollView.zoomScale > scrollView.minimumZoomScale + 0.05 {
+                scrollView.setZoomScale(scrollView.minimumZoomScale, animated: true)
+            } else {
+                let point = recognizer.location(in: imageView)
+                let width = scrollView.bounds.width / 2.5
+                let height = scrollView.bounds.height / 2.5
+                let rect = CGRect(x: point.x - width / 2, y: point.y - height / 2, width: width, height: height)
+                scrollView.zoom(to: rect, animated: true)
+            }
+        }
     }
 }
 
