@@ -149,6 +149,11 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var focusMarker: FocusMarker? = nil
     @Published var zoomStops: [ZoomStop] = []
     @Published var lastThumb: UIImage? = nil
+    @Published var compositePhotoURLs: [URL] = []
+    @Published var isBurstCapturing = false
+    @Published var burstCaptureCount = 0
+
+    private let compositeArchiveKey = "DualCam.CompositePhotoFilenames"
 
     /// 合成后的预览画面直接送进这个显示层（GPU 渲染 → 像素缓冲 → 显示层，不经过 CPU 回读和主线程）。
     let displayLayer: AVSampleBufferDisplayLayer = {
@@ -163,6 +168,11 @@ final class CameraManager: NSObject, ObservableObject {
     let compositedFrameSource = CompositedFrameSource()
 
     var mainSlot: Int { cfg.swapped ? 1 : 0 }
+
+    var canStartBurstCapture: Bool {
+        ready && captureMode == .photo && !isCapturingPhoto && !isBurstCapturing &&
+        !isRecording && !cfg.livePhoto && timerSeconds == 0
+    }
 
     /// Suspend local capture when this device is only displaying a remote monitor stream.
     /// AVCaptureSession lifecycle is owned by sessionQueue.
@@ -211,7 +221,11 @@ final class CameraManager: NSObject, ObservableObject {
     private var highResolutionBatchSlots: [Int] = []
     private var highResolutionBatchIndex = 0
     private var highResolutionBatchData: [Int: Data] = [:]
+    private var highResolutionBatchIndexedData: [Int: Data] = [:]
     private var highResolutionBatchCompletion: (([Int: Data]) -> Void)?
+    private var highResolutionBatchBurstCompletion: (([Data]) -> Void)?
+    private var highResolutionBurstMode = false
+    private var highResolutionBurstStopRequested = false
     /// sessionQueue-owned bookkeeping for the temporary single-camera still session.
     private var highResolutionBatchActive = false
     private var highResolutionBatchToken: UInt64 = 0
@@ -285,6 +299,7 @@ final class CameraManager: NSObject, ObservableObject {
     override init() {
         super.init()
         observeNotifications()
+        loadCompositeArchive()
         requestPermissionsAndStart()
     }
 
@@ -1543,6 +1558,7 @@ final class CameraManager: NSObject, ObservableObject {
                         self.videoQueue.async {
                             self.setCaptureStatus("合成并保存…")
                             var datas: [Data] = []
+                            var compositeDatas: [Data] = []
                             let fallbackForSlot: (Int) -> Data? = { slot in
                                 guard fallbackFrames.indices.contains(slot),
                                       let buffer = fallbackFrames[slot] else { return nil }
@@ -1568,9 +1584,11 @@ final class CameraManager: NSObject, ObservableObject {
                                     mainSlot: primarySlot
                                 ) {
                                     datas.append(composite)
+                                    compositeDatas.append(composite)
                                 }
                             }
 
+                            self.saveCompositeArchive(compositeDatas)
                             DispatchQueue.main.async {
                                 self.flash(on: false)
                                 guard !datas.isEmpty else {
@@ -1606,6 +1624,83 @@ final class CameraManager: NSObject, ObservableObject {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { self.flash(on: false) }
                 }
             }
+        }
+    }
+
+    /// Create a high-detail composite still from a native primary photo and the other camera's
+    /// current video frame. Output dimensions fit inside the native still instead of upscaling it.
+    func startBurstCapture() {
+        guard canStartBurstCapture else { return }
+        let captureConfig = cfg
+        let primarySlot = captureConfig.swapped ? 1 : 0
+        let fallbackFrames = snapshotFallbackFrames()
+        let burstLimit = 15
+
+        isCapturingPhoto = true
+        isBurstCapturing = true
+        burstCaptureCount = 0
+        shutterPulse &+= 1
+        captureStatus = "准备连拍…"
+        CaptureCuePlayer.shared.play(.shutter)
+        if flashEnabled { flash(on: true) }
+
+        captureHighResolutionPhotos(
+            slots: Array(repeating: primarySlot, count: burstLimit),
+            flashSlot: flashEnabled ? primarySlot : nil,
+            burstCompletion: { [weak self] primaryPhotos in
+                guard let self else { return }
+                self.videoQueue.async {
+                    var capturedPhotos = primaryPhotos
+                    if capturedPhotos.isEmpty,
+                       fallbackFrames.indices.contains(primarySlot),
+                       let fallback = fallbackFrames[primarySlot],
+                       let jpeg = self.jpeg(self.orient(CIImage(cvPixelBuffer: fallback))) {
+                        capturedPhotos = [jpeg]
+                    }
+
+                    var outputPhotos: [Data] = []
+                    var compositePhotos: [Data] = []
+                    if captureConfig.outputMode.savesOriginal {
+                        outputPhotos.append(contentsOf: capturedPhotos)
+                    }
+                    if captureConfig.outputMode.savesComposite {
+                        for photo in capturedPhotos {
+                            if let composite = self.highResolutionCompositeJPEG(
+                                mainPhotoData: photo,
+                                secondaryFrame: fallbackFrames[1 - primarySlot],
+                                config: captureConfig,
+                                mainSlot: primarySlot
+                            ) {
+                                compositePhotos.append(composite)
+                                outputPhotos.append(composite)
+                            }
+                        }
+                    }
+
+                    self.saveCompositeArchive(compositePhotos)
+                    if !outputPhotos.isEmpty {
+                        // Also save using the app's established Photos-library permission path.
+                        self.saveImages(outputPhotos)
+                    }
+
+                    DispatchQueue.main.async {
+                        self.flash(on: false)
+                        self.isBurstCapturing = false
+                        self.isCapturingPhoto = false
+                        self.burstCaptureCount = capturedPhotos.count
+                        if outputPhotos.isEmpty {
+                            self.showToast("连拍失败：没有可保存的照片")
+                        }
+                    }
+                }
+            }
+        ) { _ in }
+    }
+
+    func stopBurstCapture() {
+        guard isBurstCapturing else { return }
+        sessionQueue.async {
+            self.highResolutionBurstStopRequested = true
         }
     }
 
@@ -1666,12 +1761,16 @@ final class CameraManager: NSObject, ObservableObject {
     private func captureHighResolutionPhotos(
         slots: [Int],
         flashSlot: Int?,
+        burstCompletion: (([Data]) -> Void)? = nil,
         completion: @escaping ([Int: Data]) -> Void
     ) {
         sessionQueue.async { [weak self] in
             guard let self = self, !slots.isEmpty, self.currentCombo != nil, self.session.isRunning,
                   !self.highResolutionBatchActive else {
-                DispatchQueue.main.async { completion([:]) }
+                DispatchQueue.main.async {
+                    completion([:])
+                    burstCompletion?([])
+                }
                 return
             }
             self.highResolutionBatchActive = true
@@ -1697,12 +1796,19 @@ final class CameraManager: NSObject, ObservableObject {
             self.highResolutionBatchSlots = slots
             self.highResolutionBatchIndex = 0
             self.highResolutionBatchData = [:]
+            self.highResolutionBatchIndexedData = [:]
             self.highResolutionBatchCompletion = completion
+            self.highResolutionBatchBurstCompletion = burstCompletion
+            self.highResolutionBurstMode = (burstCompletion != nil)
+            self.highResolutionBurstStopRequested = false
             self.advanceHighResolutionCaptureBatch()
         }
     }
 
     private func advanceHighResolutionCaptureBatch() {
+        if highResolutionBurstMode && highResolutionBurstStopRequested {
+            highResolutionBatchIndex = highResolutionBatchSlots.count
+        }
         guard highResolutionBatchIndex < highResolutionBatchSlots.count else {
             finishHighResolutionCaptureBatch()
             return
@@ -1760,6 +1866,14 @@ final class CameraManager: NSObject, ObservableObject {
                       self.highResolutionBatchIndex == stepIndex else { return }
                 if let data = data {
                     self.highResolutionBatchData[slot] = data
+                    self.highResolutionBatchIndexedData[stepIndex] = data
+                    if self.highResolutionBurstMode {
+                        DispatchQueue.main.async {
+                            self.burstCaptureCount = stepIndex + 1
+                            self.captureStatus = "连拍 \(stepIndex + 1)/15"
+                        }
+                        if stepIndex > 0 { CaptureCuePlayer.shared.play(.shutter) }
+                    }
                 }
                 self.highResolutionBatchIndex += 1
                 self.advanceHighResolutionCaptureBatch()
@@ -1901,10 +2015,16 @@ final class CameraManager: NSObject, ObservableObject {
 
         let captured = highResolutionBatchData
         let completion = highResolutionBatchCompletion
+        let burstCompletion = highResolutionBatchBurstCompletion
+        let orderedBurstPhotos = (0..<highResolutionBatchSlots.count).compactMap { highResolutionBatchIndexedData[$0] }
         highResolutionBatchSlots = []
         highResolutionBatchIndex = 0
         highResolutionBatchData = [:]
+        highResolutionBatchIndexedData = [:]
         highResolutionBatchCompletion = nil
+        highResolutionBatchBurstCompletion = nil
+        highResolutionBurstMode = false
+        highResolutionBurstStopRequested = false
         highResolutionBatchFlashSlot = nil
         highResolutionBatchActive = false
 
@@ -1913,6 +2033,7 @@ final class CameraManager: NSObject, ObservableObject {
         rebuild(resetStates: false)
         DispatchQueue.main.async {
             completion?(captured)
+            burstCompletion?(orderedBurstPhotos)
         }
     }
 
@@ -2011,6 +2132,7 @@ final class CameraManager: NSObject, ObservableObject {
                 showToast("生成照片失败")
                 return
             }
+            saveCompositeArchive(shots.filter { $0.slot == nil }.compactMap { $0.data })
             saveImages(datas, successMessage: silentSave ? "" : nil)
             return
         }
@@ -2048,7 +2170,7 @@ final class CameraManager: NSObject, ObservableObject {
         group.notify(queue: .global(qos: .userInitiated)) { [weak self] in
             var items: [SavedItem] = []
             for (i, s) in shots.enumerated() {
-                if let d = s.data { items.append(SavedItem(photo: d, movie: box.get(i))) }
+                if let d = s.data { items.append(SavedItem(photo: d, movie: box.get(i), isComposite: s.slot == nil)) }
             }
             self?.saveLivePhotos(items)
         }
@@ -2083,8 +2205,75 @@ final class CameraManager: NSObject, ObservableObject {
         DispatchQueue.main.async { self.lastThumb = thumb }
     }
 
+    private var compositeArchiveDirectory: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("DualCamCompositePhotos", isDirectory: true)
+    }
+
+    /// Loads only photos archived by DualCam; it never enumerates the user's system Photos library.
+    private func loadCompositeArchive() {
+        let directory = compositeArchiveDirectory
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let names = UserDefaults.standard.stringArray(forKey: compositeArchiveKey) ?? []
+        let urls = names.map { directory.appendingPathComponent($0) }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+        DispatchQueue.main.async {
+            self.compositePhotoURLs = urls
+            if let first = urls.first, let data = try? Data(contentsOf: first) {
+                self.setThumb(data: data)
+            }
+        }
+    }
+
+    /// Store original JPEG bytes so the internal gallery does not downscale full-resolution output.
+    private func saveCompositeArchive(_ images: [Data]) {
+        guard !images.isEmpty else { return }
+        let directory = compositeArchiveDirectory
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            var names = UserDefaults.standard.stringArray(forKey: compositeArchiveKey) ?? []
+            for data in images.reversed() {
+                let name = "\(UUID().uuidString).jpg"
+                try data.write(to: directory.appendingPathComponent(name), options: .atomic)
+                names.insert(name, at: 0)
+            }
+            let retained = Array(names.prefix(300))
+            let retainedSet = Set(retained)
+            for name in names where !retainedSet.contains(name) {
+                try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))
+            }
+            UserDefaults.standard.set(retained, forKey: compositeArchiveKey)
+            let urls = retained.map { directory.appendingPathComponent($0) }
+            DispatchQueue.main.async { self.compositePhotoURLs = urls }
+            if let newest = images.last { setThumb(data: newest) }
+        } catch {
+            showToast("照片未能归档到 DualCam，请检查可用存储空间")
+        }
+    }
+
+    func deleteCompositePhotos(at offsets: IndexSet) {
+        let current = compositePhotoURLs
+        let removed = Set(offsets.compactMap { current.indices.contains($0) ? current[$0] : nil })
+        guard !removed.isEmpty else { return }
+        for url in removed { try? FileManager.default.removeItem(at: url) }
+        let remaining = current.filter { !removed.contains($0) }
+        UserDefaults.standard.set(remaining.map { $0.lastPathComponent }, forKey: compositeArchiveKey)
+        compositePhotoURLs = remaining
+        if let first = remaining.first, let data = try? Data(contentsOf: first) {
+            setThumb(data: data)
+        } else {
+            lastThumb = nil
+        }
+    }
+
+    func deleteCompositePhoto(_ url: URL) {
+        guard let index = compositePhotoURLs.firstIndex(of: url) else { return }
+        deleteCompositePhotos(at: IndexSet(integer: index))
+    }
+
     private func saveLivePhotos(_ items: [SavedItem]) {
         guard !items.isEmpty else { return }
+        saveCompositeArchive(items.filter { $0.isComposite }.map { $0.photo })
         PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self] status in
             guard let self = self else { return }
             guard status == .authorized || status == .limited else {
@@ -2371,6 +2560,7 @@ private struct StillShot {
 private struct SavedItem {
     let photo: Data
     let movie: URL?
+    let isComposite: Bool
 }
 
 /// 多个录制器的完成回调在不同线程，用它收集各自的输出文件。

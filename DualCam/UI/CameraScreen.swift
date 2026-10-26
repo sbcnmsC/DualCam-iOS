@@ -7,6 +7,7 @@ struct CameraScreen: View {
     @State private var panelTab: PanelTab = .pip
     @State private var showTimerSettings = false
     @State private var showWirelessMonitor = false
+    @State private var showCreativeGallery = false
     @State private var timerDraft = 5
     @State private var bottomBarHeight: CGFloat = 222
     @State private var zoomControlBottom: CGFloat = 0
@@ -92,7 +93,7 @@ struct CameraScreen: View {
                     BottomBar(
                         showPanel: $showPanel,
                         panelTab: $panelTab,
-                        onAlbumTap: { openNativePhotos() },
+                        onAlbumTap: { showCreativeGallery = true },
                         bottomDockPadding: max(insets.bottom + 44, 80),
                         isLandscape: false,
                         iconRotationDegrees: iconRotationDegrees
@@ -191,6 +192,10 @@ struct CameraScreen: View {
         .animation(.easeInOut(duration: 0.22), value: showPanel)
         .sheet(isPresented: $showWirelessMonitor) {
             WirelessMonitorSheet()
+                .environmentObject(cam)
+        }
+        .fullScreenCover(isPresented: $showCreativeGallery) {
+            CreativeGalleryView()
                 .environmentObject(cam)
         }
         .modifier(HardwareCameraCaptureModifier())
@@ -1408,8 +1413,13 @@ private struct ShutterPressStyle: ButtonStyle {
 struct ShutterButton: View {
     @EnvironmentObject private var cam: CameraManager
 
+    @State private var burstGestureTriggered = false
+
     var body: some View {
-        Button { cam.shutterTapped() } label: {
+        Button {
+            if burstGestureTriggered { return }
+            cam.shutterTapped()
+        } label: {
             ZStack {
                 Circle().stroke(Color.white, lineWidth: 4).frame(width: 76, height: 76)
                 if cam.captureMode == .photo {
@@ -1426,8 +1436,23 @@ struct ShutterButton: View {
             .animation(.easeInOut(duration: 0.2), value: cam.isRecording)
         }
         .buttonStyle(ShutterPressStyle())
-        .disabled(!cam.ready || cam.isCapturingPhoto)
-        .opacity(cam.ready ? (cam.isCapturingPhoto ? 0.8 : 1) : 0.4)
+        .simultaneousGesture(
+            LongPressGesture(minimumDuration: 0.35, maximumDistance: 24)
+                .onChanged { reachedThreshold in
+                    guard reachedThreshold, !burstGestureTriggered, cam.canStartBurstCapture else { return }
+                    burstGestureTriggered = true
+                    cam.startBurstCapture()
+                }
+                .onEnded { _ in
+                    guard burstGestureTriggered else { return }
+                    cam.stopBurstCapture()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                        burstGestureTriggered = false
+                    }
+                }
+        )
+        .disabled(!cam.ready || (cam.isCapturingPhoto && !cam.isBurstCapturing))
+        .opacity(cam.ready ? ((cam.isCapturingPhoto && !cam.isBurstCapturing) ? 0.8 : 1) : 0.4)
         .accessibilityLabel(cam.captureMode == .photo ? "拍照" : (cam.isRecording ? "停止录像" : "开始录像"))
     }
 }
