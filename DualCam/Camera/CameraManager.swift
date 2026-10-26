@@ -2227,7 +2227,7 @@ final class CameraManager: NSObject, ObservableObject {
                         photo: d,
                         movie: box.get(i),
                         isComposite: s.slot == nil,
-                        captureConfig: s.captureConfig ?? self.cfg,
+                        captureConfig: s.captureConfig ?? Config(),
                         secondaryPreviewData: s.secondaryPreviewData
                     ))
                 }

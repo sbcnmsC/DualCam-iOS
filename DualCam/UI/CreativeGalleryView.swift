@@ -687,7 +687,7 @@ private struct PhotoDetailSheet: View {
     }
 
     private func showSecondaryPreview() {
-        if let secondaryImage {
+        if secondaryImage != nil {
             showingSubwindow = true
             zoom = 1
             return
