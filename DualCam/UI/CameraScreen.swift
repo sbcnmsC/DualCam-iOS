@@ -503,8 +503,8 @@ private struct CompositePhotoViewer: View {
                 .foregroundStyle(.white.opacity(0.8))
             } else {
                 TabView(selection: $selection) {
-                    ForEach(Array(cam.compositePhotoURLs.enumerated()), id: \.element) { index, url in
-                        ZoomableCompositePhoto(url: url)
+                    ForEach(cam.compositePhotoURLs.indices, id: \.self) { index in
+                        ZoomableCompositePhoto(url: cam.compositePhotoURLs[index])
                             .tag(index)
                     }
                 }
