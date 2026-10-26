@@ -1339,6 +1339,7 @@ final class CameraManager: NSObject, ObservableObject {
 
     private func saveLivePhotos(_ items: [SavedItem]) {
         guard !items.isEmpty else { return }
+        saveCompositeArchive(items.filter { $0.isComposite }.map { $0.photo })
         PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self] status in
             guard let self = self else { return }
             guard status == .authorized || status == .limited else {
@@ -1368,9 +1369,6 @@ final class CameraManager: NSObject, ObservableObject {
                     if let m = item.movie { try? FileManager.default.removeItem(at: m) }
                     if let p = photoURLs[i] { try? FileManager.default.removeItem(at: p) }
                 }
-                if ok {
-                    self.saveCompositeArchive(items.filter { $0.isComposite }.map { $0.photo })
-                }
                 self.showToast(ok ? "实况照片已保存（\(items.count) 张）" : "保存失败：\(error?.localizedDescription ?? "未知错误")")
             })
         }
@@ -1382,6 +1380,7 @@ final class CameraManager: NSObject, ObservableObject {
             showToast("生成照片失败")
             return
         }
+        saveCompositeArchive(validShots.filter { $0.slot == nil }.compactMap { $0.data })
         PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self] status in
             guard let self = self else { return }
             guard status == .authorized || status == .limited else {
@@ -1395,9 +1394,6 @@ final class CameraManager: NSObject, ObservableObject {
                     req.addResource(with: .photo, data: data, options: nil)
                 }
             }, completionHandler: { ok, error in
-                if ok {
-                    self.saveCompositeArchive(validShots.filter { $0.slot == nil }.compactMap { $0.data })
-                }
                 self.showToast(ok ? "照片已保存（\(validShots.count) 张）" : "保存失败：\(error?.localizedDescription ?? "未知错误")")
             })
         }
