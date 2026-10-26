@@ -454,10 +454,12 @@ struct BottomBar: View {
 
 struct ThumbnailButton: View {
     @EnvironmentObject private var cam: CameraManager
+    @State private var showViewer = false
 
     var body: some View {
         Button {
-            if let url = URL(string: "photos-redirect://") { UIApplication.shared.open(url) }
+            guard !cam.compositePhotoURLs.isEmpty else { return }
+            showViewer = true
         } label: {
             ZStack {
                 if let img = cam.lastThumb {
@@ -466,12 +468,118 @@ struct ThumbnailButton: View {
                     Color.white.opacity(0.12)
                     Image(systemName: "photo").foregroundStyle(Color.white.opacity(0.6))
                 }
+                if cam.compositePhotoURLs.isEmpty {
+                    Color.black.opacity(0.12)
+                }
             }
             .frame(width: 52, height: 52)
             .clipShape(Circle())
             .overlay(Circle().stroke(Color.white.opacity(0.25), lineWidth: 1))
         }
         .buttonStyle(.plain)
+        .disabled(cam.compositePhotoURLs.isEmpty)
+        .fullScreenCover(isPresented: $showViewer) {
+            CompositePhotoViewer()
+                .environmentObject(cam)
+        }
+    }
+}
+
+private struct CompositePhotoViewer: View {
+    @EnvironmentObject private var cam: CameraManager
+    @Environment(\.dismiss) private var dismiss
+    @State private var selection = 0
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            if cam.compositePhotoURLs.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.system(size: 42))
+                    Text("还没有合成照片")
+                        .font(.system(size: 16, weight: .medium))
+                }
+                .foregroundStyle(.white.opacity(0.8))
+            } else {
+                TabView(selection: $selection) {
+                    ForEach(Array(cam.compositePhotoURLs.enumerated()), id: \.element) { index, url in
+                        ZoomableCompositePhoto(url: url)
+                            .tag(index)
+                    }
+                }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                .ignoresSafeArea()
+                VStack {
+                    HStack {
+                        Button {
+                            dismiss()
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 15, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 40, height: 40)
+                                .background(Circle().fill(Color.white.opacity(0.16)))
+                        }
+                        .buttonStyle(.plain)
+                        Spacer()
+                        Text("\(min(selection + 1, cam.compositePhotoURLs.count)) / \(cam.compositePhotoURLs.count)")
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
+                            .background(Capsule().fill(Color.white.opacity(0.16)))
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.top, 12)
+                    Spacer()
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+        .statusBarHidden()
+    }
+}
+
+private struct ZoomableCompositePhoto: View {
+    let url: URL
+    @State private var scale: CGFloat = 1
+    @State private var lastScale: CGFloat = 1
+
+    var body: some View {
+        GeometryReader { geo in
+            Group {
+                if let image = UIImage(contentsOfFile: url.path) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .scaleEffect(scale)
+                        .contentShape(Rectangle())
+                        .onTapGesture(count: 2) {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                scale = scale > 1 ? 1 : 2.5
+                                lastScale = scale
+                            }
+                        }
+                        .gesture(
+                            MagnificationGesture()
+                                .onChanged { value in
+                                    scale = min(max(lastScale * value, 1), 5)
+                                }
+                                .onEnded { _ in
+                                    lastScale = scale
+                                }
+                        )
+                } else {
+                    ProgressView().tint(.white)
+                }
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
+            .clipped()
+        }
+        .background(Color.black)
+        .id(url)
     }
 }
 
