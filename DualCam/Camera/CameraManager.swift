@@ -1487,19 +1487,20 @@ final class CameraManager: NSObject, ObservableObject {
     }
 
     private func saveVideo(_ url: URL) {
-        PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self] status in
-            guard let self = self else { return }
-            guard status == .authorized || status == .limited else {
-                self.showToast("请在「设置」中允许保存到照片")
-                try? FileManager.default.removeItem(at: url)
-                return
+        // Videos are also kept inside DualCam; never request or write to the system Photos library.
+        let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("DualCamVideos", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let destination = directory.appendingPathComponent("DualCam-\(UUID().uuidString).mov")
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.removeItem(at: destination)
             }
-            PHPhotoLibrary.shared().performChanges({
-                PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
-            }, completionHandler: { ok, error in
-                try? FileManager.default.removeItem(at: url)
-                self.showToast(ok ? "视频已保存" : "保存失败：\(error?.localizedDescription ?? "未知错误")")
-            })
+            try FileManager.default.moveItem(at: url, to: destination)
+            showToast("视频已保存在 DualCam 内部")
+        } catch {
+            showToast("视频保存失败：\(error.localizedDescription)")
+            try? FileManager.default.removeItem(at: url)
         }
     }
 }
