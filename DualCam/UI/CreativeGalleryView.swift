@@ -298,12 +298,40 @@ struct CreativeGalleryView: View {
                 parameterRow("实际帧率", value: "\(cam.effectiveFPS) FPS")
                 parameterRow("合成布局", value: String(describing: cam.cfg.layout))
                 parameterRow("输出模式", value: cam.cfg.outputMode.rawValue)
-                parameterRow("防抖", value: cam.cfg.stabilization ? "开启" : "关闭")
-                parameterRow("网格线", value: cam.cfg.showGrid ? "开启" : "关闭")
-                parameterRow("实况照片开关", value: cam.cfg.livePhoto ? "开启" : "关闭")
-                parameterRow("主副画面", value: cam.cfg.swapped ? "已交换" : "默认")
-                parameterRow("小窗宽度", value: String(format: "%.0f%%", Double(cam.cfg.pipWidth * 100)))
-                parameterRow("分屏比例", value: String(format: "%.0f%% / %.0f%%", Double(cam.cfg.splitRatio * 100), Double((1 - cam.cfg.splitRatio) * 100)))
+                Toggle("防抖", isOn: $cam.cfg.stabilization)
+                    .tint(.yellow)
+                    .font(.system(size: 13, weight: .medium))
+                Toggle("网格线", isOn: $cam.cfg.showGrid)
+                    .tint(.yellow)
+                    .font(.system(size: 13, weight: .medium))
+                Toggle("实况照片", isOn: $cam.cfg.livePhoto)
+                    .tint(.yellow)
+                    .font(.system(size: 13, weight: .medium))
+                Toggle("交换主副画面", isOn: $cam.cfg.swapped)
+                    .tint(.yellow)
+                    .font(.system(size: 13, weight: .medium))
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("画中画尺寸")
+                        Spacer()
+                        Text(String(format: "%.0f%%", Double(cam.cfg.pipWidth * 100)))
+                            .foregroundStyle(.white.opacity(0.55))
+                    }
+                    Slider(value: $cam.cfg.pipWidth, in: 0.16...0.9)
+                        .tint(.yellow)
+                }
+                .font(.system(size: 12, weight: .medium))
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("上下分屏比例")
+                        Spacer()
+                        Text(String(format: "%.0f%% / %.0f%%", Double(cam.cfg.splitRatio * 100), Double((1 - cam.cfg.splitRatio) * 100)))
+                            .foregroundStyle(.white.opacity(0.55))
+                    }
+                    Slider(value: $cam.cfg.splitRatio, in: 0.25...0.75)
+                        .tint(.yellow)
+                }
+                .font(.system(size: 12, weight: .medium))
                 HStack(spacing: 10) {
                     Image(systemName: "lock.shield")
                         .font(.system(size: 19))
