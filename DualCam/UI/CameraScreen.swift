@@ -480,7 +480,7 @@ struct ThumbnailButton: View {
         .buttonStyle(.plain)
         .disabled(cam.compositePhotoURLs.isEmpty)
         .fullScreenCover(isPresented: $showViewer) {
-            CompositePhotoViewer()
+            CreativeGalleryView()
                 .environmentObject(cam)
         }
     }
