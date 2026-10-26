@@ -1316,13 +1316,12 @@ final class CameraManager: NSObject, ObservableObject {
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             var names = UserDefaults.standard.stringArray(forKey: compositeArchiveKey) ?? []
-            for data in images {
+            // Reverse insertion preserves the original order for burst captures.
+            for data in images.reversed() {
                 let name = "\(UUID().uuidString).jpg"
                 try data.write(to: directory.appendingPathComponent(name), options: .atomic)
                 names.insert(name, at: 0)
             }
-
-            // Bound app-private storage; remove files that age out of the in-app gallery.
             let retained = Array(names.prefix(300))
             let retainedSet = Set(retained)
             for name in names where !retainedSet.contains(name) {
@@ -1331,47 +1330,40 @@ final class CameraManager: NSObject, ObservableObject {
             UserDefaults.standard.set(retained, forKey: compositeArchiveKey)
             let urls = retained.map { directory.appendingPathComponent($0) }
             DispatchQueue.main.async { self.compositePhotoURLs = urls }
-            if let first = images.first { setThumb(data: first) }
+            if let first = images.last { setThumb(data: first) }
         } catch {
-            showToast("合成照片已保存，但应用内归档失败")
+            showToast("照片未能归档到 DualCam，请检查可用存储空间")
         }
     }
 
+    /// Deletes selected files from the app-private archive and updates its persistent index.
+    func deleteCompositePhotos(at offsets: IndexSet) {
+        let current = compositePhotoURLs
+        let removed = Set(offsets.compactMap { current.indices.contains($0) ? current[$0] : nil })
+        guard !removed.isEmpty else { return }
+        for url in removed { try? FileManager.default.removeItem(at: url) }
+        let remaining = current.filter { !removed.contains($0) }
+        UserDefaults.standard.set(remaining.map { $0.lastPathComponent }, forKey: compositeArchiveKey)
+        compositePhotoURLs = remaining
+        if let first = remaining.first, let data = try? Data(contentsOf: first) {
+            setThumb(data: data)
+        } else {
+            lastThumb = nil
+        }
+    }
+
+    func deleteCompositePhoto(_ url: URL) {
+        guard let index = compositePhotoURLs.firstIndex(of: url) else { return }
+        deleteCompositePhotos(at: IndexSet(integer: index))
+    }
     private func saveLivePhotos(_ items: [SavedItem]) {
         guard !items.isEmpty else { return }
+        // Keep the composite still in DualCam's private archive. Do not write to the system Photos library.
         saveCompositeArchive(items.filter { $0.isComposite }.map { $0.photo })
-        PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self] status in
-            guard let self = self else { return }
-            guard status == .authorized || status == .limited else {
-                for item in items { if let m = item.movie { try? FileManager.default.removeItem(at: m) } }
-                self.showToast("请在「设置」中允许保存到照片")
-                return
-            }
-            // 配对资源必须是文件
-            let photoURLs: [URL?] = items.map { item in
-                guard item.movie != nil else { return nil }
-                let url = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("dualcam-\(UUID().uuidString).jpg")
-                return (try? item.photo.write(to: url)) != nil ? url : nil
-            }
-            PHPhotoLibrary.shared().performChanges({
-                for (i, item) in items.enumerated() {
-                    let req = PHAssetCreationRequest.forAsset()
-                    if let movie = item.movie, let jpg = photoURLs[i] {
-                        req.addResource(with: .photo, fileURL: jpg, options: nil)
-                        req.addResource(with: .pairedVideo, fileURL: movie, options: nil)
-                    } else {
-                        req.addResource(with: .photo, data: item.photo, options: nil)
-                    }
-                }
-            }, completionHandler: { ok, error in
-                for (i, item) in items.enumerated() {
-                    if let m = item.movie { try? FileManager.default.removeItem(at: m) }
-                    if let p = photoURLs[i] { try? FileManager.default.removeItem(at: p) }
-                }
-                self.showToast(ok ? "实况照片已保存（\(items.count) 张）" : "保存失败：\(error?.localizedDescription ?? "未知错误")")
-            })
+        for item in items {
+            if let movie = item.movie { try? FileManager.default.removeItem(at: movie) }
         }
+        showToast("已保存到 DualCam 相册（\(items.filter { $0.isComposite }.count) 张合成照片）")
     }
 
     private func saveImages(_ shots: [StillShot]) {
@@ -1380,23 +1372,13 @@ final class CameraManager: NSObject, ObservableObject {
             showToast("生成照片失败")
             return
         }
-        saveCompositeArchive(validShots.filter { $0.slot == nil }.compactMap { $0.data })
-        PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self] status in
-            guard let self = self else { return }
-            guard status == .authorized || status == .limited else {
-                self.showToast("请在「设置」中允许保存到照片")
-                return
-            }
-            PHPhotoLibrary.shared().performChanges({
-                for shot in validShots {
-                    guard let data = shot.data else { continue }
-                    let req = PHAssetCreationRequest.forAsset()
-                    req.addResource(with: .photo, data: data, options: nil)
-                }
-            }, completionHandler: { ok, error in
-                self.showToast(ok ? "照片已保存（\(validShots.count) 张）" : "保存失败：\(error?.localizedDescription ?? "未知错误")")
-            })
+        let composites = validShots.filter { $0.slot == nil }.compactMap { $0.data }
+        guard !composites.isEmpty else {
+            showToast("没有可归档的合成照片")
+            return
         }
+        saveCompositeArchive(composites)
+        showToast("已保存到 DualCam 相册（\(composites.count) 张合成照片）")
     }
 
     func startRecording() {
