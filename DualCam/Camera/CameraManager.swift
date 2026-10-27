@@ -911,10 +911,11 @@ final class CameraManager: NSObject, ObservableObject {
             enqueueCompositeFrame(finalImage, recorder: live, time: pts)
         }
 
-        // Display layer long edge is capped at 1920px (was 1280, which looked soft on 2500+px-tall screens).
+        // Preview and wireless monitor share the same final composite. Raise its long-edge cap to 2560px
+        // for sharper iPad/1440p monitoring while keeping the same single scaling pass.
         // During composite recording, the full-size render above is scaled once here;
         // while idle, no large intermediate is built.
-        let scale = min(1, 1920 / max(renderCanvas.width, renderCanvas.height))
+        let scale = min(1, 2560 / max(renderCanvas.width, renderCanvas.height))
         let pw = max(2, (renderCanvas.width * scale / 2).rounded() * 2)
         let ph = max(2, (renderCanvas.height * scale / 2).rounded() * 2)
         let previewImage = finalImage.transformed(by: CGAffineTransform(
