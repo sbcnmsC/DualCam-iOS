@@ -326,7 +326,7 @@ struct WirelessMonitorSheet: View {
                         .frame(width: 7, height: 7)
                     Text(session.isSecurelyPaired ? "安全连接已建立" : "等待设备连接")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(session.isSecurelyPaired ? Color(uiColor: .systemGreen) : .secondary)
+                        .foregroundStyle(session.isSecurelyPaired ? Color(uiColor: .systemGreen) : Color(uiColor: .secondaryLabel))
                 }
                 .padding(.horizontal, 11)
                 .padding(.vertical, 8)
