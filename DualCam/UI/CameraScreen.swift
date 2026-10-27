@@ -123,7 +123,7 @@ struct CameraScreen: View {
                                 .padding(.vertical, 9)
                                 .frame(maxWidth: .infinity)
                                 .background(Color.red.opacity(0.88), in: Capsule())
-                                .overlay(Capsule().stroke(Color.white.opacity(0.24), lineWidth: 0.7)
+                                .overlay(Capsule().stroke(Color.white.opacity(0.24), lineWidth: 0.7))
                             }
                             .tint(.white)
                             .accessibilityLabel("结束无线共享")
