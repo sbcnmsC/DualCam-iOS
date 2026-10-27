@@ -247,10 +247,9 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
             return
         }
         pendingRemoteCandidates = queuedCandidates
-        let transceiver = RTCRtpTransceiverInit()
-        transceiver.direction = .recvOnly
-        _ = pc.addTransceiver(of: .video, init: transceiver)
-
+        // The incoming offer already contains the sender's video m-line.
+        // Let setRemoteDescription create/match its receiver transceiver; adding a second
+        // recvOnly transceiver here can produce an unmatched m-line and a connected-but-black view.
         pc.setRemoteDescription(RTCSessionDescription(type: .offer, sdp: sdp)) { [weak self, weak pc] error in
             // WebRTC calls this on its signalling thread; connection state is main-thread only.
             DispatchQueue.main.async {
