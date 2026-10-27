@@ -52,7 +52,6 @@ struct CameraScreen: View {
                 : (activeOrientation == .landscapeRight ? -90 : 0)
             let topControlsBottom = insets.top + topBarHeight
             let dockTop = canvasSize.height - insets.bottom - bottomBarHeight
-            let hasSharingStopControl = wirelessSession.mode == .sending
 
             // Fit the selected output ratio against the whole device canvas.
             // In free mode this exactly matches the iPhone screen; fixed ratios use the largest
@@ -79,15 +78,18 @@ struct CameraScreen: View {
             ZStack(alignment: .topLeading) {
                 Color.black.ignoresSafeArea()
 
-                PreviewStage(size: previewSize, iconRotationDegrees: iconRotationDegrees)
-                    .frame(width: previewSize.width, height: previewSize.height)
-                    .frame(width: canvasSize.width, height: canvasSize.height, alignment: .top)
-                    .offset(x: canvasOffset.width, y: canvasOffset.height + previewTop)
-                    // 切换画幅时取景框平滑伸缩 / 移动，而不是瞬间跳变
-                    .animation(.smooth(duration: 0.3), value: cam.cfg.aspect)
+                if wirelessSession.mode != .receiving {
+                    PreviewStage(size: previewSize, iconRotationDegrees: iconRotationDegrees)
+                        .frame(width: previewSize.width, height: previewSize.height)
+                        .frame(width: canvasSize.width, height: canvasSize.height, alignment: .top)
+                        .offset(x: canvasOffset.width, y: canvasOffset.height + previewTop)
+                        // 切换画幅时取景框平滑伸缩 / 移动，而不是瞬间跳变
+                        .animation(.smooth(duration: 0.3), value: cam.cfg.aspect)
+                }
 
-                // Top and bottom controls float above the preview and keep their own hit targets.
-                VStack(spacing: 0) {
+                // Never leave local camera controls visible or interactive on the receiving device.
+                if wirelessSession.mode != .receiving {
+                    VStack(spacing: 0) {
                     HStack(spacing: 0) {
                         TopBar(
                             onTimerTap: {
@@ -153,7 +155,7 @@ struct CameraScreen: View {
                 // When the device is physically landscape, render a real landscape-sized
                 // parameter canvas and rotate that panel as one unit. The camera interface and
                 // its preview remain portrait-locked underneath.
-                if showPanel && isParameterPanelLandscape {
+                if wirelessSession.mode != .receiving && showPanel && isParameterPanelLandscape {
                     ZStack {
                         Color.clear
 
@@ -178,11 +180,13 @@ struct CameraScreen: View {
                     .zIndex(15)
                 }
 
-                OverlayLayer(topSafeAreaInset: insets.top, suppressToast: wirelessSession.mode == .sending)
-                    .frame(width: canvasSize.width, height: canvasSize.height)
-                    .offset(x: canvasOffset.width, y: canvasOffset.height)
+                if wirelessSession.mode != .receiving {
+                    OverlayLayer(topSafeAreaInset: insets.top, suppressToast: wirelessSession.mode == .sending)
+                        .frame(width: canvasSize.width, height: canvasSize.height)
+                        .offset(x: canvasOffset.width, y: canvasOffset.height)
+                }
 
-                if showTimerSettings {
+                if showTimerSettings && wirelessSession.mode != .receiving {
                     TimerSettingsOverlay(
                         timerDraft: $timerDraft,
                         isPresented: $showTimerSettings,
@@ -197,7 +201,9 @@ struct CameraScreen: View {
                 // composited video edge-to-edge, with only a close control on top.
                 if wirelessSession.mode == .receiving {
                     ZStack(alignment: .topTrailing) {
-                        Color.black.ignoresSafeArea()
+                        Color.black
+                            .frame(width: canvasSize.width, height: canvasSize.height)
+                            .contentShape(Rectangle())
 
                         if let track = wirelessSession.remoteVideoTrack {
                             RemoteMonitorVideoSurface(track: track) {
@@ -227,36 +233,47 @@ struct CameraScreen: View {
                     .ignoresSafeArea()
                     .zIndex(100)
                 }
-            }
-            .overlay(alignment: .topTrailing) {
-                if hasSharingStopControl {
-                    Button {
-                        HapticFeedback.play(.button)
-                        wirelessSession.stopVideo()
-                    } label: {
-                        HStack(spacing: 6) {
-                            Circle()
-                                .fill(Color.white)
-                                .frame(width: 6, height: 6)
-                            Text("结束共享")
-                                .font(.system(size: 11, weight: .semibold))
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.8)
-                            Image(systemName: "stop.fill")
-                                .font(.system(size: 9, weight: .bold))
+
+                // Keep the stop target inside the full-device canvas so it is actually tappable
+                // near the Dynamic Island (an offset-only overlay can render outside hit bounds).
+                if wirelessSession.mode == .sending {
+                    VStack(spacing: 0) {
+                        HStack(spacing: 8) {
+                            Spacer(minLength: 0)
+                            Button {
+                                HapticFeedback.play(.button)
+                                Task { @MainActor in
+                                    await wirelessSession.stopFromLiveActivity()
+                                }
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Circle()
+                                        .fill(Color.white)
+                                        .frame(width: 6, height: 6)
+                                    Text("结束共享")
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.8)
+                                    Image(systemName: "stop.fill")
+                                        .font(.system(size: 9, weight: .bold))
+                                }
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 11)
+                                .frame(height: 34)
+                                .background(Color.red, in: Capsule())
+                                .overlay(Capsule().stroke(Color.white.opacity(0.22), lineWidth: 0.7))
+                                .contentShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("结束无线共享")
+                            .padding(.trailing, 8)
                         }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 11)
-                        .frame(height: 34)
-                        .background(Color.red, in: Capsule())
-                        .overlay(Capsule().stroke(Color.white.opacity(0.22), lineWidth: 0.7))
+                        .padding(.top, insets.top + 8)
+                        Spacer(minLength: 0)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("结束无线共享")
-                    .padding(.trailing, 8)
-                    // Place the stop pill beside the Dynamic Island rather than below it.
-                    .offset(y: 20 - insets.top)
-                    .zIndex(200)
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .offset(x: canvasOffset.width, y: canvasOffset.height)
+                    .zIndex(250)
                 }
             }
             .animation(.spring(response: 0.36, dampingFraction: 0.88), value: isParameterPanelLandscape)
