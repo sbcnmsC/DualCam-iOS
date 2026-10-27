@@ -43,6 +43,7 @@ struct CameraScreen: View {
             let topControlsBottom = insets.top + topBarHeight
             let dockTop = canvasSize.height - insets.bottom - bottomBarHeight
             let hasSharingStopControl = wirelessSession.mode == .sending
+            let isWirelessRolePickerVisible = wirelessSession.isSecurelyPaired && wirelessSession.mode == .idle
 
             // Fit the selected output ratio against the whole device canvas.
             // In free mode this exactly matches the iPhone screen; fixed ratios use the largest
@@ -67,7 +68,8 @@ struct CameraScreen: View {
             )
 
             ZStack(alignment: .topLeading) {
-                Color.black.ignoresSafeArea()
+                Color(uiColor: isWirelessRolePickerVisible ? .systemGroupedBackground : .black)
+                    .ignoresSafeArea()
 
                 PreviewStage(size: previewSize, iconRotationDegrees: iconRotationDegrees)
                     .frame(width: previewSize.width, height: previewSize.height)
@@ -75,6 +77,10 @@ struct CameraScreen: View {
                     .offset(x: canvasOffset.width, y: canvasOffset.height + previewTop)
                     // 切换画幅时取景框平滑伸缩 / 移动，而不是瞬间跳变
                     .animation(.smooth(duration: 0.3), value: cam.cfg.aspect)
+                    // Do not leave the camera preview underneath the connected-device hub.
+                    .opacity(isWirelessRolePickerVisible ? 0 : 1)
+                    .allowsHitTesting(!isWirelessRolePickerVisible)
+                    .accessibilityHidden(isWirelessRolePickerVisible)
 
                 // Top and bottom controls float above the preview and keep their own hit targets.
                 VStack(spacing: 0) {
@@ -153,6 +159,10 @@ struct CameraScreen: View {
                 .frame(width: controlCanvasWidth)
                 .frame(maxHeight: .infinity, alignment: .top)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                // Hide and disable the entire camera dock while the paired-device role picker is visible.
+                .opacity(isWirelessRolePickerVisible ? 0 : 1)
+                .allowsHitTesting(!isWirelessRolePickerVisible)
+                .accessibilityHidden(isWirelessRolePickerVisible)
                 .zIndex(5)
 
                 // When the device is physically landscape, render a real landscape-sized
@@ -613,19 +623,6 @@ struct CameraScreen: View {
             .onPreferenceChange(CameraShutterTopPreferenceKey.self) { top in
                 guard top > 0, abs(shutterButtonTop - top) > 0.5 else { return }
                 shutterButtonTop = top
-            }
-            // The connected-device chooser is layered over the camera UI. Paint a final
-            // full-width footer at the GeometryReader root (not inside the chooser's scroll
-            // content) so camera controls cannot peek through the iPhone home-indicator area.
-            .overlay(alignment: .bottom) {
-                if wirelessSession.isSecurelyPaired && wirelessSession.mode == .idle {
-                    Color(uiColor: .systemGroupedBackground)
-                        .frame(height: max(insets.bottom + 112, 124))
-                        .frame(maxWidth: .infinity)
-                        .offset(y: insets.bottom + 1)
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
-                }
             }
         }
         // Preserve Build 94's safe-area measurement and expand the preview canvas explicitly.
