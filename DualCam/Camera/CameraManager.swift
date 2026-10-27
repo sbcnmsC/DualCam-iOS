@@ -2398,6 +2398,16 @@ final class CameraManager: NSObject, ObservableObject {
         photoURL.deletingPathExtension().appendingPathExtension("sub.jpg")
     }
 
+    private func archiveLiveMovieURL(for photoURL: URL) -> URL {
+        photoURL.deletingPathExtension().appendingPathExtension("live.mov")
+    }
+
+    /// Non-nil means this private-album photo has its paired Live Photo movie.
+    func archivedLiveMovieURL(for photoURL: URL) -> URL? {
+        let candidate = archiveLiveMovieURL(for: photoURL)
+        return FileManager.default.fileExists(atPath: candidate.path) ? candidate : nil
+    }
+
     /// Archive bookkeeping (file writes + the filename list in UserDefaults) all runs on this serial
     /// queue. Saves arrive from the video queue, the Photos callback and the burst path at once;
     /// unsynchronised read-modify-write of the list would lose entries and leave orphan files.
@@ -2439,9 +2449,16 @@ final class CameraManager: NSObject, ObservableObject {
     private func saveCompositeArchive(
         _ images: [Data],
         config: Config? = nil,
-        secondaryImages: [Data?] = []
+        secondaryImages: [Data?] = [],
+        liveMovies: [URL?] = []
     ) {
         guard !images.isEmpty else { return }
+        // The Live Photo writer deletes its temporary MOV after writing to Photos.
+        // Snapshot each short motion file before queuing archive work to avoid a cleanup race.
+        let liveMovieData: [Data?] = liveMovies.map { url in
+            guard let url else { return nil }
+            return try? Data(contentsOf: url)
+        }
         let directory = compositeArchiveDirectory
         archiveQueue.async { [weak self] in
             guard let self else { return }
@@ -2470,6 +2487,9 @@ final class CameraManager: NSObject, ObservableObject {
                     if secondaryImages.indices.contains(index), let source = secondaryImages[index] {
                         try? source.write(to: self.archiveSecondaryURL(for: photoURL), options: .atomic)
                     }
+                    if liveMovieData.indices.contains(index), let motionData = liveMovieData[index] {
+                        try? motionData.write(to: self.archiveLiveMovieURL(for: photoURL), options: .atomic)
+                    }
                 }
             } catch {
                 // e.g. the disk filled up part-way through a burst. Still register everything that
@@ -2487,6 +2507,7 @@ final class CameraManager: NSObject, ObservableObject {
                 try? FileManager.default.removeItem(at: oldURL)
                 try? FileManager.default.removeItem(at: self.archiveLayoutURL(for: oldURL))
                 try? FileManager.default.removeItem(at: self.archiveSecondaryURL(for: oldURL))
+                try? FileManager.default.removeItem(at: self.archiveLiveMovieURL(for: oldURL))
             }
             UserDefaults.standard.set(retained, forKey: self.compositeArchiveKey)
             DispatchQueue.main.async {
@@ -2511,6 +2532,7 @@ final class CameraManager: NSObject, ObservableObject {
                 try? FileManager.default.removeItem(at: url)
                 try? FileManager.default.removeItem(at: self.archiveLayoutURL(for: url))
                 try? FileManager.default.removeItem(at: self.archiveSecondaryURL(for: url))
+                try? FileManager.default.removeItem(at: self.archiveLiveMovieURL(for: url))
             }
             let names = (UserDefaults.standard.stringArray(forKey: self.compositeArchiveKey) ?? [])
                 .filter { !removedNames.contains($0) }
@@ -2536,7 +2558,8 @@ final class CameraManager: NSObject, ObservableObject {
         saveCompositeArchive(
             compositeItems.map { $0.photo },
             config: compositeItems.first?.captureConfig ?? cfg,
-            secondaryImages: compositeItems.map { $0.secondaryPreviewData }
+            secondaryImages: compositeItems.map { $0.secondaryPreviewData },
+            liveMovies: compositeItems.map { $0.movie }
         )
         PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self] status in
             guard let self = self else { return }

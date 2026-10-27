@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import AVKit
 import ImageIO
 import Photos
 
@@ -140,14 +141,26 @@ struct CreativeGalleryView: View {
                                     .foregroundStyle(selectedForExport.contains(url.path) ? Color.yellow : Color.white,
                                                      Color.black.opacity(0.45))
                                     .padding(7)
-                            } else if index == 0 {
-                                Text("最新")
-                                    .font(.system(size: 9, weight: .bold))
-                                    .padding(.horizontal, 7)
-                                    .padding(.vertical, 4)
-                                    .background(Color.yellow, in: Capsule())
-                                    .foregroundStyle(.black)
-                                    .padding(7)
+                            } else {
+                                VStack(alignment: .trailing, spacing: 5) {
+                                    if cam.archivedLiveMovieURL(for: url) != nil {
+                                        Label("实况", systemImage: "livephoto")
+                                            .font(.system(size: 9, weight: .bold))
+                                            .padding(.horizontal, 7)
+                                            .padding(.vertical, 4)
+                                            .background(Color.black.opacity(0.72), in: Capsule())
+                                            .foregroundStyle(Color.yellow)
+                                    }
+                                    if index == 0 {
+                                        Text("最新")
+                                            .font(.system(size: 9, weight: .bold))
+                                            .padding(.horizontal, 7)
+                                            .padding(.vertical, 4)
+                                            .background(Color.yellow, in: Capsule())
+                                            .foregroundStyle(.black)
+                                    }
+                                }
+                                .padding(7)
                             }
                         }
                     }
@@ -202,7 +215,13 @@ struct CreativeGalleryView: View {
             PHPhotoLibrary.shared().performChanges({
                 for url in existing {
                     let request = PHAssetCreationRequest.forAsset()
-                    request.addResource(with: .photo, fileURL: url, options: nil)
+                    if let pairedMovie = cam.archivedLiveMovieURL(for: url) {
+                        // The still JPEG and MOV retain their shared Live Photo content identifier.
+                        request.addResource(with: .photo, fileURL: url, options: nil)
+                        request.addResource(with: .pairedVideo, fileURL: pairedMovie, options: nil)
+                    } else {
+                        request.addResource(with: .photo, fileURL: url, options: nil)
+                    }
                 }
             }, completionHandler: { success, error in
                 DispatchQueue.main.async {
@@ -309,6 +328,8 @@ private struct CameraAlbumPhotoDetail: View {
     @State private var showingSubwindow = false
     @State private var zoom: CGFloat = 1
     @State private var loadFailed = false
+    @State private var livePlayer: AVPlayer?
+    @State private var showingLiveMotion = false
 
     init(photoURLs: [URL], initialURL: URL, onExport: @escaping (URL) -> Void) {
         self.photoURLs = photoURLs
@@ -323,6 +344,10 @@ private struct CameraAlbumPhotoDetail: View {
 
     private var currentPiPRegion: CGRect? {
         cam.archivedPiPRegion(for: currentURL)
+    }
+
+    private var currentLiveMovieURL: URL? {
+        cam.archivedLiveMovieURL(for: currentURL)
     }
 
     var body: some View {
@@ -357,6 +382,18 @@ private struct CameraAlbumPhotoDetail: View {
                 }
                 Spacer(minLength: 0)
 
+                if currentLiveMovieURL != nil {
+                    Button(action: toggleLivePlayback) {
+                        Image(systemName: showingLiveMotion ? "photo" : "play.fill")
+                            .font(.system(size: 14, weight: .semibold))
+                            .frame(width: 42, height: 42)
+                            .background(Circle().fill(Color.white.opacity(0.1)))
+                            .foregroundStyle(.white)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(showingLiveMotion ? "返回实况静态照片" : "播放实况")
+                }
+
                 Button {
                     onExport(currentURL)
                 } label: {
@@ -377,7 +414,10 @@ private struct CameraAlbumPhotoDetail: View {
             GeometryReader { geo in
                 ZStack {
                     Color.black
-                    if showingSubwindow, let secondaryImage {
+                    if showingLiveMotion, let livePlayer {
+                        VideoPlayer(player: livePlayer)
+                            .frame(width: geo.size.width, height: geo.size.height)
+                    } else if showingSubwindow, let secondaryImage {
                         Image(uiImage: secondaryImage)
                             .resizable()
                             .interpolation(.high)
@@ -394,7 +434,7 @@ private struct CameraAlbumPhotoDetail: View {
                             .position(x: geo.size.width / 2, y: geo.size.height / 2)
                             .allowsHitTesting(false)
 
-                        if !showingSubwindow, zoom <= 1.05, let pipRegion = currentPiPRegion {
+                        if !showingSubwindow, !showingLiveMotion, zoom <= 1.05, let pipRegion = currentPiPRegion {
                             let hitRect = displayRect(for: pipRegion, fittedSize: fitted, containerSize: geo.size)
                             Button(action: showSecondaryPreview) {
                                 RoundedRectangle(cornerRadius: 7)
@@ -468,9 +508,13 @@ private struct CameraAlbumPhotoDetail: View {
             HStack(spacing: 8) {
                 Image(systemName: showingSubwindow ? "rectangle.on.rectangle" : "hand.draw")
                     .foregroundStyle(Color.yellow)
-                Text(showingSubwindow
-                     ? "正在单独预览副摄画面"
-                     : (currentPiPRegion == nil ? "左右滑动切换照片" : "左右滑动切换 · 点小窗单独预览"))
+                Text(showingLiveMotion
+                     ? "正在播放实况片段"
+                     : (showingSubwindow
+                         ? "正在单独预览副摄画面"
+                         : (currentLiveMovieURL != nil
+                             ? "实况照片 · 左右滑动切换"
+                             : (currentPiPRegion == nil ? "左右滑动切换照片" : "左右滑动切换 · 点小窗单独预览"))))
                     .foregroundStyle(.white.opacity(0.62))
                 Spacer(minLength: 0)
                 if showingSubwindow {
@@ -491,6 +535,9 @@ private struct CameraAlbumPhotoDetail: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black.ignoresSafeArea())
         .task(id: currentURL) {
+            livePlayer?.pause()
+            livePlayer = nil
+            showingLiveMotion = false
             image = nil
             secondaryImage = nil
             loadFailed = false
@@ -499,6 +546,7 @@ private struct CameraAlbumPhotoDetail: View {
 
             let requestedURL = currentURL
             let secondaryURL = cam.archivedSecondaryPreviewURL(for: requestedURL)
+            let liveMovieURL = cam.archivedLiveMovieURL(for: requestedURL)
             let loadedMain = await GalleryImageLoader.load(requestedURL, maxPixel: 4096, priority: .userInitiated)
             guard !Task.isCancelled else { return }
             image = loadedMain
@@ -508,8 +556,31 @@ private struct CameraAlbumPhotoDetail: View {
                 guard !Task.isCancelled else { return }
                 secondaryImage = loadedSecondary
             }
+            if let liveMovieURL {
+                guard !Task.isCancelled else { return }
+                livePlayer = AVPlayer(url: liveMovieURL)
+                livePlayer?.actionAtItemEnd = .pause
+            }
+        }
+        .onDisappear {
+            livePlayer?.pause()
+            livePlayer = nil
         }
         .preferredColorScheme(.dark)
+    }
+
+    private func toggleLivePlayback() {
+        guard let movieURL = currentLiveMovieURL else { return }
+        if showingLiveMotion {
+            livePlayer?.pause()
+            showingLiveMotion = false
+            return
+        }
+        let player = AVPlayer(url: movieURL)
+        player.actionAtItemEnd = .pause
+        livePlayer = player
+        showingLiveMotion = true
+        player.play()
     }
 
     @ViewBuilder
@@ -528,6 +599,9 @@ private struct CameraAlbumPhotoDetail: View {
         let next = currentIndex + offset
         guard photoURLs.indices.contains(next) else { return }
         currentIndex = next
+        livePlayer?.pause()
+        livePlayer = nil
+        showingLiveMotion = false
         image = nil
         secondaryImage = nil
         loadFailed = false
@@ -553,6 +627,8 @@ private struct CameraAlbumPhotoDetail: View {
 
     private func showSecondaryPreview() {
         if secondaryImage != nil {
+            livePlayer?.pause()
+            showingLiveMotion = false
             showingSubwindow = true
             zoom = 1
             return
