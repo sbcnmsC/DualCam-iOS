@@ -12,17 +12,22 @@ struct DualCamLiveActivityBundle: WidgetBundle {
 struct DualCamShareLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: MonitorShareAttributes.self) { context in
+            // Lock Screen / banner presentation.
             HStack(spacing: 12) {
                 Image(systemName: "dot.radiowaves.left.and.right")
                     .font(.title2.weight(.semibold))
                     .foregroundStyle(.green)
+
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("DualCam 正在共享").font(.headline)
+                    Text("DualCam \(context.state.status)")
+                        .font(.headline)
                     Text(context.attributes.deviceName)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                Spacer()
+
+                Spacer(minLength: 8)
+
                 Text(context.attributes.startedAt, style: .timer)
                     .font(.system(.body, design: .monospaced))
                     .monospacedDigit()
@@ -36,26 +41,35 @@ struct DualCamShareLiveActivity: Widget {
                     Image(systemName: "dot.radiowaves.left.and.right")
                         .foregroundStyle(.green)
                 }
+
                 DynamicIslandExpandedRegion(.center) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("DualCam 正在共享").font(.headline)
+                        Text("DualCam \(context.state.status)")
+                            .font(.headline)
                         Text(context.attributes.deviceName)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
+
                 DynamicIslandExpandedRegion(.trailing) {
                     Text(context.attributes.startedAt, style: .timer)
                         .font(.system(.caption, design: .monospaced))
                         .monospacedDigit()
                 }
+
                 DynamicIslandExpandedRegion(.bottom) {
-                    Label("合成画面 · 最高 1440p / 60 fps*", systemImage: "video.fill")
-                        Text("*实际帧率取决于摄像头帧率、网络和设备负载")
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label(
+                            "合成画面 · \(context.state.resolution) / \(context.state.targetFPS) fps",
+                            systemImage: "video.fill"
+                        )
+                        .font(.caption)
+
+                        Text("实际帧率取决于摄像头、网络和设备负载")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    }
                 }
             } compactLeading: {
                 Image(systemName: "dot.radiowaves.left.and.right")
