@@ -1,5 +1,5 @@
 name: DualCam
-# Build 13: Settings/Parameters controls are individually addable camera shortcuts; the top row scrolls when customized.
+# Build 14: Front camera mirroring is opt-in (off by default); top shortcut groups center when they fit. Settings/Parameters controls are individually addable camera shortcuts; the top row scrolls when customized.
 
 options:
   bundleIdPrefix: com.dualcam
@@ -48,15 +48,15 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.dualcam.app.LiveActivity
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: YES
-        CURRENT_PROJECT_VERSION: "13"
-        MARKETING_VERSION: "0.4.0"
-        INFOPLIST_KEY_CFBundleVersion: "13"
-        INFOPLIST_KEY_CFBundleShortVersionString: "0.4.0"
+        CURRENT_PROJECT_VERSION: "14"
+        MARKETING_VERSION: "0.4.1"
+        INFOPLIST_KEY_CFBundleVersion: "14"
+        INFOPLIST_KEY_CFBundleShortVersionString: "0.4.1"
         SKIP_INSTALL: YES
     info:
       path: DualCamLiveActivity/Info.plist
       properties:
-        CFBundleShortVersionString: "0.4.0"
-        CFBundleVersion: "13"
+        CFBundleShortVersionString: "0.4.1"
+        CFBundleVersion: "14"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
