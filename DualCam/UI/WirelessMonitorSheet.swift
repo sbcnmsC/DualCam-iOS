@@ -672,6 +672,207 @@ struct WirelessMonitorSheet: View {
     }
 }
 
+/// Second stage of wireless setup. Kept in its own sheet so the search / safety-code
+/// dialog fully closes before the user chooses a receive or share role.
+struct WirelessMonitorRolePickerSheet: View {
+    @ObservedObject var session: WirelessMonitorSession
+    let onReceive: () -> Void
+    let onShare: () -> Void
+    let onDisconnect: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    private let blue = Color(uiColor: .systemBlue)
+    private let indigo = Color(uiColor: .systemIndigo)
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color(uiColor: .systemGroupedBackground).ignoresSafeArea()
+
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 18) {
+                        VStack(spacing: 12) {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 23, style: .continuous)
+                                    .fill(
+                                        LinearGradient(
+                                            colors: [blue, indigo],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    )
+                                Image(systemName: "checkmark.shield.fill")
+                                    .font(.system(size: 30, weight: .semibold))
+                                    .foregroundStyle(.white)
+                            }
+                            .frame(width: 72, height: 72)
+                            .shadow(color: blue.opacity(0.20), radius: 16, y: 7)
+
+                            Text("设备已安全连接")
+                                .font(.system(size: 25, weight: .bold, design: .rounded))
+                                .tracking(-0.35)
+                                .foregroundStyle(.primary)
+                                .multilineTextAlignment(.center)
+
+                            Text("与 \(session.localDeviceName) 的安全配对已完成\n请选择这台设备的用途")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                                .lineSpacing(3)
+
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(Color(uiColor: .systemGreen))
+                                    .frame(width: 7, height: 7)
+                                Text("已加密配对")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(Color(uiColor: .systemGreen))
+                            }
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 7)
+                            .background(Color(uiColor: .secondarySystemGroupedBackground), in: Capsule())
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 8)
+
+                        VStack(spacing: 11) {
+                            roleButton(
+                                title: "全屏接收画面",
+                                subtitle: "在这台设备上观看另一台设备的实时画面",
+                                icon: "play.rectangle.on.rectangle.fill",
+                                tint: blue,
+                                isPrimary: true,
+                                action: onReceive
+                            )
+
+                            roleButton(
+                                title: "共享本机合成画面",
+                                subtitle: "发送双摄、画中画 / 分屏与滤镜后的最终画面",
+                                icon: "dot.radiowaves.left.and.right",
+                                tint: Color(uiColor: .systemTeal),
+                                isPrimary: false,
+                                action: onShare
+                            )
+                        }
+
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: "lock.shield.fill")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(Color(uiColor: .systemGreen))
+                                .frame(width: 30, height: 30)
+                                .background(Color(uiColor: .systemGreen).opacity(0.10), in: Circle())
+
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("连接由你控制")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                Text("视频使用加密传输，不启用麦克风音频。结束共享或退出监看后，可以随时断开配对。")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .lineSpacing(2)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+
+                        Button(role: .destructive, action: onDisconnect) {
+                            Label("断开安全配对", systemImage: "lock.slash")
+                                .font(.subheadline.weight(.semibold))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                        }
+                        .buttonStyle(.plain)
+                        .frame(maxWidth: .infinity)
+                        .background(
+                            Color(uiColor: .secondarySystemGroupedBackground),
+                            in: RoundedRectangle(cornerRadius: 17, style: .continuous)
+                        )
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.top, 14)
+                    .padding(.bottom, 28)
+                    .frame(maxWidth: 560)
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            .navigationTitle("选择共享方式")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("完成") { dismiss() }
+                        .fontWeight(.semibold)
+                }
+            }
+            .tint(blue)
+        }
+    }
+
+    private func roleButton(
+        title: String,
+        subtitle: String,
+        icon: String,
+        tint: Color,
+        isPrimary: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 13) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(isPrimary ? Color.white.opacity(0.16) : tint.opacity(0.11))
+                    Image(systemName: icon)
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(isPrimary ? Color.white : tint)
+                }
+                .frame(width: 52, height: 52)
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(title)
+                        .font(.headline)
+                        .foregroundStyle(isPrimary ? Color.white : Color.primary)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(isPrimary ? Color.white.opacity(0.83) : Color.secondary)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .lineSpacing(2)
+                }
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(isPrimary ? Color.white.opacity(0.86) : Color.secondary)
+            }
+            .padding(15)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                if isPrimary {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [blue, indigo],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                } else {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(Color(uiColor: .secondarySystemGroupedBackground))
+                }
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(isPrimary ? Color.white.opacity(0.15) : tint.opacity(0.19), lineWidth: 1)
+            )
+            .shadow(color: isPrimary ? blue.opacity(0.16) : .clear, radius: 13, y: 6)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 struct RemoteMonitorVideoSurface: UIViewRepresentable {
     let track: RTCVideoTrack?
     let onFirstFrame: () -> Void
