@@ -9,8 +9,8 @@
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleName</key><string>DualCam</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.3.0</string>
-  <key>CFBundleVersion</key><string>3</string>
+  <key>CFBundleShortVersionString</key><string>0.3.1</string>
+  <key>CFBundleVersion</key><string>4</string>
   <key>LSRequiresIPhoneOS</key><true/>
   <key>NSSupportsLiveActivities</key><true/>
   <key>NSCameraUsageDescription</key><string>DualCam 需要同时使用前后摄像头合成画面。</string>
