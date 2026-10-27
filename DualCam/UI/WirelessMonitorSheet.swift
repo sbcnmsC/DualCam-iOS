@@ -27,6 +27,8 @@ final class WirelessMonitorSession: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private weak var cameraManager: CameraManager?
     private var didConfigure = false
+    private var preShareResolution: ResolutionOption?
+    private var preShareFPS: Int?
 
     init() {
         network.$nearbyDevices.receive(on: DispatchQueue.main)
@@ -101,6 +103,7 @@ final class WirelessMonitorSession: ObservableObject {
 
     func startSending() {
         guard isSecurelyPaired, mode == .idle, let cameraManager else { return }
+        applyWirelessStreamPreset(to: cameraManager)
         mode = .sending
         remoteVideoFrameReceived = false
         let transport = rtc
@@ -113,6 +116,35 @@ final class WirelessMonitorSession: ObservableObject {
             if let failure = await MonitorLiveActivityManager.shared.start() {
                 self.cameraManager?.showToast("灵动岛未启动：\(failure)")
             }
+        }
+    }
+
+    /// During wireless sharing use a bounded 1080p/60fps capture preset instead of encoding a
+    /// large still-oriented preview at the camera's usual 30fps setting. Preserve the user's
+    /// choices and restore them when sharing ends.
+    private func applyWirelessStreamPreset(to cameraManager: CameraManager) {
+        guard preShareResolution == nil, preShareFPS == nil else { return }
+        preShareResolution = cameraManager.cfg.resolution
+        preShareFPS = cameraManager.cfg.fps
+        var streamConfig = cameraManager.cfg
+        streamConfig.resolution = .p1080
+        streamConfig.fps = 60
+        if streamConfig != cameraManager.cfg {
+            cameraManager.cfg = streamConfig
+        }
+    }
+
+    private func restoreWirelessStreamPreset() {
+        guard let cameraManager, let oldResolution = preShareResolution, let oldFPS = preShareFPS else { return }
+        preShareResolution = nil
+        preShareFPS = nil
+        var restored = cameraManager.cfg
+        // Restore only fields still carrying our temporary stream values, so later user changes
+        // aren't overwritten if the parameter panel was used during a share session.
+        if restored.resolution == .p1080 { restored.resolution = oldResolution }
+        if restored.fps == 60 { restored.fps = oldFPS }
+        if restored != cameraManager.cfg {
+            cameraManager.cfg = restored
         }
     }
 
@@ -141,6 +173,7 @@ final class WirelessMonitorSession: ObservableObject {
         } else {
             rtc.stop()
         }
+        if wasSending { restoreWirelessStreamPreset() }
         mode = .idle
         remoteVideoFrameReceived = false
     }
@@ -163,6 +196,7 @@ final class WirelessMonitorSession: ObservableObject {
         if mode == .receiving {
             cameraManager?.setLocalCameraCaptureSuspended(false)
         }
+        if mode == .sending { restoreWirelessStreamPreset() }
         mode = .idle
         remoteVideoFrameReceived = false
     }
