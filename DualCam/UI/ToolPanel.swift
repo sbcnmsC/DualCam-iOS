@@ -591,6 +591,7 @@ struct SettingsTab: View {
     @AppStorage("dualcam.sound.recordingStart") private var recordingStartSoundEnabled = true
     @AppStorage("dualcam.sound.recordingStop") private var recordingStopSoundEnabled = true
     @AppStorage("dualcam.haptics.enabled") private var hapticsEnabled = true
+    @AppStorage("dualcam.dismissOnBlankTap") private var dismissOnBlankTap = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -719,6 +720,22 @@ struct SettingsTab: View {
                     .font(.system(size: 12))
                     .tint(.yellow)
                 Text("快门、录像、切换镜头、画中画吸附和参数调整使用不同力度的震感。")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.white.opacity(0.6))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.045)))
+
+            VStack(alignment: .leading, spacing: 8) {
+                Label("界面交互", systemImage: "hand.tap.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                Toggle("点击空白处关闭弹窗", isOn: $dismissOnBlankTap)
+                    .font(.system(size: 12))
+                    .tint(.yellow)
+                Text(dismissOnBlankTap
+                     ? "点击弹窗外的空白区域即可关闭。"
+                     : "已关闭空白处关闭；请使用弹窗内的关闭、取消或确定按钮。")
                     .font(.system(size: 10))
                     .foregroundStyle(Color.white.opacity(0.6))
                     .fixedSize(horizontal: false, vertical: true)
