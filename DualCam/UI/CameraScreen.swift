@@ -93,7 +93,8 @@ struct CameraScreen: View {
                     BottomBar(
                         showPanel: $showPanel,
                         panelTab: $panelTab,
-                        onAlbumTap: { showCreativeGallery = true },
+                        onAlbumTap: { openNativePhotos() },
+                        onAlbumSwipeUp: { showCreativeGallery = true },
                         bottomDockPadding: max(insets.bottom + 44, 80),
                         isLandscape: false,
                         iconRotationDegrees: iconRotationDegrees
@@ -1158,6 +1159,7 @@ struct BottomBar: View {
     @Binding var showPanel: Bool
     @Binding var panelTab: PanelTab
     let onAlbumTap: () -> Void
+    let onAlbumSwipeUp: () -> Void
     let bottomDockPadding: CGFloat
     var isLandscape: Bool = false
     var iconRotationDegrees: CGFloat = 90
@@ -1284,7 +1286,11 @@ struct BottomBar: View {
                 }
                 HStack(alignment: .center, spacing: 8) {
                     // Left cluster: gallery then photo/video mode toggle.
-                    ThumbnailButton(action: onAlbumTap, iconRotationDegrees: iconRotationDegrees)
+                    ThumbnailButton(
+                        action: onAlbumTap,
+                        onSwipeUp: onAlbumSwipeUp,
+                        iconRotationDegrees: iconRotationDegrees
+                    )
                     captureModeSwitchButton
 
                     Spacer(minLength: 4)
@@ -1321,6 +1327,7 @@ struct BottomBar: View {
 struct ThumbnailButton: View {
     @EnvironmentObject private var cam: CameraManager
     let action: () -> Void
+    let onSwipeUp: () -> Void
     var iconRotationDegrees: CGFloat = 0
     @State private var bounce = false
 
@@ -1329,45 +1336,48 @@ struct ThumbnailButton: View {
             HapticFeedback.play(.button)
             action()
         } label: {
-            VStack(spacing: 3) {
-                ZStack(alignment: .bottomTrailing) {
-                    Group {
-                        if let img = cam.lastThumb {
-                            Image(uiImage: img)
-                                .resizable()
-                                .scaledToFill()
-                        } else {
-                            Color.white.opacity(0.12)
-                                .overlay {
-                                    Image(systemName: "photo.on.rectangle.angled")
-                                        .rotationEffect(.degrees(iconRotationDegrees))
-                                        .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
-                                        .font(.system(size: 19, weight: .medium))
-                                        .foregroundStyle(Color.white.opacity(0.7))
-                                }
-                        }
+            ZStack(alignment: .bottomTrailing) {
+                Group {
+                    if let img = cam.lastThumb {
+                        Image(uiImage: img).resizable().scaledToFill()
+                    } else {
+                        Color.white.opacity(0.12)
+                            .overlay {
+                                Image(systemName: "photo.on.rectangle.angled")
+                                    .rotationEffect(.degrees(iconRotationDegrees))
+                                    .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
+                                    .font(.system(size: 19, weight: .medium))
+                                    .foregroundStyle(Color.white.opacity(0.7))
+                            }
                     }
-                    .frame(width: 48, height: 48)
-                    .clipShape(Circle())
-                    .overlay(Circle().stroke(Color.white.opacity(0.25), lineWidth: 1))
-
-                    Image(systemName: "square.stack")
-                        .rotationEffect(.degrees(iconRotationDegrees))
-                        .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 19, height: 19)
-                        .background(Color.black.opacity(0.78), in: Circle())
-                        .offset(x: 3, y: 1)
                 }
+                .frame(width: 48, height: 48)
+                .clipShape(Circle())
+                .overlay(Circle().stroke(Color.white.opacity(0.25), lineWidth: 1))
 
+                Image(systemName: "square.stack")
+                    .rotationEffect(.degrees(iconRotationDegrees))
+                    .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 19, height: 19)
+                    .background(Color.black.opacity(0.78), in: Circle())
+                    .offset(x: 3, y: 1)
             }
             .frame(width: 48, height: 48)
             .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        // 保存完成、缩略图换成新照片时弹一下，给「已存好」一个看得见的落点
-        .scaleEffect(bounce ? 1.18 : 1)
+        .highPriorityGesture(
+            DragGesture(minimumDistance: 18, coordinateSpace: .local)
+                .onEnded { value in
+                    guard value.translation.height < -26,
+                          abs(value.translation.width) < 70 else { return }
+                    HapticFeedback.play(.button)
+                    onSwipeUp()
+                }
+        )
+        .scaleEffect(bounce ? 1.12 : 1)
         .onChange(of: cam.lastThumb) { _, new in
             guard new != nil else { return }
             withAnimation(.spring(response: 0.2, dampingFraction: 0.5)) {
@@ -1379,7 +1389,7 @@ struct ThumbnailButton: View {
             }
         }
         .accessibilityLabel("打开相册")
-        .accessibilityHint("在应用内查看已保存的照片和视频")
+        .accessibilityHint("点按打开系统照片；向上滑动打开 DualCam 相机相册")
     }
 }
 

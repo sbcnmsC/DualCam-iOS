@@ -3,86 +3,84 @@ import UIKit
 import ImageIO
 import Photos
 
-/// App-owned archive of composite photos. Browsing it never queries the Photos library; the
-/// camera also saves each composite to Photos when it is taken, and "导出" copies it there again.
+/// DualCam 私有相机相册：仅浏览拍摄的合成照片、单独预览画中画小窗，以及导出到系统相册。
 struct CreativeGalleryView: View {
     @EnvironmentObject private var cam: CameraManager
     @Environment(\.dismiss) private var dismiss
-    @State private var tab: WorkspaceTab = .library
-    @State private var selectedURL: URL?
-    @State private var selectedForBatch: Set<String> = []
+    @State private var detailItem: CameraAlbumPhoto?
     @State private var selectionMode = false
-    @State private var shareItems: [Any] = []
-    @State private var showingShare = false
-    @State private var showingDeleteConfirm = false
-    @State private var compareFilter: String?
-    @State private var detailItem: GalleryDetailItem?
+    @State private var selectedForExport: Set<String> = []
     @State private var exportAlert = false
     @State private var exportMessage = ""
 
-    private let columns = [GridItem(.flexible(), spacing: 3), GridItem(.flexible(), spacing: 3), GridItem(.flexible(), spacing: 3)]
+    private let columns = [
+        GridItem(.flexible(), spacing: 3),
+        GridItem(.flexible(), spacing: 3),
+        GridItem(.flexible(), spacing: 3)
+    ]
 
     var body: some View {
         ZStack {
-            Color(red: 0.055, green: 0.06, blue: 0.065).ignoresSafeArea()
+            Color.black.ignoresSafeArea()
             VStack(spacing: 0) {
                 header
-                tabBar
-                Group {
-                    switch tab {
-                    case .library: library
-                    case .compare: compare
-                    case .settings: settings
-                    }
+                if cam.compositePhotoURLs.isEmpty {
+                    emptyState
+                } else {
+                    photoGrid
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if selectionMode && !selectedForExport.isEmpty {
+                    exportSelectionBar
+                }
             }
         }
         .preferredColorScheme(.dark)
-        .sheet(isPresented: $showingShare) {
-            GalleryShareSheet(items: shareItems)
-                .ignoresSafeArea()
-        }
         .fullScreenCover(item: $detailItem) { item in
-            PhotoDetailSheet(
+            CameraAlbumPhotoDetail(
                 url: item.url,
                 pipRegion: cam.archivedPiPRegion(for: item.url),
                 secondaryPreviewURL: cam.archivedSecondaryPreviewURL(for: item.url),
-                onShare: { share([item.url]) },
-                onExport: { exportToSystemPhotos([item.url]) },
-                onDelete: {
-                    cam.deleteCompositePhoto(item.url)
-                    detailItem = nil
-                }
+                onExport: { exportToSystemPhotos([item.url]) }
             )
         }
-        .alert("系统照片图库", isPresented: $exportAlert) {
+        .alert("导出到系统相册", isPresented: $exportAlert) {
             Button("好", role: .cancel) {}
         } message: {
             Text(exportMessage)
         }
-        .confirmationDialog("删除所选作品？", isPresented: $showingDeleteConfirm, titleVisibility: .visible) {
-            Button("删除 \(selectedForBatch.count) 张", role: .destructive) { deleteSelected() }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("删除后将从 DualCam 内部归档中移除，无法撤销。")
-        }
     }
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("DUALCAM STUDIO")
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .tracking(2.1)
-                    .foregroundStyle(Color.yellow.opacity(0.9))
-                Text(title)
-                    .font(.system(size: 27, weight: .bold, design: .rounded))
-                Text("\(cam.compositePhotoURLs.count) 件作品 · DualCam 本机归档")
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("相机相册")
+                    .font(.system(size: 23, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                Text("\(cam.compositePhotoURLs.count) 张拍摄照片")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.48))
+                    .foregroundStyle(.white.opacity(0.5))
             }
-            Spacer()
+            Spacer(minLength: 6)
+            if selectionMode {
+                Button("全选") {
+                    selectedForExport = Set(cam.compositePhotoURLs.map(\.path))
+                }
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.yellow)
+                Button("完成") {
+                    selectionMode = false
+                    selectedForExport.removeAll()
+                }
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.8))
+            } else if !cam.compositePhotoURLs.isEmpty {
+                Button("选择") {
+                    selectionMode = true
+                    selectedForExport.removeAll()
+                }
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.yellow)
+            }
             Button { dismiss() } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 14, weight: .bold))
@@ -91,332 +89,100 @@ struct CreativeGalleryView: View {
                     .background(Circle().fill(Color.white.opacity(0.1)))
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("返回相机")
         }
         .padding(.horizontal, 18)
         .padding(.top, 8)
         .padding(.bottom, 12)
     }
 
-    private var title: String {
-        switch tab {
-        case .library: return "作品库"
-        case .compare: return "滤镜对比"
-        case .settings: return "拍摄参数"
+    private var emptyState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "camera")
+                .font(.system(size: 42, weight: .light))
+                .foregroundStyle(Color.yellow.opacity(0.9))
+            Text("还没有拍摄照片")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white)
+            Text("在 DualCam 拍摄的合成照片会显示在这里。")
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.5))
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 260)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var tabBar: some View {
-        HStack(spacing: 5) {
-            tabButton(.library, label: "作品", icon: "square.grid.2x2")
-            tabButton(.compare, label: "对比", icon: "slider.horizontal.3")
-            tabButton(.settings, label: "参数", icon: "camera.aperture")
-        }
-        .padding(5)
-        .background(RoundedRectangle(cornerRadius: 15).fill(Color.white.opacity(0.06)))
-        .padding(.horizontal, 18)
-        .padding(.bottom, 12)
-    }
-
-    private func tabButton(_ value: WorkspaceTab, label: String, icon: String) -> some View {
-        Button { withAnimation(.easeInOut(duration: 0.18)) { tab = value } } label: {
-            HStack(spacing: 7) {
-                Image(systemName: icon)
-                Text(label)
-            }
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(tab == value ? .black : .white.opacity(0.7))
-            .frame(maxWidth: .infinity)
-            .frame(height: 38)
-            .background {
-                if tab == value {
-                    RoundedRectangle(cornerRadius: 11).fill(Color.yellow)
-                }
-            }
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var library: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("最近创作")
-                    .font(.system(size: 14, weight: .semibold))
-                Spacer()
-                if selectionMode {
-                    Button("全选") { selectedForBatch = Set(cam.compositePhotoURLs.map(\.path)) }
-                        .font(.system(size: 12, weight: .semibold))
-                    Button("取消") { selectionMode = false; selectedForBatch.removeAll() }
-                        .font(.system(size: 12, weight: .semibold))
-                } else {
-                    Button("选择") { selectionMode = true }
-                        .font(.system(size: 12, weight: .semibold))
-                        .disabled(cam.compositePhotoURLs.isEmpty)
-                }
-            }
-            .foregroundStyle(.white.opacity(0.9))
-            .padding(.horizontal, 18)
-            .padding(.vertical, 10)
-
-            if cam.compositePhotoURLs.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "camera.macro")
-                        .font(.system(size: 42, weight: .light))
-                        .foregroundStyle(Color.yellow.opacity(0.85))
-                    Text("开始你的第一组双摄创作")
-                        .font(.system(size: 16, weight: .semibold))
-                    Text("拍摄的合成照片会归档在 DualCam 内部，同时保存到系统照片图库。")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.48))
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 270)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollView {
-                    LazyVGrid(columns: columns, spacing: 3) {
-                        ForEach(Array(cam.compositePhotoURLs.enumerated()), id: \.element.path) { index, url in
-                            Button {
-                                if selectionMode {
-                                    if selectedForBatch.contains(url.path) { selectedForBatch.remove(url.path) }
-                                    else { selectedForBatch.insert(url.path) }
-                                } else {
-                                    detailItem = GalleryDetailItem(url: url)
-                                }
-                            } label: {
-                                ZStack(alignment: .topTrailing) {
-                                    GalleryThumbnail(url: url)
-                                        .frame(maxWidth: .infinity)
-                                        .aspectRatio(1, contentMode: .fit)
-                                        .background(Color.black)
-                                        .clipped()
-                                    if selectionMode {
-                                        Image(systemName: selectedForBatch.contains(url.path) ? "checkmark.circle.fill" : "circle")
-                                            .font(.system(size: 22, weight: .semibold))
-                                            .symbolRenderingMode(.palette)
-                                            .foregroundStyle(selectedForBatch.contains(url.path) ? Color.yellow : Color.white, Color.black.opacity(0.45))
-                                            .padding(7)
-                                    } else if index == 0 {
-                                        Text("NEW")
-                                            .font(.system(size: 8, weight: .black))
-                                            .tracking(1)
-                                            .padding(.horizontal, 7)
-                                            .padding(.vertical, 4)
-                                            .background(Color.yellow, in: Capsule())
-                                            .foregroundStyle(.black)
-                                            .padding(7)
-                                    }
-                                }
-                                .overlay(alignment: .bottomLeading) {
-                                    LinearGradient(colors: [.clear, .black.opacity(0.35)], startPoint: .center, endPoint: .bottom)
-                                        .frame(height: 34)
-                                        .allowsHitTesting(false)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.horizontal, 3)
-                    .padding(.bottom, 20)
-                }
-            }
-
-            if selectionMode && !selectedForBatch.isEmpty {
-                HStack(spacing: 12) {
-                    Text("\(selectedForBatch.count) 已选择")
-                        .font(.system(size: 12, weight: .semibold))
-                    Spacer()
-                    Button { shareSelected() } label: {
-                        Label("分享", systemImage: "square.and.arrow.up")
-                    }
-                    .fixedSize()
-                    Button { exportToSystemPhotos(cam.compositePhotoURLs.filter { selectedForBatch.contains($0.path) }) } label: {
-                        Label("导出", systemImage: "photo.badge.arrow.down")
-                    }
-                    .fixedSize()
-                    .accessibilityLabel("导出到系统相册")
-                    Button(role: .destructive) { showingDeleteConfirm = true } label: {
-                        Image(systemName: "trash")
-                    }
-                    .fixedSize()
-                    .accessibilityLabel("删除所选作品")
-                }
-                .font(.system(size: 12, weight: .semibold))
-                .padding(14)
-                .background(Color.white.opacity(0.07))
-            }
-        }
-    }
-
-    private var compare: some View {
+    private var photoGrid: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                sectionHeading("创作对比", subtitle: "选择一张作品，再查看当前可用的滤镜预览")
-                if cam.compositePhotoURLs.isEmpty {
-                    emptyHint("先拍摄一张合成照片，才能开始对比。")
-                } else {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 9) {
-                            ForEach(cam.compositePhotoURLs, id: \.path) { url in
-                                Button { selectedURL = url } label: {
-                                    GalleryThumbnail(url: url)
-                                        .frame(width: 70, height: 88)
-                                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                                        .overlay(RoundedRectangle(cornerRadius: 10).stroke((selectedURL ?? cam.compositePhotoURLs.first) == url ? Color.yellow : Color.clear, lineWidth: 2))
-                                }
-                                .buttonStyle(.plain)
+            LazyVGrid(columns: columns, spacing: 3) {
+                ForEach(Array(cam.compositePhotoURLs.enumerated()), id: \.element.path) { index, url in
+                    Button {
+                        if selectionMode {
+                            if selectedForExport.contains(url.path) {
+                                selectedForExport.remove(url.path)
+                            } else {
+                                selectedForExport.insert(url.path)
+                            }
+                        } else {
+                            detailItem = CameraAlbumPhoto(url: url)
+                        }
+                    } label: {
+                        ZStack(alignment: .topTrailing) {
+                            CameraAlbumThumbnail(url: url)
+                                .frame(maxWidth: .infinity)
+                                .aspectRatio(1, contentMode: .fit)
+                                .background(Color.black)
+                                .clipped()
+                            if selectionMode {
+                                Image(systemName: selectedForExport.contains(url.path) ? "checkmark.circle.fill" : "circle")
+                                    .font(.system(size: 22, weight: .semibold))
+                                    .symbolRenderingMode(.palette)
+                                    .foregroundStyle(selectedForExport.contains(url.path) ? Color.yellow : Color.white,
+                                                     Color.black.opacity(0.45))
+                                    .padding(7)
+                            } else if index == 0 {
+                                Text("最新")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 4)
+                                    .background(Color.yellow, in: Capsule())
+                                    .foregroundStyle(.black)
+                                    .padding(7)
                             }
                         }
                     }
-                    if let url = selectedURL ?? cam.compositePhotoURLs.first {
-                        GalleryLargePreview(url: url)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 300)
-                            .clipShape(RoundedRectangle(cornerRadius: 16))
-                        Text("原始合成作品")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.65))
-                    }
-                    sectionHeading("滤镜预览", subtitle: "预览来自当前相机参数面板；切换此处不会修改已保存的原图")
-                    if cam.filterThumbs.isEmpty {
-                        emptyHint("打开相机的参数面板并进入滤镜区域后，这里会出现可比较的预览。")
-                    } else {
-                        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                            ForEach(cam.filterThumbs.keys.sorted(), id: \.self) { key in
-                                if let image = cam.filterThumbs[key] {
-                                    Button { compareFilter = key } label: {
-                                        VStack(alignment: .leading, spacing: 6) {
-                                            Image(uiImage: image)
-                                                .resizable()
-                                                .scaledToFill()
-                                                .frame(height: 105)
-                                                .frame(maxWidth: .infinity)
-                                                .clipped()
-                                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                                            HStack {
-                                                Text(key).lineLimit(1)
-                                                Spacer(minLength: 0)
-                                                if compareFilter == key { Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.yellow) }
-                                            }
-                                            .font(.system(size: 11, weight: .medium))
-                                        }
-                                        .padding(7)
-                                        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 13))
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                        }
-                    }
+                    .buttonStyle(.plain)
                 }
             }
-            .padding(18)
+            .padding(.horizontal, 3)
+            .padding(.bottom, 18)
         }
     }
 
-    private var settings: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                sectionHeading("当前拍摄配置", subtitle: "上方为当前参数；下面的开关和滑块会直接改动相机的实时设置")
-                parameterRow("输出画幅", value: cam.cfg.aspect.rawValue)
-                parameterRow("输出分辨率", value: cam.cfg.resolution.rawValue)
-                parameterRow("目标帧率", value: "\(cam.cfg.fps) FPS")
-                parameterRow("实际帧率", value: "\(cam.effectiveFPS) FPS")
-                parameterRow("合成布局", value: cam.cfg.layout.rawValue)
-                parameterRow("输出模式", value: cam.cfg.outputMode.rawValue)
-                Toggle("防抖", isOn: $cam.cfg.stabilization)
-                    .tint(.yellow)
-                    .font(.system(size: 13, weight: .medium))
-                Toggle("网格线", isOn: $cam.cfg.showGrid)
-                    .tint(.yellow)
-                    .font(.system(size: 13, weight: .medium))
-                Toggle("实况照片", isOn: $cam.cfg.livePhoto)
-                    .tint(.yellow)
-                    .font(.system(size: 13, weight: .medium))
-                Toggle("交换主副画面", isOn: $cam.cfg.swapped)
-                    .tint(.yellow)
-                    .font(.system(size: 13, weight: .medium))
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("画中画尺寸")
-                        Spacer()
-                        Text(String(format: "%.0f%%", Double(cam.cfg.pipWidth * 100)))
-                            .foregroundStyle(.white.opacity(0.55))
-                    }
-                    Slider(value: $cam.cfg.pipWidth, in: 0.16...0.9)
-                        .tint(.yellow)
-                }
-                .font(.system(size: 12, weight: .medium))
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("上下分屏比例")
-                        Spacer()
-                        Text(String(format: "%.0f%% / %.0f%%", Double(cam.cfg.splitRatio * 100), Double((1 - cam.cfg.splitRatio) * 100)))
-                            .foregroundStyle(.white.opacity(0.55))
-                    }
-                    Slider(value: $cam.cfg.splitRatio, in: 0.25...0.75)
-                        .tint(.yellow)
-                }
-                .font(.system(size: 12, weight: .medium))
-                HStack(spacing: 10) {
-                    Image(systemName: "lock.shield")
-                        .font(.system(size: 19))
-                        .foregroundStyle(Color.yellow)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("本机私有归档")
-                            .font(.system(size: 13, weight: .semibold))
-                        Text("合成照片在系统照片图库之外，另存一份在 DualCam 的 Documents 目录（不计入 iCloud 备份，最多保留 300 张）。在这里删除只影响这份归档。")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.white.opacity(0.52))
-                    }
-                }
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 14))
-            }
-            .padding(18)
-        }
-    }
-
-    private func sectionHeading(_ title: String, subtitle: String) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(title).font(.system(size: 18, weight: .bold))
-            Text(subtitle).font(.system(size: 11)).foregroundStyle(.white.opacity(0.48))
-        }
-    }
-
-    private func parameterRow(_ label: String, value: String) -> some View {
+    private var exportSelectionBar: some View {
         HStack(spacing: 12) {
-            Text(label).foregroundStyle(.white.opacity(0.6))
-            Spacer()
-            Text(value).fontWeight(.semibold).multilineTextAlignment(.trailing)
+            Text("已选 \(selectedForExport.count) 张")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.8))
+            Spacer(minLength: 4)
+            Button {
+                exportToSystemPhotos(cam.compositePhotoURLs.filter { selectedForExport.contains($0.path) })
+            } label: {
+                Label("导出到系统相册", systemImage: "square.and.arrow.down")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Color.yellow, in: Capsule())
+            }
+            .buttonStyle(.plain)
         }
-        .font(.system(size: 12))
-        .padding(.vertical, 13)
-        .overlay(alignment: .bottom) { Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1) }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color(red: 0.07, green: 0.07, blue: 0.075))
     }
 
-    private func emptyHint(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 12))
-            .foregroundStyle(.white.opacity(0.5))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(14)
-            .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 12))
-    }
-
-    private func shareSelected() {
-        let urls = cam.compositePhotoURLs.filter { selectedForBatch.contains($0.path) }
-        share(urls)
-    }
-
-    private func share(_ urls: [URL]) {
-        let existing = urls.filter { FileManager.default.fileExists(atPath: $0.path) }
-        guard !existing.isEmpty else { return }
-        shareItems = existing
-        showingShare = true
-    }
-
-    /// Explicit export: captures remain app-private unless the user chooses this action.
     private func exportToSystemPhotos(_ urls: [URL]) {
         let existing = urls.filter { FileManager.default.fileExists(atPath: $0.path) }
         guard !existing.isEmpty else {
@@ -425,12 +191,11 @@ struct CreativeGalleryView: View {
             return
         }
         PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
-            // Same rule as the camera's own save path, which also accepts .limited.
             guard status == .authorized || status == .limited else {
                 DispatchQueue.main.async {
                     exportMessage = status == .denied || status == .restricted
                         ? "没有照片图库写入权限。请在系统设置中允许 DualCam 添加照片后重试。"
-                        : "未获得照片图库写入权限，照片仍保留在 DualCam 内部。"
+                        : "未获得照片图库写入权限，照片仍保留在 DualCam 相机相册。"
                     exportAlert = true
                 }
                 return
@@ -444,23 +209,17 @@ struct CreativeGalleryView: View {
                 DispatchQueue.main.async {
                     exportMessage = success
                         ? "已将 \(existing.count) 张照片导出到系统照片图库。"
-                        : "导出失败：\(error?.localizedDescription ?? "未知错误")。原照片仍保留在 DualCam 内部。"
+                        : "导出失败：\(error?.localizedDescription ?? "未知错误")。原照片仍保留在 DualCam。"
                     exportAlert = true
                 }
             })
         }
     }
-
-    private func deleteSelected() {
-        let offsets = IndexSet(cam.compositePhotoURLs.indices.filter { selectedForBatch.contains(cam.compositePhotoURLs[$0].path) })
-        cam.deleteCompositePhotos(at: offsets)
-        selectedForBatch.removeAll()
-        selectionMode = false
-    }
 }
 
-private enum WorkspaceTab {
-    case library, compare, settings
+private struct CameraAlbumPhoto: Identifiable {
+    let url: URL
+    var id: String { url.path }
 }
 
 /// Decodes archive photos at the size they are shown. `UIImage(contentsOfFile:)` inflates the whole
@@ -510,9 +269,8 @@ private enum GalleryImageLoader {
     }
 }
 
-private struct GalleryThumbnail: View {
+private struct CameraAlbumThumbnail: View {
     let url: URL
-    /// Pixels on the long edge: a 3-column cell is ~130 pt, ~400 px on a 3x screen.
     private static let maxPixel = 420
     @State private var image: UIImage?
 
@@ -534,41 +292,16 @@ private struct GalleryThumbnail: View {
             }
         }
         .task(id: url) {
-            if let hit = GalleryImageLoader.cached(url, maxPixel: Self.maxPixel) {
-                image = hit
-                return
-            }
             image = await GalleryImageLoader.load(url, maxPixel: Self.maxPixel, priority: .utility)
         }
     }
 }
 
-private struct GalleryLargePreview: View {
-    let url: URL
-    @State private var image: UIImage?
-    var body: some View {
-        Group {
-            if let image {
-                Image(uiImage: image).resizable().scaledToFit()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.black)
-            } else {
-                ProgressView().tint(.yellow)
-            }
-        }
-        .task(id: url) {
-            image = await GalleryImageLoader.load(url, maxPixel: 1600, priority: .userInitiated)
-        }
-    }
-}
-
-private struct PhotoDetailSheet: View {
+private struct CameraAlbumPhotoDetail: View {
     let url: URL
     let pipRegion: CGRect?
     let secondaryPreviewURL: URL?
-    let onShare: () -> Void
     let onExport: () -> Void
-    let onDelete: () -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var image: UIImage?
@@ -594,27 +327,27 @@ private struct PhotoDetailSheet: View {
                         .background(Circle().fill(Color.white.opacity(0.09)))
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(showingSubwindow ? "返回合成照片" : "关闭预览")
+                .accessibilityLabel(showingSubwindow ? "返回合成照片" : "返回相机相册")
+
                 Spacer(minLength: 0)
                 VStack(spacing: 2) {
-                    Text(showingSubwindow ? "小窗单独预览" : "合成照片")
+                    Text(showingSubwindow ? "副摄画面" : "合成照片")
                         .font(.system(size: 15, weight: .semibold))
-                    Text(showingSubwindow ? "副摄画面" : "点小窗即可分开预览")
+                    Text(showingSubwindow ? "小窗单独预览" : "点小窗可单独预览")
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.white.opacity(0.52))
                 }
                 Spacer(minLength: 0)
-                Menu {
-                    Button(action: onShare) { Label("分享合成照片", systemImage: "square.and.arrow.up") }
-                    Button(action: onExport) { Label("导出到系统照片", systemImage: "photo.badge.arrow.down") }
-                    Button(role: .destructive, action: onDelete) { Label("删除作品", systemImage: "trash") }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 16, weight: .semibold))
+
+                Button(action: onExport) {
+                    Image(systemName: "square.and.arrow.down")
+                        .font(.system(size: 15, weight: .semibold))
                         .frame(width: 42, height: 42)
-                        .background(Circle().fill(Color.white.opacity(0.09)))
+                        .background(Circle().fill(Color.yellow))
+                        .foregroundStyle(.black)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("导出到系统相册")
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 14)
@@ -687,8 +420,8 @@ private struct PhotoDetailSheet: View {
                 Image(systemName: showingSubwindow ? "rectangle.on.rectangle" : "hand.tap")
                     .foregroundStyle(Color.yellow)
                 Text(showingSubwindow
-                     ? "正在单独预览小窗画面"
-                     : (pipRegion == nil ? "双摄合成作品" : "轻点黄色框内的小窗，单独查看副摄"))
+                     ? "正在单独预览副摄画面"
+                     : (pipRegion == nil ? "合成照片" : "轻点小窗，查看副摄原画面"))
                     .foregroundStyle(.white.opacity(0.62))
                 Spacer(minLength: 0)
                 if showingSubwindow {
@@ -709,7 +442,6 @@ private struct PhotoDetailSheet: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black.ignoresSafeArea())
         .task {
-            // 4096 px keeps pinch-zoom sharp without decoding a full 48 MP bitmap.
             let loadedMain = await GalleryImageLoader.load(url, maxPixel: 4096, priority: .userInitiated)
             image = loadedMain
             loadFailed = loadedMain == nil
@@ -748,10 +480,7 @@ private struct PhotoDetailSheet: View {
         zoom = 1
     }
 
-    /// Older saved photos have no source companion, so crop the inset as a fallback.
     private func crop(_ image: UIImage, normalized: CGRect) -> UIImage? {
-        // Draw at scale 1 (the renderer's default is the screen scale, which would allocate a bitmap
-        // 9x the photo's pixel count) and skip the redraw entirely when the image is already upright.
         let upright: UIImage
         if image.imageOrientation == .up {
             upright = image
@@ -778,16 +507,7 @@ private struct PhotoDetailSheet: View {
     }
 }
 
-private struct GalleryShareSheet: UIViewControllerRepresentable {
-    let items: [Any]
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
-    }
-    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
-}
-
-
-private struct GalleryDetailItem: Identifiable {
+private struct CameraAlbumPhoto: Identifiable {
     let url: URL
     var id: String { url.path }
 }
