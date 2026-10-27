@@ -17,6 +17,7 @@ struct CameraScreen: View {
     @State private var wirelessSheetRoute: WirelessSetupSheetRoute?
     @State private var shouldShowRolePickerAfterPairing = false
     @State private var shouldStartCompositeShareAfterPairing = false
+    @State private var pendingWirelessMode: MonitorMode?
     @State private var wirelessRolePickerDetent: PresentationDetent = .large
     @StateObject private var wirelessSession = WirelessMonitorSession.shared
     @State private var showCreativeGallery = false
@@ -95,27 +96,22 @@ struct CameraScreen: View {
                                 showTimerSettings = true
                             },
                             onWirelessMonitorTap: {
-                                if wirelessSession.isSecurelyPaired && wirelessSession.mode == .idle {
+                                // A single tap opens the wireless feature's own mode screen.
+                                if wirelessSession.isSecurelyPaired {
                                     wirelessRolePickerDetent = .large
                                     wirelessSheetRoute = .rolePicker
                                 } else {
                                     wirelessSheetRoute = .deviceSearch
                                 }
                             },
+                            onWirelessReceiveTap: {
+                                switchWirelessMode(to: .receiving)
+                            },
+                            onWirelessShareTap: {
+                                switchWirelessMode(to: .sending)
+                            },
                             onShareCompositeTap: {
-                                switch wirelessSession.mode {
-                                case .idle:
-                                    if wirelessSession.isSecurelyPaired {
-                                        wirelessSession.startSending()
-                                    } else {
-                                        shouldStartCompositeShareAfterPairing = true
-                                        wirelessSheetRoute = .deviceSearch
-                                    }
-                                case .sending:
-                                    cam.showToast("正在共享本机合成画面")
-                                case .receiving:
-                                    cam.showToast("请先退出接收模式，再共享本机画面")
-                                }
+                                switchWirelessMode(to: .sending)
                             },
                             isSharingComposite: wirelessSession.mode == .sending,
                             onParameterTap: { parameterName in
@@ -309,8 +305,25 @@ struct CameraScreen: View {
         .statusBarHidden(true)
         .animation(.easeInOut(duration: 0.22), value: showPanel)
         .sheet(item: $wirelessSheetRoute, onDismiss: {
-            // After a successful safety-code match, close search before showing the next stage.
-            guard wirelessSession.isSecurelyPaired, wirelessSession.mode == .idle else {
+            // Pairing remains separate from mode selection. A mode chosen by long-press
+            // is resumed immediately after the safety-code sheet finishes.
+            guard wirelessSession.isSecurelyPaired else {
+                shouldShowRolePickerAfterPairing = false
+                shouldStartCompositeShareAfterPairing = false
+                pendingWirelessMode = nil
+                return
+            }
+            if let requestedMode = pendingWirelessMode {
+                pendingWirelessMode = nil
+                shouldShowRolePickerAfterPairing = false
+                shouldStartCompositeShareAfterPairing = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
+                    guard wirelessSheetRoute == nil, wirelessSession.isSecurelyPaired else { return }
+                    switchWirelessMode(to: requestedMode)
+                }
+                return
+            }
+            guard wirelessSession.mode == .idle else {
                 shouldShowRolePickerAfterPairing = false
                 shouldStartCompositeShareAfterPairing = false
                 return
@@ -351,18 +364,18 @@ struct CameraScreen: View {
 
             case .rolePicker:
                 WirelessMonitorRolePickerSheet(
-                    onReceive: {
+                    onWirelessReceiveTap: {
                         shouldShowRolePickerAfterPairing = false
                         wirelessSheetRoute = nil
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                            wirelessSession.startReceiving()
+                            switchWirelessMode(to: .receiving)
                         }
                     },
-                    onShare: {
+                    onWirelessShareTap: {
                         shouldShowRolePickerAfterPairing = false
                         wirelessSheetRoute = nil
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                            wirelessSession.startSending()
+                            switchWirelessMode(to: .sending)
                         }
                     },
                     onDisconnect: {
@@ -383,6 +396,39 @@ struct CameraScreen: View {
                 .environmentObject(cam)
         }
         .modifier(HardwareCameraCaptureModifier())
+    }
+
+    /// Switch the paired peer to the requested wireless role. Switching an active session
+    /// first tears down its current stream, then starts the newly selected role.
+    private func switchWirelessMode(to target: MonitorMode) {
+        guard target != .idle else { return }
+        guard wirelessSession.isSecurelyPaired else {
+            pendingWirelessMode = target
+            shouldShowRolePickerAfterPairing = false
+            shouldStartCompositeShareAfterPairing = false
+            wirelessSheetRoute = .deviceSearch
+            return
+        }
+        guard wirelessSession.mode != target else { return }
+
+        let startTarget: () -> Void = {
+            guard wirelessSession.isSecurelyPaired, wirelessSession.mode == .idle else { return }
+            switch target {
+            case .receiving:
+                wirelessSession.startReceiving()
+            case .sending:
+                wirelessSession.startSending()
+            case .idle:
+                break
+            }
+        }
+
+        if wirelessSession.mode != .idle {
+            wirelessSession.stopVideo()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: startTarget)
+        } else {
+            startTarget()
+        }
     }
 
     /// Open the native iPhone Photos app from the album shortcut.
@@ -1220,6 +1266,8 @@ struct TopBar: View {
 
     let onTimerTap: () -> Void
     let onWirelessMonitorTap: () -> Void
+    let onWirelessReceiveTap: () -> Void
+    let onWirelessShareTap: () -> Void
     let onShareCompositeTap: () -> Void
     let isSharingComposite: Bool
     let onParameterTap: (String) -> Void
@@ -1436,6 +1484,17 @@ struct TopBar: View {
         .accessibilityLabel(isCustomizing ? "删除按钮：\(actionTitle(actionKey))" : label)
         .opacity(dimmed ? 0.4 : 1)
         .contextMenu {
+            if actionKey == "wireless" || actionKey == "shareComposite" {
+                Button(action: onWirelessReceiveTap) {
+                    Label("切换为接收画面", systemImage: "rectangle.inset.filled.and.person.filled")
+                }
+                Button(action: onWirelessShareTap) {
+                    Label("切换为共享画面", systemImage: "airplayvideo")
+                }
+                Button(action: onWirelessMonitorTap) {
+                    Label("打开无线功能界面", systemImage: "slider.horizontal.3")
+                }
+            }
             Button {
                 withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) { isCustomizing = true }
             } label: {
