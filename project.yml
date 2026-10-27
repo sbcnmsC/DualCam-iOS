@@ -53,7 +53,7 @@ targets:
     info:
       path: DualCamLiveActivity/Info.plist
       properties:
-        CFBundleShortVersionString: "0.3.0"
-        CFBundleVersion: "3"
+        CFBundleShortVersionString: "0.3.1"
+        CFBundleVersion: "4"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
