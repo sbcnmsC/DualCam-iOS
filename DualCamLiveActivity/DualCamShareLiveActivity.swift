@@ -50,7 +50,10 @@ struct DualCamShareLiveActivity: Widget {
                         .monospacedDigit()
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    Label("双摄合成画面正在传输", systemImage: "video.fill")
+                    Label("合成画面 · 最高 1440p / 60 fps*", systemImage: "video.fill")
+                        Text("*实际帧率取决于摄像头帧率、网络和设备负载")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
