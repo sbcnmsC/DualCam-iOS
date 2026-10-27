@@ -16,7 +16,6 @@ struct CameraScreen: View {
     @State private var showTimerSettings = false
     @State private var wirelessSheetRoute: WirelessSetupSheetRoute?
     @State private var shouldShowRolePickerAfterPairing = false
-    @State private var shouldStartCompositeShareAfterPairing = false
     @State private var pendingWirelessMode: MonitorMode?
     @State private var wirelessRolePickerDetent: PresentationDetent = .large
     @StateObject private var wirelessSession = WirelessMonitorSession.shared
@@ -309,14 +308,12 @@ struct CameraScreen: View {
             // is resumed immediately after the safety-code sheet finishes.
             guard wirelessSession.isSecurelyPaired else {
                 shouldShowRolePickerAfterPairing = false
-                shouldStartCompositeShareAfterPairing = false
                 pendingWirelessMode = nil
                 return
             }
             if let requestedMode = pendingWirelessMode {
                 pendingWirelessMode = nil
                 shouldShowRolePickerAfterPairing = false
-                shouldStartCompositeShareAfterPairing = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
                     guard wirelessSheetRoute == nil, wirelessSession.isSecurelyPaired else { return }
                     switchWirelessMode(to: requestedMode)
@@ -325,18 +322,6 @@ struct CameraScreen: View {
             }
             guard wirelessSession.mode == .idle else {
                 shouldShowRolePickerAfterPairing = false
-                shouldStartCompositeShareAfterPairing = false
-                return
-            }
-            if shouldStartCompositeShareAfterPairing {
-                shouldStartCompositeShareAfterPairing = false
-                shouldShowRolePickerAfterPairing = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
-                    guard wirelessSheetRoute == nil,
-                          wirelessSession.isSecurelyPaired,
-                          wirelessSession.mode == .idle else { return }
-                    wirelessSession.startSending()
-                }
                 return
             }
             guard shouldShowRolePickerAfterPairing else { return }
@@ -405,7 +390,6 @@ struct CameraScreen: View {
         guard wirelessSession.isSecurelyPaired else {
             pendingWirelessMode = target
             shouldShowRolePickerAfterPairing = false
-            shouldStartCompositeShareAfterPairing = false
             wirelessSheetRoute = .deviceSearch
             return
         }
