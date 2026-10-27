@@ -42,6 +42,7 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
     private var isReceivingEnabled = false
     private var pendingOffer: Signal?
     private var announcedConnected = false
+    private var statsProbeGeneration = 0
 
     private struct Signal: Codable {
         let type: String
@@ -232,6 +233,7 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
         pendingRemoteCandidates.removeAll()
         hasRemoteDescription = false
         announcedConnected = false
+        statsProbeGeneration += 1
         updateStatus("视频已停止")
     }
 
@@ -329,6 +331,48 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
         }
     }
 
+    /// Diagnose black screens at the media layer instead of treating ICE connectivity as video success.
+    /// RTCStatistics exposes inbound RTP byte/frame counters; the generation token prevents stale
+    /// callbacks from an old peer connection overwriting the current session's status.
+    private func startStatsProbe(for connection: RTCPeerConnection?) {
+        guard let connection else { return }
+        statsProbeGeneration += 1
+        let generation = statsProbeGeneration
+
+        func poll() {
+            guard self.statsProbeGeneration == generation,
+                  self.peerConnection === connection else { return }
+            connection.statistics { [weak self, weak connection] report in
+                guard let self, let connection else { return }
+                DispatchQueue.main.async {
+                    guard self.statsProbeGeneration == generation,
+                          self.peerConnection === connection else { return }
+
+                    let inboundVideo = report.statistics.values.first { item in
+                        item.type == "inbound-rtp" &&
+                        ((item.values["kind"] as? String) == "video" ||
+                         (item.values["mediaType"] as? String) == "video")
+                    }
+                    if let inboundVideo {
+                        let bytes = (inboundVideo.values["bytesReceived"] as? NSNumber)?.intValue ?? 0
+                        let decoded = (inboundVideo.values["framesDecoded"] as? NSNumber)?.intValue ?? 0
+                        if decoded > 0 {
+                            self.updateStatus("已收到并解码视频帧，等待画面显示…")
+                        } else if bytes > 0 {
+                            self.updateStatus("已收到视频数据，但尚未成功解码；请重新开始共享")
+                        } else {
+                            self.updateStatus("网络已连接，但暂未收到视频数据；请确认发送端正在共享")
+                        }
+                    } else {
+                        self.updateStatus("网络已连接，正在等待视频接收通道…")
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { poll() }
+                }
+            }
+        }
+        poll()
+    }
+
     private func send(_ signal: Signal) {
         guard let data = try? JSONEncoder().encode(signal) else { return }
         onSignal?(data)
@@ -385,8 +429,11 @@ extension LiveMonitorRTCService: RTCPeerConnectionDelegate {
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
         switch newState {
         case .connected, .completed:
-            updateStatus("实时画面已连接")
+            // ICE only proves that a network path exists; it does not prove that video RTP
+            // is arriving or that the receiver can decode/render it. Keep the UI truthful.
+            updateStatus("网络通道已建立，正在检查视频数据…")
             announceConnection(connected: true)
+            startStatsProbe(for: peerConnection)
         case .checking:
             updateStatus("正在连接设备…")
         case .disconnected:
