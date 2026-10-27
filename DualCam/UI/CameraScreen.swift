@@ -151,6 +151,7 @@ struct CameraScreen: View {
                 .frame(maxHeight: .infinity, alignment: .top)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .zIndex(5)
+                }
 
                 // When the device is physically landscape, render a real landscape-sized
                 // parameter canvas and rotate that panel as one unit. The camera interface and
