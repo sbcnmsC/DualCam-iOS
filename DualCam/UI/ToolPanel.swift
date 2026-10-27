@@ -709,7 +709,7 @@ struct SettingsTab: View {
             }
             Toggle("弱光增亮", isOn: $cam.cfg.lowLight).font(.system(size: 13))
             Toggle("视频防抖（开启会增加预览延迟）", isOn: $cam.cfg.stabilization).font(.system(size: 13))
-            Toggle("前置镜像", isOn: $cam.cfg.mirrorFront).font(.system(size: 13))
+            Toggle("前置镜像（左右翻转）", isOn: $cam.cfg.mirrorFront).font(.system(size: 13))
             Toggle("三分参考线", isOn: $cam.cfg.showGrid).font(.system(size: 13))
 
             VStack(alignment: .leading, spacing: 8) {
@@ -1411,7 +1411,7 @@ VStack(alignment: .leading, spacing: 9) {
         case .lowLight:
             Toggle("弱光增亮", isOn: $cam.cfg.lowLight).font(.system(size: 12))
         case .mirrorFront:
-            Toggle("前置镜像", isOn: $cam.cfg.mirrorFront).font(.system(size: 12))
+            Toggle("前置镜像（左右翻转）", isOn: $cam.cfg.mirrorFront).font(.system(size: 12))
         case .showGrid:
             Toggle("三分参考线", isOn: $cam.cfg.showGrid).font(.system(size: 12))
         case .lensCombo:
