@@ -1300,11 +1300,13 @@ struct TopBar: View {
 
     let onTimerTap: () -> Void
     let onWirelessMonitorTap: () -> Void
+    let onShareCompositeTap: () -> Void
+    let isSharingComposite: Bool
     let onParameterTap: (String) -> Void
     var iconRotationDegrees: CGFloat = 90
     var compactLayout = false
 
-    private static let baseActionKeys = ["flash", "livePhoto", "liveMotion", "timer", "swapCamera", "wireless"]
+    private static let baseActionKeys = ["flash", "livePhoto", "liveMotion", "timer", "swapCamera", "wireless", "shareComposite"]
     private static var allActionKeys: [String] {
         baseActionKeys + QuickParameter.allCases.map { "param.\($0.shortcutKey)" }
     }
@@ -1350,7 +1352,16 @@ struct TopBar: View {
                             if isCustomizing {
                                 Menu {
                                     Section("相机按钮") {
-                                        ForEach(availableActionKeys.filter { !Self.isParameterKey($0) }, id: \.self) { key in
+                                        ForEach(availableActionKeys.filter {
+                                            !Self.isParameterKey($0) && $0 != "wireless" && $0 != "shareComposite"
+                                        }, id: \.self) { key in
+                                            Button { addAction(key) } label: {
+                                                Label(actionTitle(key), systemImage: actionSystemImage(key))
+                                            }
+                                        }
+                                    }
+                                    Section("互联按钮") {
+                                        ForEach(availableActionKeys.filter { $0 == "wireless" || $0 == "shareComposite" }, id: \.self) { key in
                                             Button { addAction(key) } label: {
                                                 Label(actionTitle(key), systemImage: actionSystemImage(key))
                                             }
@@ -1452,6 +1463,12 @@ struct TopBar: View {
                 HapticFeedback.play(.button)
                 onWirelessMonitorTap()
             }
+        case "shareComposite":
+            iconButton(actionKey: key, icon: "airplayvideo", active: isSharingComposite,
+                       label: "共享本机合成画面") {
+                HapticFeedback.play(.button)
+                onShareCompositeTap()
+            }
         default:
             if key.hasPrefix("param."),
                let parameter = QuickParameter.fromShortcutKey(String(key.dropFirst("param.".count))) {
@@ -1535,6 +1552,7 @@ struct TopBar: View {
         case "timer": return "倒计时"
         case "swapCamera": return "切换摄像头"
         case "wireless": return "无线监看"
+        case "shareComposite": return "共享本机合成画面"
         default:
             if key.hasPrefix("param."),
                let parameter = QuickParameter.fromShortcutKey(String(key.dropFirst("param.".count))) {
@@ -1552,6 +1570,7 @@ struct TopBar: View {
         case "timer": return "timer"
         case "swapCamera": return "arrow.triangle.2.circlepath"
         case "wireless": return "dot.radiowaves.left.and.right"
+        case "shareComposite": return "airplayvideo"
         default:
             if key.hasPrefix("param."),
                let parameter = QuickParameter.fromShortcutKey(String(key.dropFirst("param.".count))) {
