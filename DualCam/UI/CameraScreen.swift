@@ -425,7 +425,7 @@ struct CameraScreen: View {
 
         if wirelessSession.mode != .idle {
             wirelessSession.stopVideo()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: startTarget)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { startTarget() }
         } else {
             startTarget()
         }
