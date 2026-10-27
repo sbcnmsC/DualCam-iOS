@@ -69,8 +69,12 @@ final class WirelessMonitorSession: ObservableObject {
 
         let peerService = network
         let transport = rtc
+        // NetworkMonitorService delivers decrypted signalling on its private serial queue.
+        // WebRTC peer-connection state is main-thread confined in LiveMonitorRTCService.
         peerService.onSignalReceived = { [weak transport] data in
-            transport?.handleSignal(data)
+            DispatchQueue.main.async {
+                transport?.handleSignal(data)
+            }
         }
         transport.onSignal = { [weak peerService, weak transport] data in
             guard let peerService else {
