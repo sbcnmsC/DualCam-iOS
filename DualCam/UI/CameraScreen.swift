@@ -211,6 +211,7 @@ struct CameraScreen: View {
                                 wirelessSession.remoteFrameDidArrive()
                             }
                             .frame(width: canvasSize.width, height: canvasSize.height)
+                            .allowsHitTesting(false)
                         }
 
                         Button {
