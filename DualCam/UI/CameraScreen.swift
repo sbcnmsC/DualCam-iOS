@@ -178,7 +178,7 @@ struct CameraScreen: View {
                     .zIndex(15)
                 }
 
-                OverlayLayer(topSafeAreaInset: insets.top)
+                OverlayLayer(topSafeAreaInset: insets.top, suppressToast: wirelessSession.mode == .sending)
                     .frame(width: canvasSize.width, height: canvasSize.height)
                     .offset(x: canvasOffset.width, y: canvasOffset.height)
 
@@ -349,14 +349,14 @@ struct CameraScreen: View {
 
             case .rolePicker:
                 WirelessMonitorRolePickerSheet(
-                    onWirelessReceiveTap: {
+                    onReceive: {
                         shouldShowRolePickerAfterPairing = false
                         wirelessSheetRoute = nil
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
                             switchWirelessMode(to: .receiving)
                         }
                     },
-                    onWirelessShareTap: {
+                    onShare: {
                         shouldShowRolePickerAfterPairing = false
                         wirelessSheetRoute = nil
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
@@ -1941,6 +1941,7 @@ struct ShutterButton: View {
 struct OverlayLayer: View {
     @EnvironmentObject private var cam: CameraManager
     let topSafeAreaInset: CGFloat
+    var suppressToast = false
 
     var body: some View {
         ZStack {
@@ -1951,7 +1952,7 @@ struct OverlayLayer: View {
                 Color.black.opacity(0.18).ignoresSafeArea()
                 Text("\(n)").font(.system(size: 112, weight: .bold, design: .rounded)).monospacedDigit().foregroundStyle(Color.white).shadow(color: .black.opacity(0.6), radius: 18).frame(maxWidth: .infinity, maxHeight: .infinity).allowsHitTesting(false).zIndex(10)
             }
-            if let text = cam.toast {
+            if !suppressToast, let text = cam.toast {
                 VStack {
                     Text(text)
                         .font(.system(size: 13, weight: .semibold))
