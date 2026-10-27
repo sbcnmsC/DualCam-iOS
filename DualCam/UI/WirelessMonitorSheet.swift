@@ -361,102 +361,47 @@ struct WirelessMonitorSheet: View {
     }
 }
 
-/// A dedicated wireless-control screen shown after pairing. Tapping a mode changes the
-/// active peer role; the shortcut's long-press menu offers the same choices directly.
+/// Shown only after the device-search and safety-match sheet has closed.
 struct WirelessMonitorRolePickerSheet: View {
-    let onWirelessReceiveTap: () -> Void
-    let onWirelessShareTap: () -> Void
+    let onReceive: () -> Void
+    let onShare: () -> Void
     let onDisconnect: () -> Void
 
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 7) {
-                    Text("选择工作模式")
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundStyle(.primary)
-                    Text("点击任一模式即可切换。长按顶部无线快捷按钮，也可以直接选择模式。")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.bottom, 4)
+            List {
+                Section("共享方式") {
+                    Button(action: onReceive) {
+                        Label("接收画面", systemImage: "rectangle.inset.filled.and.person.filled")
+                            .foregroundStyle(Color(uiColor: .systemBlue))
+                    }
 
-                Button(action: onWirelessReceiveTap) {
-                    modeRow(
-                        title: "接收画面",
-                        subtitle: "在这台设备上查看对端的合成画面",
-                        icon: "rectangle.inset.filled.and.person.filled"
-                    )
+                    Button(action: onShare) {
+                        Label("共享本机画面", systemImage: "dot.radiowaves.left.and.right")
+                            .foregroundStyle(Color(uiColor: .systemBlue))
+                    }
                 }
-                .buttonStyle(.plain)
 
-                Button(action: onWirelessShareTap) {
-                    modeRow(
-                        title: "共享本机画面",
-                        subtitle: "将本机双摄合成画面发送到另一台设备",
-                        icon: "airplayvideo"
-                    )
+                Section {
+                    Button(role: .destructive, action: onDisconnect) {
+                        Label("断开连接", systemImage: "xmark.circle")
+                    }
                 }
-                .buttonStyle(.plain)
-
-                Spacer(minLength: 6)
-
-                Button(role: .destructive, action: onDisconnect) {
-                    Label("断开设备连接", systemImage: "xmark.circle")
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding(.vertical, 13)
-                }
-                .buttonStyle(.bordered)
-                .tint(.red)
             }
-            .padding(22)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
             .background(Color(uiColor: .systemGroupedBackground))
-            .navigationTitle("无线互联")
+            .navigationTitle("选择共享方式")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("完成") { dismiss() }
+                    Button("取消") { dismiss() }
                 }
             }
+            .tint(Color(uiColor: .systemBlue))
         }
-    }
-
-    private func modeRow(title: String, subtitle: String, icon: String) -> some View {
-        HStack(spacing: 14) {
-            Image(systemName: icon)
-                .font(.system(size: 22, weight: .semibold))
-                .foregroundStyle(Color(uiColor: .systemBlue))
-                .frame(width: 48, height: 48)
-                .background(Color(uiColor: .systemBlue).opacity(0.1), in: RoundedRectangle(cornerRadius: 14))
-
-            VStack(alignment: .leading, spacing: 5) {
-                Text(title)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.primary)
-                Text(subtitle)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Spacer(minLength: 4)
-
-            Image(systemName: "chevron.right")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.tertiary)
-        }
-        .padding(15)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
-        )
-        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 }
 
