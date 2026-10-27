@@ -413,7 +413,6 @@ struct CameraScreen: View {
 
             case .rolePicker:
                 WirelessMonitorRolePickerSheet(
-                    session: wirelessSession,
                     onReceive: {
                         shouldShowRolePickerAfterPairing = false
                         wirelessSheetRoute = nil
