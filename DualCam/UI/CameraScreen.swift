@@ -1207,6 +1207,7 @@ struct TimerSettingsOverlay: View {
     @EnvironmentObject private var cam: CameraManager
     @Binding var timerDraft: Int
     @Binding var isPresented: Bool
+    @AppStorage("dualcam.dismissOnBlankTap") private var dismissOnBlankTap = true
     var iconRotationDegrees: CGFloat = 0
 
     var body: some View {
@@ -1214,7 +1215,11 @@ struct TimerSettingsOverlay: View {
             Color.black.opacity(0.55)
                 .ignoresSafeArea()
                 .contentShape(Rectangle())
-                .onTapGesture { isPresented = false }
+                .onTapGesture {
+                    guard dismissOnBlankTap else { return }
+                    HapticFeedback.play(.button)
+                    isPresented = false
+                }
             VStack(spacing: 16) {
                 HStack {
                     Image(systemName: "timer")
