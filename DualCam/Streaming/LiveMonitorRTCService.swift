@@ -283,7 +283,13 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
 
     private func makePeerConnection() -> RTCPeerConnection? {
         let configuration = RTCConfiguration()
-        configuration.iceServers = []
+        // Keep direct LAN candidates, but also gather server-reflexive candidates.
+        // Secure pairing/signalling can succeed even when WebRTC media cannot traverse
+        // the network path; STUN helps when the two devices are on different Wi-Fi/NATs.
+        configuration.iceServers = [
+            RTCIceServer(urlStrings: ["stun:stun.l.google.com:19302"]),
+            RTCIceServer(urlStrings: ["stun:stun1.l.google.com:19302"])
+        ]
         configuration.sdpSemantics = .unifiedPlan
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
         guard let pc = Self.factory.peerConnection(with: configuration, constraints: constraints, delegate: nil) else {
@@ -316,7 +322,13 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
 
     private func refreshRemoteTrack(from pc: RTCPeerConnection) {
         if let track = pc.transceivers.compactMap({ $0.receiver.track as? RTCVideoTrack }).first {
-            DispatchQueue.main.async { self.remoteVideoTrack = track }
+            DispatchQueue.main.async {
+                // A remote track may be discovered before SwiftUI attaches its renderer.
+                // Explicitly enable it and publish it on the main thread for the view update.
+                track.isEnabled = true
+                self.remoteVideoTrack = track
+                self.updateStatus("已建立远端视频轨道，等待画面帧…")
+            }
         }
     }
 
@@ -362,7 +374,11 @@ extension LiveMonitorRTCService: RTCPeerConnectionDelegate {
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {
         if let track = stream.videoTracks.first {
-            DispatchQueue.main.async { self.remoteVideoTrack = track }
+            DispatchQueue.main.async {
+                track.isEnabled = true
+                self.remoteVideoTrack = track
+                self.updateStatus("收到远端视频轨道，正在显示合成画面…")
+            }
         }
     }
     func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {
@@ -398,7 +414,11 @@ extension LiveMonitorRTCService: RTCPeerConnectionDelegate {
     func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didStartReceivingOn transceiver: RTCRtpTransceiver) {
         if let track = transceiver.receiver.track as? RTCVideoTrack {
-            DispatchQueue.main.async { self.remoteVideoTrack = track }
+            DispatchQueue.main.async {
+                track.isEnabled = true
+                self.remoteVideoTrack = track
+                self.updateStatus("远端开始发送视频帧…")
+            }
         }
     }
 }
