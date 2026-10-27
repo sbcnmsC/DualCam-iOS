@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - optimize/photo-speed-resolution
+      - fix/wireless-black-screen-latest-ipa-2026-10-27
   workflow_dispatch:
 
 permissions:
@@ -28,7 +29,7 @@ jobs:
       - name: Generate Xcode project
         run: |
           xcodegen generate
-          sed -i '' -E 's/objectVersion = 77;/objectVersion = 60;/; s/preferredProjectObjectVersion = 77;/preferredProjectObjectVersion = 60;/' "$APP_NAME.xcodeproj/project.pbxproj"
+          sed -i '' -E 's/objectVersion = 77;/objectVersion = 60/; s/preferredProjectObjectVersion = 77;/preferredProjectObjectVersion = 60/' "$APP_NAME.xcodeproj/project.pbxproj"
 
       - name: Show Xcode and resolve packages
         run: |
