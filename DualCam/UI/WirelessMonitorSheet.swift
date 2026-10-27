@@ -109,6 +109,8 @@ final class WirelessMonitorSession: ObservableObject {
     func startSending() {
         guard isSecurelyPaired, mode == .idle, let cameraManager else { return }
         applyWirelessStreamPreset(to: cameraManager)
+        // Clear any toast left over from the previous camera action before sharing starts.
+        cameraManager.toast = nil
         mode = .sending
         remoteVideoFrameReceived = false
         let transport = rtc
@@ -177,6 +179,10 @@ final class WirelessMonitorSession: ObservableObject {
         guard mode != .idle || rtc.remoteVideoTrack != nil else { return }
         let wasReceiving = mode == .receiving
         let wasSending = mode == .sending
+        if wasSending {
+            // Do not let any transient sharing message reappear after the session stops.
+            cameraManager?.toast = nil
+        }
         cameraManager?.compositedFrameSource.setSink(nil)
         if wasReceiving {
             cameraManager?.setLocalCameraCaptureSuspended(false)
@@ -217,7 +223,10 @@ final class WirelessMonitorSession: ObservableObject {
         if mode == .receiving {
             cameraManager?.setLocalCameraCaptureSuspended(false)
         }
-        if mode == .sending { restoreWirelessStreamPreset() }
+        if mode == .sending {
+            cameraManager?.toast = nil
+            restoreWirelessStreamPreset()
+        }
         mode = .idle
         remoteVideoFrameReceived = false
     }
