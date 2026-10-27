@@ -108,6 +108,7 @@ final class WirelessMonitorSession: ObservableObject {
             transport?.push(frame)
         }
         rtc.startSending()
+        Task { @MainActor in MonitorLiveActivityManager.shared.start() }
     }
 
     func startReceiving() {
@@ -122,6 +123,8 @@ final class WirelessMonitorSession: ObservableObject {
     func stopVideo(notifyPeer: Bool = true) {
         guard mode != .idle || rtc.remoteVideoTrack != nil else { return }
         let wasReceiving = mode == .receiving
+        let wasSending = mode == .sending
+        if wasSending { Task { @MainActor in MonitorLiveActivityManager.shared.stop() } }
         cameraManager?.compositedFrameSource.setSink(nil)
         if wasReceiving {
             cameraManager?.setLocalCameraCaptureSuspended(false)
@@ -147,6 +150,7 @@ final class WirelessMonitorSession: ObservableObject {
     }
 
     private func peerStopped() {
+        if mode == .sending { Task { @MainActor in MonitorLiveActivityManager.shared.stop() } }
         cameraManager?.compositedFrameSource.setSink(nil)
         if mode == .receiving {
             cameraManager?.setLocalCameraCaptureSuspended(false)
@@ -298,7 +302,8 @@ struct RemoteMonitorVideoSurface: UIViewRepresentable {
 
     func makeUIView(context: Context) -> RTCMTLVideoView {
         let view = RTCMTLVideoView()
-        view.videoContentMode = .scaleAspectFill
+        // Fit the complete remote frame on iPad and iPhone; avoid cropping edges in landscape or split layouts.
+        view.videoContentMode = .scaleAspectFit
         view.backgroundColor = .black
         context.coordinator.update(track: track, renderer: view, onFirstFrame: onFirstFrame)
         return view
