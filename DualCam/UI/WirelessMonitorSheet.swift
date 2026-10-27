@@ -115,7 +115,7 @@ final class WirelessMonitorSession: ObservableObject {
         Task { @MainActor [weak self] in
             guard let self, self.mode == .sending else { return }
             if let failure = await MonitorLiveActivityManager.shared.start() {
-                self.cameraManager?.showToast("灵动岛未启动：\(failure)")
+                self.cameraManager?.showToast(failure)
             }
             guard self.mode == .sending else {
                 await MonitorLiveActivityManager.shared.stop()
