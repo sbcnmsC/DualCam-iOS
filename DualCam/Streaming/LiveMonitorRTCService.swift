@@ -38,6 +38,8 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
     private let maximumStreamingLongEdge = 1920
     private let streamingFrameRate = 60
     private let streamingMaximumBitrateBps = 12_000_000
+    private let streamingStartBitrateKbps = 6_000
+    private let streamingMinimumBitrateKbps = 2_500
 
     // Everything below is main-thread only. WebRTC completion handlers hop back to main first.
     private var peerConnection: RTCPeerConnection?
@@ -69,7 +71,6 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
         let capturer = CompositedVideoCapturer(delegate: source)
         let track = Self.factory.videoTrack(with: source, trackId: "dualcam-composite")
         pc.add(track, streamIds: ["dualcam-stream"])
-        configureVideoSender(for: track, on: pc)
         frameLock.lock()
         videoSource = source
         frameCapturer = capturer
@@ -84,34 +85,55 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
                 self?.updateStatus("生成视频请求失败：\(error?.localizedDescription ?? "未知错误")")
                 return
             }
-            pc.setLocalDescription(description) { [weak self] error in
+            // LibWebRTC in the bundled SDK doesn't expose RTCRtpSender.setParameters.
+            // Use its supported SDP bitrate hints while retaining the bounded source output below.
+            let tunedSDP = self.addVideoBitrateHints(to: description.sdp)
+            let tunedDescription = RTCSessionDescription(type: .offer, sdp: tunedSDP)
+            pc.setLocalDescription(tunedDescription) { [weak self] error in
                 guard let self, error == nil else {
                     self?.updateStatus("设置本地视频描述失败：\(error?.localizedDescription ?? "未知错误")")
                     return
                 }
-                self.send(Signal(type: "offer", sdp: description.sdp, sdpType: "offer"))
+                self.send(Signal(type: "offer", sdp: tunedSDP, sdpType: "offer"))
             }
         }
     }
 
-    /// Requests a useful LAN bitrate while keeping output at 1080p-class dimensions.
-    /// WebRTC congestion control can still lower the actual rate when the network requires it.
-    private func configureVideoSender(for track: RTCVideoTrack, on connection: RTCPeerConnection) {
-        guard let sender = connection.senders.first(where: { $0.track?.trackId == track.trackId }) else {
-            updateStatus("视频轨道已启动，编码参数由 WebRTC 自动控制")
-            return
-        }
+    /// Hints LibWebRTC to start near 6 Mbps and permit up to 12 Mbps on a fast local network.
+    /// A low bitrate floor avoids an overly soft default image; congestion control can still adapt.
+    private func addVideoBitrateHints(to sdp: String) -> String {
+        let lines = sdp.components(separatedBy: "\r\n")
+        let maxKbps = streamingMaximumBitrateBps / 1_000
+        var output: [String] = []
+        var inVideoSection = false
+        var addedBandwidth = false
 
-        let parameters = sender.parameters
-        guard let encoding = parameters.encodings.first else {
-            updateStatus("视频轨道已启动，编码器未提供可调参数")
-            return
+        for rawLine in lines {
+            if rawLine.hasPrefix("m=") {
+                if inVideoSection && !addedBandwidth {
+                    output.append("b=AS:\(maxKbps)")
+                }
+                inVideoSection = rawLine.hasPrefix("m=video ")
+                addedBandwidth = false
+            }
+
+            var line = rawLine
+            if inVideoSection, line.hasPrefix("a=fmtp:"), !line.contains("x-google-max-bitrate=") {
+                line += ";x-google-start-bitrate=\(streamingStartBitrateKbps)" +
+                        ";x-google-min-bitrate=\(streamingMinimumBitrateKbps)" +
+                        ";x-google-max-bitrate=\(maxKbps)"
+            }
+            output.append(line)
+
+            if inVideoSection, line.hasPrefix("c="), !addedBandwidth {
+                output.append("b=AS:\(maxKbps)")
+                addedBandwidth = true
+            }
         }
-        encoding.maxBitrateBps = NSNumber(value: streamingMaximumBitrateBps)
-        encoding.maxFramerate = NSNumber(value: streamingFrameRate)
-        if !sender.setParameters(parameters) {
-            updateStatus("视频已连接；编码码率由 WebRTC 自动控制")
+        if inVideoSection && !addedBandwidth {
+            output.append("b=AS:\(maxKbps)")
         }
+        return output.joined(separator: "\r\n")
     }
 
     func startReceiving() {

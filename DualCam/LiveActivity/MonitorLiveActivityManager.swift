@@ -68,7 +68,7 @@ final class MonitorLiveActivityManager {
 
             guard token == lifecycleToken else {
                 await activity.end(nil, dismissalPolicy: .immediate)
-                return
+                return nil
             }
             currentActivity = activity
             logger.info("Live Activity started successfully. id=\(activity.id, privacy: .public)")
