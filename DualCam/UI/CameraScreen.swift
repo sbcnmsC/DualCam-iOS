@@ -265,10 +265,12 @@ struct CameraScreen: View {
                     .ignoresSafeArea()
                     .zIndex(80)
                 } else if wirelessSession.mode == .sending {
-                    // Do not imitate the Dynamic Island in app UI. ActivityKit owns the system
-                    // Live Activity; this is only the explicit stop control.
-                    VStack {
+                    // Keep the stop action outside the Dynamic Island/notch area and below the
+                    // camera's top control row. Anchor it to the trailing edge instead of
+                    // centering it across the top of the preview.
+                    VStack(spacing: 0) {
                         HStack {
+                            Spacer(minLength: 0)
                             Button {
                                 HapticFeedback.play(.button)
                                 wirelessSession.stopVideo()
@@ -276,14 +278,17 @@ struct CameraScreen: View {
                                 Label("结束共享", systemImage: "stop.fill")
                                     .font(.caption.weight(.semibold))
                                     .padding(.horizontal, 12)
-                                    .padding(.vertical, 8)
-                                    .background(.black.opacity(0.62), in: Capsule())
+                                    .padding(.vertical, 9)
+                                    .background(.black.opacity(0.72), in: Capsule())
+                                    .overlay(Capsule().stroke(.white.opacity(0.18), lineWidth: 0.8))
                             }
                             .tint(.white)
                             .accessibilityLabel("停止共享")
                         }
-                        .padding(.top, max(insets.top + 6, 10))
-                        Spacer()
+                        .padding(.horizontal, max(insets.trailing + 16, 20))
+                        .padding(.top, insets.top + topBarHeight + 14)
+
+                        Spacer(minLength: 0)
                     }
                     .frame(width: canvasSize.width, height: canvasSize.height)
                     .offset(x: canvasOffset.width, y: canvasOffset.height)
