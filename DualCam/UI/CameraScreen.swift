@@ -7,6 +7,7 @@ struct CameraScreen: View {
     @State private var panelTab: PanelTab = .pip
     @State private var showTimerSettings = false
     @State private var showWirelessMonitor = false
+    @StateObject private var wirelessSession = WirelessMonitorSession()
     @State private var showCreativeGallery = false
     @State private var timerDraft = 5
     @State private var bottomBarHeight: CGFloat = 222
@@ -147,9 +148,153 @@ struct CameraScreen: View {
                         .offset(x: canvasOffset.width, y: canvasOffset.height)
                         .zIndex(20)
                 }
+
+                // Receiver mode replaces the camera interface with the peer's final composited
+                // video. The persistent session lives in CameraScreen, so closing the pairing
+                // sheet never deallocates the WebRTC track or its encrypted signalling connection.
+                if wirelessSession.mode == .receiving {
+                    ZStack {
+                        Color.black.ignoresSafeArea()
+
+                        if let track = wirelessSession.remoteVideoTrack {
+                            RemoteMonitorVideoSurface(track: track) {
+                                wirelessSession.remoteFrameDidArrive()
+                            }
+                            .frame(width: canvasSize.width, height: canvasSize.height)
+                        }
+
+                        VStack(spacing: 0) {
+                            HStack {
+                                Label("无线全屏监看", systemImage: "dot.radiowaves.left.and.right")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.white)
+                                Spacer()
+                                Button {
+                                    HapticFeedback.play(.button)
+                                    wirelessSession.stopVideo()
+                                } label: {
+                                    Label("退出监看", systemImage: "xmark")
+                                        .font(.subheadline.weight(.semibold))
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 9)
+                                        .background(.ultraThinMaterial, in: Capsule())
+                                }
+                                .tint(.white)
+                            }
+                            .padding(.horizontal, 18)
+                            .padding(.top, max(insets.top + 12, 28))
+
+                            Spacer()
+
+                            if !wirelessSession.remoteVideoFrameReceived {
+                                VStack(spacing: 10) {
+                                    ProgressView().tint(.white)
+                                    Text(wirelessSession.remoteVideoTrack == nil
+                                         ? "正在等待远端视频轨道…"
+                                         : wirelessSession.rtcStatusText)
+                                        .font(.callout)
+                                        .multilineTextAlignment(.center)
+                                        .foregroundStyle(.white.opacity(0.88))
+                                    Text("请确认另一台设备已选择“共享本机合成画面”")
+                                        .font(.caption)
+                                        .multilineTextAlignment(.center)
+                                        .foregroundStyle(.white.opacity(0.68))
+                                }
+                                .padding(18)
+                            }
+
+                            Spacer()
+                        }
+                    }
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .offset(x: canvasOffset.width, y: canvasOffset.height)
+                    .ignoresSafeArea()
+                    .zIndex(100)
+                } else if wirelessSession.isSecurelyPaired && wirelessSession.mode == .idle {
+                    // Pairing closes immediately on success. This small role chooser is now on
+                    // the main screen so the two devices can choose opposite roles explicitly.
+                    ZStack {
+                        Color.black.opacity(0.90).ignoresSafeArea()
+                        VStack(spacing: 16) {
+                            Image(systemName: "checkmark.shield.fill")
+                                .font(.system(size: 42))
+                                .foregroundStyle(.green)
+                            Text("安全配对已完成")
+                                .font(.title2.bold())
+                                .foregroundStyle(.white)
+                            Text("选择这台设备的用途")
+                                .font(.subheadline)
+                                .foregroundStyle(.white.opacity(0.72))
+
+                            Button {
+                                HapticFeedback.play(.button)
+                                wirelessSession.startReceiving()
+                            } label: {
+                                Label("全屏接收画面", systemImage: "play.rectangle.fill")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.large)
+
+                            Button {
+                                HapticFeedback.play(.button)
+                                wirelessSession.startSending()
+                            } label: {
+                                Label("共享本机合成画面", systemImage: "dot.radiowaves.left.and.right")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(.white)
+                            .controlSize(.large)
+
+                            Button(role: .destructive) {
+                                HapticFeedback.play(.button)
+                                wirelessSession.disconnectPairing()
+                            } label: {
+                                Label("断开安全配对", systemImage: "lock.slash")
+                            }
+                            .padding(.top, 8)
+                        }
+                        .padding(26)
+                        .frame(maxWidth: 420)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28))
+                        .padding(24)
+                    }
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .offset(x: canvasOffset.width, y: canvasOffset.height)
+                    .ignoresSafeArea()
+                    .zIndex(80)
+                } else if wirelessSession.mode == .sending {
+                    VStack {
+                        HStack {
+                            Label("正在共享本机合成画面", systemImage: "dot.radiowaves.left.and.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.white)
+                            Spacer()
+                            Button {
+                                HapticFeedback.play(.button)
+                                wirelessSession.stopVideo()
+                            } label: {
+                                Label("停止共享", systemImage: "stop.fill")
+                                    .font(.subheadline.weight(.semibold))
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 9)
+                                    .background(.ultraThinMaterial, in: Capsule())
+                            }
+                            .tint(.white)
+                        }
+                        .padding(.horizontal, 18)
+                        .padding(.top, max(insets.top + 12, 28))
+                        Spacer()
+                    }
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .offset(x: canvasOffset.width, y: canvasOffset.height)
+                    .zIndex(40)
+                }
             }
             .animation(.spring(response: 0.36, dampingFraction: 0.88), value: isParameterPanelLandscape)
             .onAppear {
+                wirelessSession.configure(cameraManager: cam)
                 UIDevice.current.beginGeneratingDeviceOrientationNotifications()
                 currentOrientation = resolvedInterfaceOrientation(for: canvasSize)
                 updateFreeAspect(for: canvasSize)
@@ -192,7 +337,7 @@ struct CameraScreen: View {
         .statusBarHidden(true)
         .animation(.easeInOut(duration: 0.22), value: showPanel)
         .sheet(isPresented: $showWirelessMonitor) {
-            WirelessMonitorSheet()
+            WirelessMonitorSheet(session: wirelessSession)
                 .environmentObject(cam)
         }
         .fullScreenCover(isPresented: $showCreativeGallery) {
