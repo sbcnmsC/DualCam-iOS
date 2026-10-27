@@ -1,35 +1,186 @@
+import Combine
 import SwiftUI
 import WebRTC
 
+enum MonitorMode: Equatable {
+    case idle
+    case sending
+    case receiving
+}
+
+/// Lives with the camera screen, not the pairing sheet. Dismissing the sheet must not
+/// stop the secure signalling connection or detach the active video session.
+final class WirelessMonitorSession: ObservableObject {
+    let network = NetworkMonitorService()
+    let rtc = LiveMonitorRTCService()
+
+    @Published private(set) var mode: MonitorMode = .idle
+    @Published private(set) var isSecurelyPaired = false
+    @Published private(set) var nearbyDevices: [NearbyMonitorDevice] = []
+    @Published private(set) var networkStatusText = "准备搜索附近设备"
+    @Published private(set) var pairingCode: String?
+    @Published private(set) var localDeviceName = "DualCam"
+    @Published private(set) var rtcStatusText = "等待安全配对"
+    @Published private(set) var remoteVideoTrack: RTCVideoTrack?
+    @Published private(set) var remoteVideoFrameReceived = false
+
+    private var cancellables = Set<AnyCancellable>()
+    private weak var cameraManager: CameraManager?
+    private var didConfigure = false
+
+    init() {
+        network.$nearbyDevices.receive(on: DispatchQueue.main)
+            .sink { [weak self] in self?.nearbyDevices = $0 }
+            .store(in: &cancellables)
+        network.$statusText.receive(on: DispatchQueue.main)
+            .sink { [weak self] in self?.networkStatusText = $0 }
+            .store(in: &cancellables)
+        network.$pairingCode.receive(on: DispatchQueue.main)
+            .sink { [weak self] in self?.pairingCode = $0 }
+            .store(in: &cancellables)
+        network.$localDeviceName.receive(on: DispatchQueue.main)
+            .sink { [weak self] in self?.localDeviceName = $0 }
+            .store(in: &cancellables)
+        network.$isSecurelyPaired.receive(on: DispatchQueue.main)
+            .sink { [weak self] paired in
+                guard let self else { return }
+                let wasPaired = self.isSecurelyPaired
+                self.isSecurelyPaired = paired
+                if wasPaired && !paired {
+                    self.stopVideo(notifyPeer: false)
+                }
+            }
+            .store(in: &cancellables)
+        rtc.$statusText.receive(on: DispatchQueue.main)
+            .sink { [weak self] in self?.rtcStatusText = $0 }
+            .store(in: &cancellables)
+        rtc.$remoteVideoTrack.receive(on: DispatchQueue.main)
+            .sink { [weak self] track in
+                self?.remoteVideoTrack = track
+                if track == nil { self?.remoteVideoFrameReceived = false }
+            }
+            .store(in: &cancellables)
+    }
+
+    func configure(cameraManager: CameraManager) {
+        self.cameraManager = cameraManager
+        guard !didConfigure else { return }
+        didConfigure = true
+
+        let peerService = network
+        let transport = rtc
+        peerService.onSignalReceived = { [weak transport] data in
+            transport?.handleSignal(data)
+        }
+        transport.onSignal = { [weak peerService, weak transport] data in
+            guard let peerService else {
+                transport?.reportSignallingFailure("安全连接已关闭")
+                return
+            }
+            peerService.sendSignal(data)
+        }
+        transport.onPeerStopped = { [weak self] in
+            DispatchQueue.main.async { self?.peerStopped() }
+        }
+    }
+
+    func startDiscovery() {
+        network.start()
+    }
+
+    /// A dismissed pairing sheet only closes discovery when pairing never completed.
+    func pairingSheetDidClose() {
+        if !isSecurelyPaired && mode == .idle {
+            network.stop()
+        }
+    }
+
+    func startSending() {
+        guard isSecurelyPaired, mode == .idle, let cameraManager else { return }
+        mode = .sending
+        remoteVideoFrameReceived = false
+        let transport = rtc
+        cameraManager.compositedFrameSource.setSink { [weak transport] frame in
+            transport?.push(frame)
+        }
+        rtc.startSending()
+    }
+
+    func startReceiving() {
+        guard isSecurelyPaired, mode == .idle, let cameraManager else { return }
+        mode = .receiving
+        remoteVideoFrameReceived = false
+        cameraManager.compositedFrameSource.setSink(nil)
+        cameraManager.setLocalCameraCaptureSuspended(true)
+        rtc.startReceiving()
+    }
+
+    func stopVideo(notifyPeer: Bool = true) {
+        guard mode != .idle || rtc.remoteVideoTrack != nil else { return }
+        let wasReceiving = mode == .receiving
+        cameraManager?.compositedFrameSource.setSink(nil)
+        if wasReceiving {
+            cameraManager?.setLocalCameraCaptureSuspended(false)
+        }
+        if notifyPeer {
+            rtc.stopAndNotifyPeer()
+        } else {
+            rtc.stop()
+        }
+        mode = .idle
+        remoteVideoFrameReceived = false
+    }
+
+    func disconnectPairing() {
+        stopVideo(notifyPeer: false)
+        network.stop()
+    }
+
+    func remoteFrameDidArrive() {
+        if !remoteVideoFrameReceived {
+            remoteVideoFrameReceived = true
+        }
+    }
+
+    private func peerStopped() {
+        cameraManager?.compositedFrameSource.setSink(nil)
+        if mode == .receiving {
+            cameraManager?.setLocalCameraCaptureSuspended(false)
+        }
+        mode = .idle
+        remoteVideoFrameReceived = false
+    }
+}
+
 struct WirelessMonitorSheet: View {
-    @StateObject private var network = NetworkMonitorService()
-    @StateObject private var rtc = LiveMonitorRTCService()
+    @ObservedObject var session: WirelessMonitorSession
     @EnvironmentObject private var cam: CameraManager
     @Environment(\.dismiss) private var dismiss
-    @State private var mode: MonitorMode = .idle
 
     var body: some View {
         NavigationStack {
             List {
                 Section("连接状态") {
-                    Label(network.statusText,
-                          systemImage: network.isSecurelyPaired ? "checkmark.shield.fill" : "dot.radiowaves.left.and.right")
-                    Label(rtc.statusText, systemImage: mode == .idle ? "video.slash" : "video")
+                    Label(
+                        session.networkStatusText,
+                        systemImage: session.isSecurelyPaired ? "checkmark.shield.fill" : "dot.radiowaves.left.and.right"
+                    )
+                    Label(session.rtcStatusText, systemImage: "video")
                         .foregroundStyle(.secondary)
-                    Text("本机：\(network.localDeviceName)")
+                    Text("本机：\(session.localDeviceName)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
                 Section("附近的设备") {
-                    if network.nearbyDevices.isEmpty {
+                    if session.nearbyDevices.isEmpty {
                         ContentUnavailableView(
                             "正在搜索 DualCam",
                             systemImage: "dot.radiowaves.left.and.right",
-                            description: Text("请在两台设备上打开无线监看，并允许 DualCam 访问本地网络。连接优先使用局域网或点对点 Wi-Fi。")
+                            description: Text("请在两台设备上打开无线监看，并允许 DualCam 访问本地网络。")
                         )
                     } else {
-                        ForEach(network.nearbyDevices) { device in
+                        ForEach(session.nearbyDevices) { device in
                             HStack(spacing: 12) {
                                 Image(systemName: "iphone.gen3")
                                     .font(.title2)
@@ -43,16 +194,16 @@ struct WirelessMonitorSheet: View {
                                 Spacer()
                                 Button("连接") {
                                     HapticFeedback.play(.button)
-                                    network.connect(to: device)
+                                    session.network.connect(to: device)
                                 }
                                 .buttonStyle(.borderedProminent)
-                                .disabled(network.isSecurelyPaired)
+                                .disabled(session.isSecurelyPaired)
                             }
                         }
                     }
                 }
 
-                if let code = network.pairingCode, !network.isSecurelyPaired {
+                if let code = session.pairingCode, !session.isSecurelyPaired {
                     Section("安全配对验证码") {
                         VStack(spacing: 8) {
                             Text(code)
@@ -67,16 +218,17 @@ struct WirelessMonitorSheet: View {
                             HStack(spacing: 10) {
                                 Button {
                                     HapticFeedback.play(.success)
-                                    network.confirmPairing()
+                                    session.network.confirmPairing()
                                 } label: {
                                     Label("验证码一致，确认", systemImage: "checkmark.shield.fill")
                                         .frame(maxWidth: .infinity)
                                 }
                                 .buttonStyle(.borderedProminent)
-                                .disabled(network.isSecurelyPaired)
+                                .disabled(session.isSecurelyPaired)
+
                                 Button(role: .destructive) {
                                     HapticFeedback.play(.button)
-                                    network.rejectPairing()
+                                    session.network.rejectPairing()
                                 } label: {
                                     Label("拒绝", systemImage: "xmark")
                                 }
@@ -86,87 +238,15 @@ struct WirelessMonitorSheet: View {
                     }
                 }
 
-                if network.isSecurelyPaired {
-                    Section("安全连接已建立") {
-                        Label("信令已加密并完成双端确认", systemImage: "lock.fill")
-                        Text("视频使用 WebRTC 的 DTLS-SRTP 加密。此版本不配置 STUN/TURN 云中继，只尝试直接连接可达的局域网候选地址。")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Section("实时画面") {
-                        Text("发送端传输的就是 DualCam 已合成的预览，包括双摄、画中画 / 分屏、滤镜和画幅。接收端不重新合成，也不发送麦克风音频。")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-
-                        HStack(spacing: 12) {
-                            Button {
-                                HapticFeedback.play(.button)
-                                startSending()
-                            } label: {
-                                Label("发送合成画面", systemImage: "dot.radiowaves.left.and.right")
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(mode != .idle || !network.isSecurelyPaired)
-
-                            Button {
-                                HapticFeedback.play(.button)
-                                startReceiving()
-                            } label: {
-                                Label("接收画面", systemImage: "play.rectangle")
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.bordered)
-                            .disabled(mode != .idle || !network.isSecurelyPaired)
-                        }
-
-                        if mode == .receiving {
-                            ZStack {
-                                Color.black
-                                if rtc.remoteVideoTrack == nil {
-                                    VStack(spacing: 8) {
-                                        ProgressView().tint(.white)
-                                        Text("等待相机端发送画面…")
-                                            .font(.callout)
-                                            .foregroundStyle(.white.opacity(0.8))
-                                    }
-                                } else {
-                                    RemoteMonitorVideoSurface(track: rtc.remoteVideoTrack)
-                                }
-                            }
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 320)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.secondary.opacity(0.3)))
-                        }
-
-                        if mode != .idle {
-                            Button(role: .destructive) {
-                                HapticFeedback.play(.button)
-                                stopVideo()
-                            } label: {
-                                Label("停止视频", systemImage: "stop.fill")
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.bordered)
-                        }
-                    }
-
-                    Section {
-                        Button(role: .destructive) {
-                            cleanup()
-                        } label: {
-                            Label("断开安全配对", systemImage: "lock.slash")
-                        }
-                    }
-                }
-
-                Section("连接方式说明") {
-                    Text("Wi-Fi / Network.framework 负责发现附近设备；首次连接通过临时密钥交换和双方验证码确认建立安全信令；WebRTC 负责实时视频。蓝牙可由系统网络路径用于附近连接，但不是高清视频的主要传输方式。")
+                Section("配对完成后") {
+                    Label("配对成功会自动返回主界面", systemImage: "arrow.uturn.backward")
+                    Text("主界面可选择“全屏接收画面”或“共享本机合成画面”。关闭配对窗口不会结束安全连接；只有主动断开才会关闭会话。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                    Text("AirDrop 适合分享已经录制的照片或视频文件，不适合持续同步实时相机画面。")
+                }
+
+                Section("实时画面说明") {
+                    Text("发送端共享 DualCam 已合成的预览，包含双摄、画中画 / 分屏、滤镜和画幅。接收端全屏展示远端画面，不启用麦克风音频。视频通过 WebRTC DTLS-SRTP 加密传输。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -177,137 +257,108 @@ struct WirelessMonitorSheet: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("完成") {
                         HapticFeedback.play(.button)
-                        cleanup()
+                        session.pairingSheetDidClose()
                         dismiss()
                     }
                 }
             }
-            .onAppear { configureAndStart() }
-            .onDisappear { cleanup() }
-            .onChange(of: network.pairingCode) { _, code in
-                // A safety code to compare on both screens just appeared; get the user's attention.
+            .onAppear {
+                session.configure(cameraManager: cam)
+                if session.isSecurelyPaired {
+                    dismiss()
+                } else {
+                    session.startDiscovery()
+                }
+            }
+            .onDisappear {
+                session.pairingSheetDidClose()
+            }
+            .onChange(of: session.pairingCode) { _, code in
                 if code != nil { HapticFeedback.play(.focus) }
             }
-            .onChange(of: network.isSecurelyPaired) { wasPaired, paired in
+            .onChange(of: session.isSecurelyPaired) { _, paired in
                 if paired {
                     HapticFeedback.play(.success)
-                } else if wasPaired, mode != .idle {
-                    // The peer vanished mid-stream (no "stop" message ever arrives). Without this the
-                    // receiver stays on a black screen with its own camera suspended, and the sender
-                    // keeps pushing frames into a dead connection.
-                    HapticFeedback.play(.error)
-                    stopVideoAfterPeerLoss()
+                    dismiss()
                 }
             }
         }
     }
-
-    private func configureAndStart() {
-        let transport = rtc
-        let peerService = network
-        peerService.onSignalReceived = { [weak transport] data in
-            transport?.handleSignal(data)
-        }
-        transport.onSignal = { [weak peerService, weak transport] data in
-            guard let peerService else {
-                transport?.reportSignallingFailure("安全连接已关闭")
-                return
-            }
-            peerService.sendSignal(data)
-        }
-
-        let cameraManager = cam
-        let frameSource = cameraManager.compositedFrameSource
-        let modeBinding = $mode
-        transport.onPeerStopped = {
-            HapticFeedback.play(.button)
-            frameSource.setSink(nil)
-            cameraManager.setLocalCameraCaptureSuspended(false)
-            DispatchQueue.main.async { modeBinding.wrappedValue = .idle }
-        }
-        network.start()
-    }
-
-    private func startSending() {
-        guard network.isSecurelyPaired, mode == .idle else { return }
-        mode = .sending
-        let transport = rtc
-        cam.compositedFrameSource.setSink { [weak transport] frame in
-            transport?.push(frame)
-        }
-        rtc.startSending()
-    }
-
-    private func startReceiving() {
-        guard network.isSecurelyPaired, mode == .idle else { return }
-        mode = .receiving
-        cam.compositedFrameSource.setSink(nil)
-        cam.setLocalCameraCaptureSuspended(true)
-        rtc.startReceiving()
-    }
-
-    private func stopVideo() {
-        cam.compositedFrameSource.setSink(nil)
-        cam.setLocalCameraCaptureSuspended(false)
-        rtc.stopAndNotifyPeer()
-        mode = .idle
-    }
-
-    /// The secure link dropped underneath a running video session: there is nobody to notify.
-    private func stopVideoAfterPeerLoss() {
-        cam.compositedFrameSource.setSink(nil)
-        cam.setLocalCameraCaptureSuspended(false)
-        rtc.stop()
-        mode = .idle
-    }
-
-    private func cleanup() {
-        cam.compositedFrameSource.setSink(nil)
-        cam.setLocalCameraCaptureSuspended(false)
-        rtc.onSignal = nil
-        rtc.onPeerStopped = nil
-        network.onSignalReceived = nil
-        rtc.stop()
-        network.stop()
-        mode = .idle
-    }
 }
 
-private enum MonitorMode {
-    case idle
-    case sending
-    case receiving
-}
-
-private struct RemoteMonitorVideoSurface: UIViewRepresentable {
+struct RemoteMonitorVideoSurface: UIViewRepresentable {
     let track: RTCVideoTrack?
+    let onFirstFrame: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> RTCMTLVideoView {
         let view = RTCMTLVideoView()
-        view.videoContentMode = .scaleAspectFit
+        view.videoContentMode = .scaleAspectFill
         view.backgroundColor = .black
-        context.coordinator.update(track: track, renderer: view)
+        context.coordinator.update(track: track, renderer: view, onFirstFrame: onFirstFrame)
         return view
     }
 
     func updateUIView(_ uiView: RTCMTLVideoView, context: Context) {
-        context.coordinator.update(track: track, renderer: uiView)
+        context.coordinator.update(track: track, renderer: uiView, onFirstFrame: onFirstFrame)
     }
 
     static func dismantleUIView(_ uiView: RTCMTLVideoView, coordinator: Coordinator) {
-        coordinator.update(track: nil, renderer: uiView)
+        coordinator.update(track: nil, renderer: uiView, onFirstFrame: {})
     }
 
     final class Coordinator {
-        private weak var currentTrack: RTCVideoTrack?
+        private var currentTrack: RTCVideoTrack?
+        private weak var currentRenderer: RTCMTLVideoView?
+        private var frameProbe: IncomingFrameProbe?
 
-        func update(track: RTCVideoTrack?, renderer: RTCMTLVideoView) {
-            if currentTrack === track { return }
-            currentTrack?.remove(renderer)
+        func update(track: RTCVideoTrack?, renderer: RTCMTLVideoView, onFirstFrame: @escaping () -> Void) {
+            if currentTrack === track && currentRenderer === renderer { return }
+            detach()
             currentTrack = track
-            track?.add(renderer)
+            currentRenderer = renderer
+            guard let track else { return }
+
+            let probe = IncomingFrameProbe(onFirstFrame: onFirstFrame)
+            frameProbe = probe
+            track.add(renderer)
+            track.add(probe)
+        }
+
+        private func detach() {
+            if let currentTrack, let currentRenderer {
+                currentTrack.remove(currentRenderer)
+            }
+            if let currentTrack, let frameProbe {
+                currentTrack.remove(frameProbe)
+            }
+            currentTrack = nil
+            currentRenderer = nil
+            frameProbe = nil
+        }
+    }
+}
+
+private final class IncomingFrameProbe: NSObject, RTCVideoRenderer {
+    private let lock = NSLock()
+    private let onFirstFrame: () -> Void
+    private var hasReported = false
+
+    init(onFirstFrame: @escaping () -> Void) {
+        self.onFirstFrame = onFirstFrame
+    }
+
+    func setSize(_ size: CGSize) {}
+
+    func renderFrame(_ frame: RTCVideoFrame?) {
+        guard frame != nil else { return }
+        lock.lock()
+        let shouldReport = !hasReported
+        hasReported = true
+        lock.unlock()
+        if shouldReport {
+            DispatchQueue.main.async { [onFirstFrame] in onFirstFrame() }
         }
     }
 }
