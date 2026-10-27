@@ -201,37 +201,40 @@ struct CameraScreen: View {
                 // Receiver mode is intentionally distraction-free: show the incoming
                 // composited video edge-to-edge, with only a close control on top.
                 if wirelessSession.mode == .receiving {
-                    ZStack(alignment: .topTrailing) {
-                        Color.black
-                            .frame(width: canvasSize.width, height: canvasSize.height)
-                            .contentShape(Rectangle())
+                    // Fill the physical screen, not only the safe-area canvas. This also
+                    // prevents the camera UI beneath the remote feed from receiving touches.
+                    GeometryReader { screen in
+                        ZStack(alignment: .topTrailing) {
+                            Color.black
+                                .frame(width: screen.size.width, height: screen.size.height)
+                                .contentShape(Rectangle())
 
-                        if let track = wirelessSession.remoteVideoTrack {
-                            RemoteMonitorVideoSurface(track: track) {
-                                wirelessSession.remoteFrameDidArrive()
+                            if let track = wirelessSession.remoteVideoTrack {
+                                RemoteMonitorVideoSurface(track: track) {
+                                    wirelessSession.remoteFrameDidArrive()
+                                }
+                                .frame(width: screen.size.width, height: screen.size.height)
+                                .allowsHitTesting(false)
                             }
-                            .frame(width: canvasSize.width, height: canvasSize.height)
-                            .allowsHitTesting(false)
-                        }
 
-                        Button {
-                            HapticFeedback.play(.button)
-                            wirelessSession.stopVideo()
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 13, weight: .bold))
-                                .foregroundStyle(.white)
-                                .frame(width: 36, height: 36)
-                                .background(.ultraThinMaterial, in: Circle())
-                                .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 1))
+                            Button {
+                                HapticFeedback.play(.button)
+                                wirelessSession.stopVideo()
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .frame(width: 36, height: 36)
+                                    .background(.ultraThinMaterial, in: Circle())
+                                    .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("关闭画面")
+                            .padding(.top, 12)
+                            .padding(.trailing, 12)
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("关闭画面")
-                        .padding(.top, 12)
-                        .padding(.trailing, 12)
+                        .frame(width: screen.size.width, height: screen.size.height)
                     }
-                    .frame(width: canvasSize.width, height: canvasSize.height)
-                    .offset(x: canvasOffset.width, y: canvasOffset.height)
                     .ignoresSafeArea()
                     .zIndex(100)
                 }
