@@ -228,25 +228,39 @@ struct WirelessMonitorSheet: View {
     @EnvironmentObject private var cam: CameraManager
     @Environment(\.dismiss) private var dismiss
 
+    private let blue = Color(uiColor: .systemBlue)
+    private let indigo = Color(uiColor: .systemIndigo)
+
     var body: some View {
         NavigationStack {
-            ScrollView(showsIndicators: false) {
-                VStack(spacing: 16) {
-                    headerCard
-                    connectionStatusCard
-                    nearbyDevicesCard
-                    if let code = session.pairingCode, !session.isSecurelyPaired {
-                        pairingCodeCard(code)
+            ZStack(alignment: .top) {
+                Color(uiColor: .systemGroupedBackground).ignoresSafeArea()
+                LinearGradient(
+                    colors: [blue.opacity(0.12), indigo.opacity(0.045), .clear],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .frame(height: 300)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 14) {
+                        heroCard
+                        connectionCard
+                        nearbyDevicesCard
+                        if let code = session.pairingCode, !session.isSecurelyPaired {
+                            pairingCodeCard(code)
+                        }
+                        privacyNote
                     }
-                    privacyCard
+                    .padding(.horizontal, 18)
+                    .padding(.top, 14)
+                    .padding(.bottom, 30)
+                    .frame(maxWidth: 640)
+                    .frame(maxWidth: .infinity)
                 }
-                .padding(.horizontal, 18)
-                .padding(.top, 12)
-                .padding(.bottom, 28)
-                .frame(maxWidth: 620)
-                .frame(maxWidth: .infinity)
             }
-            .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
             .navigationTitle("无线互联")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -259,259 +273,289 @@ struct WirelessMonitorSheet: View {
                     .fontWeight(.semibold)
                 }
             }
-            .tint(Color(uiColor: .systemBlue))
-            .onAppear {
-                session.configure(cameraManager: cam)
-                if session.isSecurelyPaired {
-                    dismiss()
-                } else {
-                    session.startDiscovery()
-                }
+            .tint(blue)
+        }
+        .presentationDragIndicator(.visible)
+        .onAppear {
+            session.configure(cameraManager: cam)
+            if session.isSecurelyPaired {
+                dismiss()
+            } else {
+                session.startDiscovery()
             }
-            .onDisappear {
-                session.pairingSheetDidClose()
-            }
-            .onChange(of: session.pairingCode) { _, code in
-                if code != nil { HapticFeedback.play(.focus) }
-            }
-            .onChange(of: session.isSecurelyPaired) { _, paired in
-                if paired {
-                    HapticFeedback.play(.success)
-                    dismiss()
-                }
+        }
+        .onDisappear {
+            session.pairingSheetDidClose()
+        }
+        .onChange(of: session.pairingCode) { _, code in
+            if code != nil { HapticFeedback.play(.focus) }
+        }
+        .onChange(of: session.isSecurelyPaired) { _, paired in
+            if paired {
+                HapticFeedback.play(.success)
+                dismiss()
             }
         }
     }
 
-    private var headerCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .top, spacing: 14) {
-                Image(systemName: "dot.radiowaves.left.and.right")
-                    .font(.system(size: 25, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 58, height: 58)
-                    .background(
-                        LinearGradient(
-                            colors: [
-                                Color(uiColor: .systemBlue),
-                                Color(uiColor: .systemIndigo)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        in: RoundedRectangle(cornerRadius: 19, style: .continuous)
-                    )
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("让两台设备协同取景")
-                        .font(.system(.title3, design: .rounded, weight: .bold))
-                        .foregroundStyle(.primary)
-                    Text("同步 DualCam 实时合成画面")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    Text("双摄 · 画中画 · 滤镜")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(Color(uiColor: .systemBlue))
+    private var heroCard: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [blue, indigo],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                    Image(systemName: "dot.radiowaves.left.and.right")
+                        .font(.system(size: 27, weight: .semibold))
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(.white)
                 }
-                Spacer(minLength: 0)
+                .frame(width: 66, height: 66)
+                .shadow(color: blue.opacity(0.22), radius: 16, y: 7)
+
+                Spacer()
+
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(session.isSecurelyPaired ? Color(uiColor: .systemGreen) : Color(uiColor: .systemOrange))
+                        .frame(width: 7, height: 7)
+                    Text(session.isSecurelyPaired ? "安全连接已建立" : "等待设备连接")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(session.isSecurelyPaired ? Color(uiColor: .systemGreen) : .secondary)
+                }
+                .padding(.horizontal, 11)
+                .padding(.vertical, 8)
+                .background(Color(uiColor: .secondarySystemGroupedBackground).opacity(0.88), in: Capsule())
+            }
+
+            VStack(alignment: .leading, spacing: 7) {
+                Text("让两台设备，\n协同取景。")
+                    .font(.system(size: 29, weight: .bold, design: .rounded))
+                    .tracking(-0.6)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text("实时同步最终合成画面，画中画、分屏与滤镜都会完整保留。")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .lineSpacing(3)
             }
 
             HStack(spacing: 8) {
-                Circle()
-                    .fill(session.isSecurelyPaired ? Color(uiColor: .systemGreen) : Color(uiColor: .systemOrange))
-                    .frame(width: 8, height: 8)
-                Text(session.isSecurelyPaired ? "安全配对已建立" : "等待设备连接")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                Spacer()
-                Text(session.localDeviceName)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                featurePill("双摄合成", icon: "camera.aperture")
+                featurePill("低延迟视频", icon: "waveform.path")
+                featurePill("加密传输", icon: "lock.shield")
             }
-            .padding(.horizontal, 13)
-            .padding(.vertical, 11)
-            .background(Color(uiColor: .secondarySystemGroupedBackground).opacity(0.76),
-                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
-        .padding(18)
+        .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(uiColor: .secondarySystemGroupedBackground),
-                    in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .background(
+            LinearGradient(
+                colors: [
+                    Color(uiColor: .secondarySystemGroupedBackground),
+                    blue.opacity(0.055)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ),
+            in: RoundedRectangle(cornerRadius: 28, style: .continuous)
+        )
         .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(Color.primary.opacity(0.045), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .stroke(blue.opacity(0.10), lineWidth: 1)
         )
     }
 
-    private var connectionStatusCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            cardHeading("连接状态", subtitle: "网络发现与实时视频链路")
+    private func featurePill(_ title: String, icon: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(.system(size: 10, weight: .semibold))
+            Text(title)
+                .font(.system(size: 10, weight: .semibold))
+                .lineLimit(1)
+        }
+        .foregroundStyle(blue)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .background(blue.opacity(0.085), in: Capsule())
+    }
 
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: session.isSecurelyPaired ? "checkmark.shield.fill" : "wifi")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(session.isSecurelyPaired ? Color(uiColor: .systemGreen) : Color(uiColor: .systemBlue))
-                    .frame(width: 38, height: 38)
-                    .background(Color(uiColor: .tertiarySystemGroupedBackground),
-                                in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("本地网络")
-                        .font(.subheadline.weight(.semibold))
-                    Text(session.networkStatusText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 0)
-            }
+    private var connectionCard: some View {
+        card {
+            VStack(alignment: .leading, spacing: 15) {
+                sectionHeading("连接状态", subtitle: "设备发现与视频传输")
 
-            Divider()
+                statusRow(
+                    icon: "wifi",
+                    title: "本地网络",
+                    detail: session.networkStatusText,
+                    tint: blue
+                )
 
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "video.fill")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Color(uiColor: .systemIndigo))
-                    .frame(width: 38, height: 38)
-                    .background(Color(uiColor: .tertiarySystemGroupedBackground),
-                                in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("实时画面")
-                        .font(.subheadline.weight(.semibold))
-                    Text(session.rtcStatusText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 0)
+                Divider().overlay(Color.primary.opacity(0.04))
+
+                statusRow(
+                    icon: "video.fill",
+                    title: "实时画面",
+                    detail: session.rtcStatusText,
+                    tint: indigo
+                )
             }
         }
-        .padding(17)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(uiColor: .secondarySystemGroupedBackground),
-                    in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color.primary.opacity(0.045), lineWidth: 1)
-        )
     }
 
     private var nearbyDevicesCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline) {
-                cardHeading("附近的设备", subtitle: "选择另一台 DualCam 设备")
-                Spacer()
-                Button {
-                    HapticFeedback.play(.selection)
-                    session.startDiscovery()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Color(uiColor: .systemBlue))
-                        .frame(width: 34, height: 34)
-                        .background(Color(uiColor: .tertiarySystemGroupedBackground), in: Circle())
+        card {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .center) {
+                    sectionHeading("附近的设备", subtitle: "选择另一台 DualCam 设备")
+                    Spacer(minLength: 8)
+                    Button {
+                        HapticFeedback.play(.selection)
+                        session.startDiscovery()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(blue)
+                            .frame(width: 38, height: 38)
+                            .background(blue.opacity(0.09), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("重新搜索设备")
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("重新搜索设备")
-            }
 
-            if session.nearbyDevices.isEmpty {
-                VStack(spacing: 11) {
-                    Image(systemName: "iphone.gen3.radiowaves.left.and.right")
-                        .font(.system(size: 25, weight: .regular))
-                        .foregroundStyle(Color(uiColor: .systemBlue))
-                        .frame(width: 62, height: 62)
-                        .background(Color(uiColor: .systemBlue).opacity(0.09), in: Circle())
-                    Text("正在寻找附近设备")
-                        .font(.subheadline.weight(.semibold))
-                    Text("请让另一台设备也打开无线互联，并允许 DualCam 访问本地网络。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: 300)
-                    ProgressView()
-                        .tint(Color(uiColor: .systemBlue))
-                        .padding(.top, 2)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 20)
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(session.nearbyDevices.enumerated()), id: \.element.id) { index, device in
-                        HStack(spacing: 12) {
-                            Image(systemName: "iphone.gen3")
-                                .font(.system(size: 20, weight: .medium))
-                                .foregroundStyle(Color(uiColor: .systemBlue))
-                                .frame(width: 46, height: 46)
-                                .background(Color(uiColor: .tertiarySystemGroupedBackground),
-                                            in: RoundedRectangle(cornerRadius: 15, style: .continuous))
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(device.name)
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(.primary)
-                                Text("DualCam · 附近可用")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer(minLength: 4)
+                if session.nearbyDevices.isEmpty {
+                    VStack(spacing: 12) {
+                        ZStack {
+                            Circle()
+                                .fill(blue.opacity(0.09))
+                                .frame(width: 68, height: 68)
+                            Circle()
+                                .stroke(blue.opacity(0.17), lineWidth: 1)
+                                .frame(width: 68, height: 68)
+                            Image(systemName: "dot.radiowaves.left.and.right")
+                                .font(.system(size: 25, weight: .medium))
+                                .foregroundStyle(blue)
+                        }
+                        .padding(.top, 7)
+
+                        Text("正在寻找附近设备")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+
+                        Text("请让另一台设备也打开无线互联，并允许 DualCam 访问本地网络。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: 320)
+
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(blue)
+                            .padding(.top, 2)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 17)
+                } else {
+                    VStack(spacing: 0) {
+                        ForEach(Array(session.nearbyDevices.enumerated()), id: \.element.id) { index, device in
                             Button {
                                 HapticFeedback.play(.button)
                                 session.network.connect(to: device)
                             } label: {
-                                Text("连接")
-                                    .font(.subheadline.weight(.semibold))
-                                    .padding(.horizontal, 15)
-                                    .padding(.vertical, 8)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                            .disabled(session.isSecurelyPaired)
-                        }
-                        .padding(.vertical, 10)
+                                HStack(spacing: 12) {
+                                    ZStack {
+                                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                            .fill(blue.opacity(0.09))
+                                        Image(systemName: device.name.localizedCaseInsensitiveContains("ipad") ? "ipad.gen2" : "iphone.gen3")
+                                            .font(.system(size: 21, weight: .medium))
+                                            .foregroundStyle(blue)
+                                    }
+                                    .frame(width: 48, height: 48)
 
-                        if index < session.nearbyDevices.count - 1 {
-                            Divider().padding(.leading, 58)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(device.name)
+                                            .font(.subheadline.weight(.semibold))
+                                            .foregroundStyle(.primary)
+                                            .lineLimit(1)
+                                        Text("DualCam · 附近可用")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+
+                                    Spacer(minLength: 4)
+
+                                    HStack(spacing: 5) {
+                                        Text("连接")
+                                            .font(.subheadline.weight(.semibold))
+                                        Image(systemName: "arrow.up.right")
+                                            .font(.system(size: 10, weight: .bold))
+                                    }
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 13)
+                                    .padding(.vertical, 9)
+                                    .background(blue, in: Capsule())
+                                }
+                                .contentShape(Rectangle())
+                                .padding(.vertical, 10)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(session.isSecurelyPaired)
+                            .opacity(session.isSecurelyPaired ? 0.55 : 1)
+
+                            if index < session.nearbyDevices.count - 1 {
+                                Divider().padding(.leading, 60)
+                            }
                         }
                     }
                 }
             }
         }
-        .padding(17)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(uiColor: .secondarySystemGroupedBackground),
-                    in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color.primary.opacity(0.045), lineWidth: 1)
-        )
     }
 
     private func pairingCodeCard(_ code: String) -> some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 10) {
-                Image(systemName: "lock.shield.fill")
-                    .font(.system(size: 19, weight: .semibold))
-                    .foregroundStyle(Color(uiColor: .systemBlue))
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("验证安全连接")
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(blue.opacity(0.10))
+                    Image(systemName: "lock.shield.fill")
+                        .font(.system(size: 19, weight: .semibold))
+                        .foregroundStyle(blue)
+                }
+                .frame(width: 44, height: 44)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("核对安全验证码")
                         .font(.headline)
-                    Text("两台设备都要显示相同验证码")
+                    Text("两台设备必须显示相同数字")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                Spacer(minLength: 0)
             }
 
             Text(code)
-                .font(.system(size: 34, weight: .semibold, design: .rounded).monospacedDigit())
-                .tracking(8)
+                .font(.system(size: 36, weight: .bold, design: .rounded).monospacedDigit())
+                .tracking(9)
                 .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 17)
-                .background(Color(uiColor: .tertiarySystemGroupedBackground),
-                            in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+                .padding(.vertical, 18)
+                .background(blue.opacity(0.065), in: RoundedRectangle(cornerRadius: 19, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 19, style: .continuous)
+                        .stroke(blue.opacity(0.13), lineWidth: 1)
+                )
                 .accessibilityLabel("安全配对验证码 \(code)")
 
-            Text("请亲自核对两台设备上的数字。只有完全一致时才确认；不一致就拒绝连接。")
+            Text("请亲自核对两台设备上的数字。完全一致时再确认；若不一致，请拒绝连接。")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -523,10 +567,11 @@ struct WirelessMonitorSheet: View {
                 Label("验证码一致，确认连接", systemImage: "checkmark.shield.fill")
                     .font(.body.weight(.semibold))
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 5)
+                    .padding(.vertical, 7)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
+            .tint(blue)
             .disabled(session.isSecurelyPaired)
 
             Button(role: .destructive) {
@@ -534,47 +579,63 @@ struct WirelessMonitorSheet: View {
                 session.network.rejectPairing()
             } label: {
                 Text("拒绝此次连接")
-                    .font(.subheadline.weight(.medium))
+                    .font(.subheadline.weight(.semibold))
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 3)
+                    .padding(.vertical, 4)
             }
             .buttonStyle(.plain)
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(uiColor: .secondarySystemGroupedBackground),
-                    in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color(uiColor: .systemBlue).opacity(0.22), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(blue.opacity(0.20), lineWidth: 1)
         )
+        .shadow(color: blue.opacity(0.045), radius: 18, y: 8)
     }
 
-    private var privacyCard: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "hand.raised.fingers.spread.fill")
-                .font(.system(size: 17, weight: .medium))
+    private var privacyNote: some View {
+        HStack(alignment: .top, spacing: 11) {
+            Image(systemName: "lock.shield.fill")
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Color(uiColor: .systemGreen))
-                .frame(width: 36, height: 36)
-                .background(Color(uiColor: .systemGreen).opacity(0.10),
-                            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            VStack(alignment: .leading, spacing: 5) {
-                Text("端到端保护你的画面")
+                .frame(width: 30, height: 30)
+                .background(Color(uiColor: .systemGreen).opacity(0.10), in: Circle())
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("你的画面只发送给已配对设备")
                     .font(.subheadline.weight(.semibold))
-                Text("确认配对后，选择共享本机合成画面或全屏接收画面。视频使用 WebRTC DTLS-SRTP 加密传输，不启用麦克风音频。关闭此窗口不会结束已建立的会话。")
+                    .foregroundStyle(.primary)
+                Text("实时视频使用 WebRTC DTLS-SRTP 加密传输，不启用麦克风音频。关闭此窗口不会结束已建立的会话。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .lineSpacing(2)
             }
             Spacer(minLength: 0)
         }
-        .padding(15)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(uiColor: .secondarySystemGroupedBackground).opacity(0.70),
-                    in: RoundedRectangle(cornerRadius: 19, style: .continuous))
+        .padding(.horizontal, 5)
+        .padding(.vertical, 8)
     }
 
-    private func cardHeading(_ title: String, subtitle: String) -> some View {
+    private func card<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content()
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                Color(uiColor: .secondarySystemGroupedBackground),
+                in: RoundedRectangle(cornerRadius: 24, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .stroke(Color.primary.opacity(0.045), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.025), radius: 14, y: 5)
+    }
+
+    private func sectionHeading(_ title: String, subtitle: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
                 .font(.headline)
@@ -582,6 +643,31 @@ struct WirelessMonitorSheet: View {
             Text(subtitle)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private func statusRow(icon: String, title: String, detail: String, tint: Color) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .fill(tint.opacity(0.10))
+                Image(systemName: icon)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(tint)
+            }
+            .frame(width: 40, height: 40)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .lineSpacing(2)
+            }
+            Spacer(minLength: 0)
         }
     }
 }
