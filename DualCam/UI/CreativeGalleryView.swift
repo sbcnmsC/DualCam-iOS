@@ -37,10 +37,9 @@ struct CreativeGalleryView: View {
         .preferredColorScheme(.dark)
         .fullScreenCover(item: $detailItem) { item in
             CameraAlbumPhotoDetail(
-                url: item.url,
-                pipRegion: cam.archivedPiPRegion(for: item.url),
-                secondaryPreviewURL: cam.archivedSecondaryPreviewURL(for: item.url),
-                onExport: { exportToSystemPhotos([item.url]) }
+                photoURLs: cam.compositePhotoURLs,
+                initialURL: item.url,
+                onExport: { url in exportToSystemPhotos([url]) }
             )
         }
         .alert("导出到系统相册", isPresented: $exportAlert) {
@@ -298,17 +297,33 @@ private struct CameraAlbumThumbnail: View {
 }
 
 private struct CameraAlbumPhotoDetail: View {
-    let url: URL
-    let pipRegion: CGRect?
-    let secondaryPreviewURL: URL?
-    let onExport: () -> Void
+    @EnvironmentObject private var cam: CameraManager
+    let photoURLs: [URL]
+    let initialURL: URL
+    let onExport: (URL) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @State private var currentIndex: Int
     @State private var image: UIImage?
     @State private var secondaryImage: UIImage?
     @State private var showingSubwindow = false
     @State private var zoom: CGFloat = 1
     @State private var loadFailed = false
+
+    init(photoURLs: [URL], initialURL: URL, onExport: @escaping (URL) -> Void) {
+        self.photoURLs = photoURLs
+        self.initialURL = initialURL
+        self.onExport = onExport
+        _currentIndex = State(initialValue: max(0, photoURLs.firstIndex(of: initialURL) ?? 0))
+    }
+
+    private var currentURL: URL {
+        photoURLs[min(max(currentIndex, 0), photoURLs.count - 1)]
+    }
+
+    private var currentPiPRegion: CGRect? {
+        cam.archivedPiPRegion(for: currentURL)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -333,13 +348,18 @@ private struct CameraAlbumPhotoDetail: View {
                 VStack(spacing: 2) {
                     Text(showingSubwindow ? "副摄画面" : "合成照片")
                         .font(.system(size: 15, weight: .semibold))
-                    Text(showingSubwindow ? "小窗单独预览" : "点小窗可单独预览")
+                    Text(showingSubwindow
+                         ? "小窗单独预览"
+                         : "\(currentIndex + 1) / \(photoURLs.count) · 左右滑动切换")
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.white.opacity(0.52))
+                        .lineLimit(1)
                 }
                 Spacer(minLength: 0)
 
-                Button(action: onExport) {
+                Button {
+                    onExport(currentURL)
+                } label: {
                     Image(systemName: "square.and.arrow.down")
                         .font(.system(size: 15, weight: .semibold))
                         .frame(width: 42, height: 42)
@@ -374,7 +394,7 @@ private struct CameraAlbumPhotoDetail: View {
                             .position(x: geo.size.width / 2, y: geo.size.height / 2)
                             .allowsHitTesting(false)
 
-                        if !showingSubwindow, zoom <= 1.05, let pipRegion {
+                        if !showingSubwindow, zoom <= 1.05, let pipRegion = currentPiPRegion {
                             let hitRect = displayRect(for: pipRegion, fittedSize: fitted, containerSize: geo.size)
                             Button(action: showSecondaryPreview) {
                                 RoundedRectangle(cornerRadius: 7)
@@ -406,8 +426,37 @@ private struct CameraAlbumPhotoDetail: View {
                     } else {
                         ProgressView().tint(.yellow)
                     }
+
+                    if photoURLs.count > 1 && !showingSubwindow {
+                        HStack {
+                            if currentIndex > 0 {
+                                edgeButton(systemName: "chevron.left") { movePhoto(by: -1) }
+                            } else {
+                                Color.clear.frame(width: 34)
+                            }
+                            Spacer(minLength: 0)
+                            if currentIndex < photoURLs.count - 1 {
+                                edgeButton(systemName: "chevron.right") { movePhoto(by: 1) }
+                            } else {
+                                Color.clear.frame(width: 34)
+                            }
+                        }
+                        .padding(.horizontal, 6)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                    }
                 }
                 .contentShape(Rectangle())
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 35, coordinateSpace: .local)
+                        .onEnded { value in
+                            let dx = value.translation.width
+                            let dy = value.translation.height
+                            guard abs(dx) >= 58, abs(dx) > abs(dy) * 1.25 else { return }
+                            // Swipe left moves to the next older photo; swipe right moves to newer.
+                            movePhoto(by: dx < 0 ? 1 : -1)
+                        }
+                )
                 .simultaneousGesture(
                     MagnificationGesture()
                         .onChanged { value in zoom = min(max(value, 1), 5) }
@@ -417,11 +466,11 @@ private struct CameraAlbumPhotoDetail: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             HStack(spacing: 8) {
-                Image(systemName: showingSubwindow ? "rectangle.on.rectangle" : "hand.tap")
+                Image(systemName: showingSubwindow ? "rectangle.on.rectangle" : "hand.draw")
                     .foregroundStyle(Color.yellow)
                 Text(showingSubwindow
                      ? "正在单独预览副摄画面"
-                     : (pipRegion == nil ? "合成照片" : "轻点小窗，查看副摄原画面"))
+                     : (currentPiPRegion == nil ? "左右滑动切换照片" : "左右滑动切换 · 点小窗单独预览"))
                     .foregroundStyle(.white.opacity(0.62))
                 Spacer(minLength: 0)
                 if showingSubwindow {
@@ -441,15 +490,49 @@ private struct CameraAlbumPhotoDetail: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black.ignoresSafeArea())
-        .task {
-            let loadedMain = await GalleryImageLoader.load(url, maxPixel: 4096, priority: .userInitiated)
+        .task(id: currentURL) {
+            image = nil
+            secondaryImage = nil
+            loadFailed = false
+            zoom = 1
+            showingSubwindow = false
+
+            let requestedURL = currentURL
+            let secondaryURL = cam.archivedSecondaryPreviewURL(for: requestedURL)
+            let loadedMain = await GalleryImageLoader.load(requestedURL, maxPixel: 4096, priority: .userInitiated)
+            guard !Task.isCancelled else { return }
             image = loadedMain
             loadFailed = loadedMain == nil
-            if let secondaryPreviewURL {
-                secondaryImage = await GalleryImageLoader.load(secondaryPreviewURL, maxPixel: 4096, priority: .userInitiated)
+            if let secondaryURL {
+                let loadedSecondary = await GalleryImageLoader.load(secondaryURL, maxPixel: 4096, priority: .userInitiated)
+                guard !Task.isCancelled else { return }
+                secondaryImage = loadedSecondary
             }
         }
         .preferredColorScheme(.dark)
+    }
+
+    @ViewBuilder
+    private func edgeButton(systemName: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(.white.opacity(0.72))
+                .frame(width: 34, height: 62)
+                .background(Color.black.opacity(0.2), in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func movePhoto(by offset: Int) {
+        let next = currentIndex + offset
+        guard photoURLs.indices.contains(next) else { return }
+        currentIndex = next
+        image = nil
+        secondaryImage = nil
+        loadFailed = false
+        showingSubwindow = false
+        zoom = 1
     }
 
     private func fittedSize(_ imageSize: CGSize, in container: CGSize) -> CGSize {
@@ -474,7 +557,8 @@ private struct CameraAlbumPhotoDetail: View {
             zoom = 1
             return
         }
-        guard let image, let pipRegion, let cropped = crop(image, normalized: pipRegion) else { return }
+        guard let image, let pipRegion = currentPiPRegion,
+              let cropped = crop(image, normalized: pipRegion) else { return }
         secondaryImage = cropped
         showingSubwindow = true
         zoom = 1
@@ -506,5 +590,4 @@ private struct CameraAlbumPhotoDetail: View {
         return UIImage(cgImage: cropped, scale: upright.scale, orientation: .up)
     }
 }
-
 
