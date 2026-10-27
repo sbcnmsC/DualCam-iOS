@@ -111,7 +111,7 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
         // other frame of a plain 30 fps feed.
         if frame.presentationTime.isValid, lastQueuedPTS.isValid {
             let delta = CMTimeGetSeconds(CMTimeSubtract(frame.presentationTime, lastQueuedPTS))
-            if delta >= 0, delta < (0.8 / 30.0) {
+            if delta >= 0, delta < (0.8 / 60.0) {
                 frameLock.unlock()
                 return
             }
@@ -146,7 +146,7 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
 
         if let frame, sending, let source, let capturer {
             if needsAdapt {
-                source.adaptOutputFormat(toWidth: Int32(frame.width), height: Int32(frame.height), fps: 30)
+                source.adaptOutputFormat(toWidth: Int32(frame.width), height: Int32(frame.height), fps: 60)
             }
             capturer.capture(pixelBuffer: frame.pixelBuffer, presentationTime: frame.presentationTime)
         }
