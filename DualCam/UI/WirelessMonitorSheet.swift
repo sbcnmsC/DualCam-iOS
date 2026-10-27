@@ -110,12 +110,18 @@ final class WirelessMonitorSession: ObservableObject {
         cameraManager.compositedFrameSource.setSink { [weak transport] frame in
             transport?.push(frame)
         }
-        rtc.startSending()
+        // Request the foreground Dynamic Island presentation first; only then start WebRTC
+        // so the activity request isn't deferred behind video connection setup.
         Task { @MainActor [weak self] in
-            guard let self else { return }
+            guard let self, self.mode == .sending else { return }
             if let failure = await MonitorLiveActivityManager.shared.start() {
                 self.cameraManager?.showToast("灵动岛未启动：\(failure)")
             }
+            guard self.mode == .sending else {
+                await MonitorLiveActivityManager.shared.stop()
+                return
+            }
+            self.rtc.startSending()
         }
     }
 

@@ -14,14 +14,14 @@ struct DualCamShareLiveActivity: Widget {
         ActivityConfiguration(for: MonitorShareAttributes.self) { context in
             // Lock Screen / banner presentation.
             HStack(spacing: 12) {
-                Image(systemName: "dot.radiowaves.left.and.right")
-                    .font(.title2.weight(.semibold))
-                    .foregroundStyle(.green)
+                Circle()
+                    .fill(Color.red)
+                    .frame(width: 9, height: 9)
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("DualCam \(context.state.status)")
+                    Text("DualCam 正在共享")
                         .font(.headline)
-                    Text(context.attributes.deviceName)
+                    Text("双摄画面传输中")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -38,15 +38,21 @@ struct DualCamShareLiveActivity: Widget {
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    Image(systemName: "dot.radiowaves.left.and.right")
-                        .foregroundStyle(.green)
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(Color.red)
+                            .frame(width: 8, height: 8)
+                        Text("REC")
+                            .font(.system(.caption, design: .rounded).weight(.bold))
+                            .foregroundStyle(.red)
+                    }
                 }
 
                 DynamicIslandExpandedRegion(.center) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("DualCam \(context.state.status)")
+                        Text("DualCam 正在共享")
                             .font(.headline)
-                        Text(context.attributes.deviceName)
+                        Text("双摄画面传输中")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -59,30 +65,26 @@ struct DualCamShareLiveActivity: Widget {
                 }
 
                 DynamicIslandExpandedRegion(.bottom) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Label(
-                            "合成画面 · \(context.state.resolution) / \(context.state.targetFPS) fps",
-                            systemImage: "video.fill"
-                        )
-                        .font(.caption)
-
-                        Text("实际帧率取决于摄像头、网络和设备负载")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
+                    Label(
+                        "双摄合成 · \\(context.state.resolution) · \\(context.state.targetFPS) fps",
+                        systemImage: "video.fill"
+                    )
+                    .font(.caption)
                 }
             } compactLeading: {
-                Image(systemName: "dot.radiowaves.left.and.right")
-                    .foregroundStyle(.green)
+                Circle()
+                    .fill(Color.red)
+                    .frame(width: 8, height: 8)
             } compactTrailing: {
                 Text(context.attributes.startedAt, style: .timer)
                     .font(.system(.caption2, design: .monospaced))
                     .monospacedDigit()
             } minimal: {
-                Image(systemName: "dot.radiowaves.left.and.right")
-                    .foregroundStyle(.green)
+                Circle()
+                    .fill(Color.red)
+                    .frame(width: 8, height: 8)
             }
-            .keylineTint(.green)
+            .keylineTint(.red)
         }
     }
 }
