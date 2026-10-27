@@ -940,118 +940,9 @@ struct QuickParamsTab: View {
 
         Group {
             if isLandscape {
-                // Landscape-first parameter UI: all parameter choices run horizontally,
-                // with the matching controls laid out across the wide canvas beneath them.
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 6) {
-                        Text("快捷控制")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(Color.white.opacity(0.72))
-                        Spacer(minLength: 8)
-                        Picker("镜头", selection: $cam.paramTarget) {
-                            Text(cam.slotInfos[0].name).tag(0)
-                            Text(cam.slotInfos[1].name).tag(1)
-                        }
-                        .pickerStyle(.menu)
-                        .tint(.yellow)
-                        .frame(maxWidth: 170)
-                    }
-
-                    parameterActionBar(slot: i)
-
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(visibleItems) { item in
-                                Button {
-                                    withAnimation(.easeOut(duration: 0.18)) { selectedParameterName = item.rawValue }
-                                } label: {
-                                    HStack(spacing: 7) {
-                                        Image(systemName: item.icon)
-                                            .font(.system(size: 15, weight: .semibold))
-                                        Text(item.rawValue)
-                                            .font(.system(size: 12, weight: .medium))
-                                            .lineLimit(1)
-                                    }
-                                    .foregroundStyle(activeSelection == item ? Color.yellow : Color.white.opacity(0.82))
-                                    .padding(.horizontal, 13)
-                                    .frame(height: 42)
-                                    .background(RoundedRectangle(cornerRadius: 12)
-                                        .fill(activeSelection == item ? Color.yellow.opacity(0.14) : Color.white.opacity(0.06)))
-                                    .overlay(RoundedRectangle(cornerRadius: 12)
-                                        .stroke(activeSelection == item ? Color.yellow.opacity(0.7) : Color.clear, lineWidth: 1))
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .padding(.vertical, 2)
-                    }
-
-                    if visibleItems.isEmpty {
-                        Text("没有启用的快捷参数，请到设置中开启。")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Color.white.opacity(0.65))
-                    } else {
-                        ScrollView(.vertical, showsIndicators: false) {
-                            controlBody(slot: i, parameter: activeSelection)
-                                .disabled(controlsLocked)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.vertical, 2)
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                }
+                landscapeContent(slot: i, parameter: activeSelection)
             } else {
-                VStack(alignment: .leading, spacing: 9) {
-                    HStack(spacing: 6) {
-                        Text("快捷控制").font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(Color.white.opacity(0.65))
-                        Spacer()
-                        Picker("镜头", selection: $cam.paramTarget) {
-                            Text(cam.slotInfos[0].name).tag(0)
-                            Text(cam.slotInfos[1].name).tag(1)
-                        }
-                        .pickerStyle(.menu)
-                        .tint(.yellow)
-                        .frame(maxWidth: 150)
-                    }
-
-                    parameterActionBar(slot: i)
-
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 7) {
-                            ForEach(visibleItems) { item in
-                                Button {
-                                    withAnimation(.easeOut(duration: 0.15)) { selectedParameterName = item.rawValue }
-                                } label: {
-                                    VStack(spacing: 4) {
-                                        Image(systemName: item.icon)
-                                            .rotationEffect(.degrees(rotationDegrees))
-                                            .animation(.smooth(duration: 0.28), value: rotationDegrees)
-                                            .font(.system(size: 16, weight: .semibold))
-                                        Text(item.rawValue).font(.system(size: 10, weight: .medium))
-                                    }
-                                    .foregroundStyle(activeSelection == item ? Color.yellow : Color.white.opacity(0.8))
-                                    .frame(width: 59, height: 49)
-                                    .background(RoundedRectangle(cornerRadius: 10)
-                                        .fill(activeSelection == item ? Color.yellow.opacity(0.14) : Color.white.opacity(0.065)))
-                                    .overlay(RoundedRectangle(cornerRadius: 10)
-                                        .stroke(activeSelection == item ? Color.yellow.opacity(0.75) : Color.clear, lineWidth: 1))
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .padding(.vertical, 2)
-                    }
-
-                    if visibleItems.isEmpty {
-                        Text("没有启用的快捷参数。请在「设置 → 快捷栏优先显示」中开启至少一项。")
-                            .font(.system(size: 11))
-                            .foregroundStyle(Color.white.opacity(0.65))
-                    } else {
-                        controlBody(slot: i, parameter: activeSelection)
-                            .disabled(controlsLocked)
-                    }
-                }
+                portraitContent(slot: i, parameter: activeSelection)
             }
         }
         .onChange(of: selectedParameterName) { _, newValue in
@@ -1079,6 +970,124 @@ struct QuickParamsTab: View {
         .onChange(of: cam.cfg.fps) { _, _ in HapticFeedback.play(.selection) }
         .onChange(of: cam.timerSeconds) { _, _ in HapticFeedback.play(.selection) }
         .onChange(of: cam.cfg.stabilization) { _, _ in HapticFeedback.play(.selection) }
+    }
+
+
+    private func landscapeContent(slot: Int, parameter: QuickParameter) -> some View {
+// Landscape-first parameter UI: all parameter choices run horizontally,
+                // with the matching controls laid out across the wide canvas beneath them.
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 6) {
+                        Text("快捷控制")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Color.white.opacity(0.72))
+                        Spacer(minLength: 8)
+                        Picker("镜头", selection: $cam.paramTarget) {
+                            Text(cam.slotInfos[0].name).tag(0)
+                            Text(cam.slotInfos[1].name).tag(1)
+                        }
+                        .pickerStyle(.menu)
+                        .tint(.yellow)
+                        .frame(maxWidth: 170)
+                    }
+
+                    parameterActionBar(slot: slot)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(visibleItems) { item in
+                                Button {
+                                    withAnimation(.easeOut(duration: 0.18)) { selectedParameterName = item.rawValue }
+                                } label: {
+                                    HStack(spacing: 7) {
+                                        Image(systemName: item.icon)
+                                            .font(.system(size: 15, weight: .semibold))
+                                        Text(item.rawValue)
+                                            .font(.system(size: 12, weight: .medium))
+                                            .lineLimit(1)
+                                    }
+                                    .foregroundStyle(parameter == item ? Color.yellow : Color.white.opacity(0.82))
+                                    .padding(.horizontal, 13)
+                                    .frame(height: 42)
+                                    .background(RoundedRectangle(cornerRadius: 12)
+                                        .fill(parameter == item ? Color.yellow.opacity(0.14) : Color.white.opacity(0.06)))
+                                    .overlay(RoundedRectangle(cornerRadius: 12)
+                                        .stroke(parameter == item ? Color.yellow.opacity(0.7) : Color.clear, lineWidth: 1))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+
+                    if visibleItems.isEmpty {
+                        Text("没有启用的快捷参数，请到设置中开启。")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.white.opacity(0.65))
+                    } else {
+                        ScrollView(.vertical, showsIndicators: false) {
+                            controlBody(slot: slot, parameter: parameter)
+                                .disabled(controlsLocked)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 2)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                }
+    }
+
+    private func portraitContent(slot: Int, parameter: QuickParameter) -> some View {
+VStack(alignment: .leading, spacing: 9) {
+                    HStack(spacing: 6) {
+                        Text("快捷控制").font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Color.white.opacity(0.65))
+                        Spacer()
+                        Picker("镜头", selection: $cam.paramTarget) {
+                            Text(cam.slotInfos[0].name).tag(0)
+                            Text(cam.slotInfos[1].name).tag(1)
+                        }
+                        .pickerStyle(.menu)
+                        .tint(.yellow)
+                        .frame(maxWidth: 150)
+                    }
+
+                    parameterActionBar(slot: slot)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 7) {
+                            ForEach(visibleItems) { item in
+                                Button {
+                                    withAnimation(.easeOut(duration: 0.15)) { selectedParameterName = item.rawValue }
+                                } label: {
+                                    VStack(spacing: 4) {
+                                        Image(systemName: item.icon)
+                                            .rotationEffect(.degrees(rotationDegrees))
+                                            .animation(.smooth(duration: 0.28), value: rotationDegrees)
+                                            .font(.system(size: 16, weight: .semibold))
+                                        Text(item.rawValue).font(.system(size: 10, weight: .medium))
+                                    }
+                                    .foregroundStyle(parameter == item ? Color.yellow : Color.white.opacity(0.8))
+                                    .frame(width: 59, height: 49)
+                                    .background(RoundedRectangle(cornerRadius: 10)
+                                        .fill(parameter == item ? Color.yellow.opacity(0.14) : Color.white.opacity(0.065)))
+                                    .overlay(RoundedRectangle(cornerRadius: 10)
+                                        .stroke(parameter == item ? Color.yellow.opacity(0.75) : Color.clear, lineWidth: 1))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+
+                    if visibleItems.isEmpty {
+                        Text("没有启用的快捷参数。请在「设置 → 快捷栏优先显示」中开启至少一项。")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.white.opacity(0.65))
+                    } else {
+                        controlBody(slot: slot, parameter: parameter)
+                            .disabled(controlsLocked)
+                    }
+                }
     }
 
     private func parameterActionBar(slot: Int) -> some View {
