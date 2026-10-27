@@ -16,6 +16,7 @@ struct CameraScreen: View {
     @State private var showTimerSettings = false
     @State private var wirelessSheetRoute: WirelessSetupSheetRoute?
     @State private var shouldShowRolePickerAfterPairing = false
+    @State private var shouldStartCompositeShareAfterPairing = false
     @State private var wirelessRolePickerDetent: PresentationDetent = .large
     @StateObject private var wirelessSession = WirelessMonitorSession.shared
     @State private var showCreativeGallery = false
@@ -101,6 +102,22 @@ struct CameraScreen: View {
                                     wirelessSheetRoute = .deviceSearch
                                 }
                             },
+                            onShareCompositeTap: {
+                                switch wirelessSession.mode {
+                                case .idle:
+                                    if wirelessSession.isSecurelyPaired {
+                                        wirelessSession.startSending()
+                                    } else {
+                                        shouldStartCompositeShareAfterPairing = true
+                                        wirelessSheetRoute = .deviceSearch
+                                    }
+                                case .sending:
+                                    cam.showToast("正在共享本机合成画面")
+                                case .receiving:
+                                    cam.showToast("请先退出接收模式，再共享本机画面")
+                                }
+                            },
+                            isSharingComposite: wirelessSession.mode == .sending,
                             onParameterTap: { parameterName in
                                 selectedQuickParameterName = parameterName
                                 withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
@@ -110,40 +127,9 @@ struct CameraScreen: View {
                                 HapticFeedback.play(.selection)
                             },
                             iconRotationDegrees: iconRotationDegrees,
-                            compactLayout: hasSharingStopControl
+                            compactLayout: false
                         )
-                        .frame(
-                            width: hasSharingStopControl ? max(controlCanvasWidth - 110, 220) : controlCanvasWidth,
-                            height: topBarHeight
-                        )
-
-                        if hasSharingStopControl {
-                            Button {
-                                HapticFeedback.play(.button)
-                                wirelessSession.stopVideo()
-                            } label: {
-                                HStack(spacing: 6) {
-                                    Circle()
-                                        .fill(Color.white)
-                                        .frame(width: 6, height: 6)
-                                    Text("共享中")
-                                        .font(.system(size: 10, weight: .bold))
-                                        .lineLimit(1)
-                                    Image(systemName: "stop.fill")
-                                        .font(.system(size: 9, weight: .bold))
-                                }
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 9)
-                                .frame(maxWidth: .infinity)
-                                .background(Color.red.opacity(0.88), in: Capsule())
-                                .overlay(Capsule().stroke(Color.white.opacity(0.24), lineWidth: 0.7))
-                            }
-                            .tint(.white)
-                            .accessibilityLabel("结束无线共享")
-                            .frame(width: 102, height: topBarHeight)
-                            .padding(.trailing, 8)
-                        }
+                        .frame(width: controlCanvasWidth, height: topBarHeight)
                     }
                     .frame(width: controlCanvasWidth, height: topBarHeight, alignment: .leading)
 
@@ -340,6 +326,36 @@ struct CameraScreen: View {
                     .zIndex(100)
                 }
             }
+            .overlay(alignment: .topTrailing) {
+                if hasSharingStopControl {
+                    Button {
+                        HapticFeedback.play(.button)
+                        wirelessSession.stopVideo()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(Color.white)
+                                .frame(width: 6, height: 6)
+                            Text("结束")
+                                .font(.system(size: 11, weight: .semibold))
+                            Image(systemName: "stop.fill")
+                                .font(.system(size: 9, weight: .bold))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 11)
+                        .frame(height: 34)
+                        .background(Color.red, in: Capsule())
+                        .overlay(Capsule().stroke(Color.white.opacity(0.22), lineWidth: 0.7))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("结束无线共享")
+                    .padding(.trailing, 8)
+                    // GeometryReader starts below the top safe area. Offset this pill back
+                    // up to screen coordinates so it sits beside, not below, the Dynamic Island.
+                    .offset(y: 44 - insets.top)
+                    .zIndex(200)
+                }
+            }
             .animation(.spring(response: 0.36, dampingFraction: 0.88), value: isParameterPanelLandscape)
             .onAppear {
                 wirelessSession.configure(cameraManager: cam)
@@ -385,11 +401,25 @@ struct CameraScreen: View {
         .statusBarHidden(true)
         .animation(.easeInOut(duration: 0.22), value: showPanel)
         .sheet(item: $wirelessSheetRoute, onDismiss: {
-            // The search sheet is dismissed only after the safety code succeeds. Re-present
-            // the same sheet host as the role picker after the dismissal animation has ended.
+            // After a successful safety-code match, close search before showing the next stage.
+            guard wirelessSession.isSecurelyPaired, wirelessSession.mode == .idle else {
+                shouldShowRolePickerAfterPairing = false
+                shouldStartCompositeShareAfterPairing = false
+                return
+            }
+            if shouldStartCompositeShareAfterPairing {
+                shouldStartCompositeShareAfterPairing = false
+                shouldShowRolePickerAfterPairing = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
+                    guard wirelessSheetRoute == nil,
+                          wirelessSession.isSecurelyPaired,
+                          wirelessSession.mode == .idle else { return }
+                    wirelessSession.startSending()
+                }
+                return
+            }
             guard shouldShowRolePickerAfterPairing else { return }
             shouldShowRolePickerAfterPairing = false
-            guard wirelessSession.isSecurelyPaired, wirelessSession.mode == .idle else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
                 guard wirelessSheetRoute == nil,
                       wirelessSession.isSecurelyPaired,
