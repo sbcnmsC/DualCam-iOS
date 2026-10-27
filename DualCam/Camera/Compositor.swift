@@ -170,15 +170,28 @@ enum Compositor {
     }
 
     /// 等比缩放到刚好覆盖 rect（CI 坐标，左下角为原点），居中并裁剪到 rect。
+    /// 缩小时优先使用 Lanczos，降低 4K 主画面缩进小窗时的锯齿与闪烁；
+    /// 放大或接近 1:1 时用普通仿射变换，避免不必要的滤镜开销。
     static func fill(_ image: CIImage, into rect: CGRect) -> CIImage {
         let e = image.extent
         guard e.width > 0, e.height > 0, !e.isInfinite else { return image.cropped(to: rect) }
         let s = max(rect.width / e.width, rect.height / e.height)
-        let scaled = image.transformed(by: CGAffineTransform(scaleX: s, y: s))
+        let scaled = resample(image, scale: s)
         let se = scaled.extent
         let moved = scaled.transformed(by: CGAffineTransform(translationX: rect.midX - se.midX,
                                                               y: rect.midY - se.midY))
         return moved.cropped(to: rect)
+    }
+
+    /// Lanczos only for meaningful downscales; preserve the affine fast path for other scales.
+    static func resample(_ image: CIImage, scale s: CGFloat) -> CIImage {
+        if s < 0.97, s > 0.02, let filter = CIFilter(name: "CILanczosScaleTransform") {
+            filter.setValue(image, forKey: kCIInputImageKey)
+            filter.setValue(s, forKey: kCIInputScaleKey)
+            filter.setValue(1.0, forKey: kCIInputAspectRatioKey)
+            if let output = filter.outputImage { return output }
+        }
+        return image.transformed(by: CGAffineTransform(scaleX: s, y: s))
     }
 
     // MARK: - 小窗形状
