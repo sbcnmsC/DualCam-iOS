@@ -198,11 +198,10 @@ struct CameraScreen: View {
                         .zIndex(20)
                 }
 
-                // Receiver mode replaces the camera interface with the peer's final composited
-                // video. The persistent session lives in CameraScreen, so closing the pairing
-                // sheet never deallocates the WebRTC track or its encrypted signalling connection.
+                // Receiver mode is intentionally distraction-free: show the incoming
+                // composited video edge-to-edge, with only a close control on top.
                 if wirelessSession.mode == .receiving {
-                    ZStack {
+                    ZStack(alignment: .topTrailing) {
                         Color.black.ignoresSafeArea()
 
                         if let track = wirelessSession.remoteVideoTrack {
@@ -212,113 +211,21 @@ struct CameraScreen: View {
                             .frame(width: canvasSize.width, height: canvasSize.height)
                         }
 
-                        VStack(spacing: 0) {
-                            HStack(spacing: 12) {
-                                HStack(spacing: 10) {
-                                    ZStack {
-                                        Circle().fill(Color(uiColor: .systemGreen).opacity(0.18))
-                                        Circle().fill(Color(uiColor: .systemGreen)).frame(width: 7, height: 7)
-                                    }
-                                    .frame(width: 28, height: 28)
-
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("实时监看")
-                                            .font(.subheadline.weight(.semibold))
-                                            .foregroundStyle(.white)
-                                        Text("DualCam · 安全传输")
-                                            .font(.caption2.weight(.medium))
-                                            .foregroundStyle(.white.opacity(0.68))
-                                    }
-                                }
-                                .padding(.leading, 9)
-                                .padding(.trailing, 14)
-                                .padding(.vertical, 8)
-                                .background(.ultraThinMaterial, in: Capsule())
-
-                                Spacer(minLength: 8)
-
-                                Button {
-                                    HapticFeedback.play(.button)
-                                    wirelessSession.stopVideo()
-                                } label: {
-                                    HStack(spacing: 7) {
-                                        Image(systemName: "xmark")
-                                            .font(.system(size: 11, weight: .bold))
-                                        Text("结束")
-                                            .font(.subheadline.weight(.semibold))
-                                    }
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 14)
-                                    .padding(.vertical, 11)
-                                    .background(.ultraThinMaterial, in: Capsule())
-                                    .overlay(Capsule().stroke(Color.white.opacity(0.18), lineWidth: 1))
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("结束无线监看")
-                            }
-                            .padding(.horizontal, 18)
-                            .padding(.top, max(insets.top + 12, 28))
-
-                            Spacer()
-
-                            if !wirelessSession.remoteVideoFrameReceived {
-                                VStack(spacing: 13) {
-                                    ZStack {
-                                        Circle()
-                                            .stroke(Color.white.opacity(0.13), lineWidth: 3)
-                                            .frame(width: 54, height: 54)
-                                        ProgressView()
-                                            .controlSize(.large)
-                                            .tint(.white)
-                                    }
-
-                                    VStack(spacing: 5) {
-                                        Text(wirelessSession.remoteVideoTrack == nil
-                                             ? "正在建立视频通道"
-                                             : "正在接收第一帧画面")
-                                            .font(.headline)
-                                            .foregroundStyle(.white)
-                                        Text(wirelessSession.rtcStatusText)
-                                            .font(.caption)
-                                            .foregroundStyle(.white.opacity(0.72))
-                                            .multilineTextAlignment(.center)
-                                        Text("请确认发送设备已开始共享本机合成画面")
-                                            .font(.caption2)
-                                            .foregroundStyle(.white.opacity(0.58))
-                                            .multilineTextAlignment(.center)
-                                    }
-                                }
-                                .padding(.horizontal, 24)
-                                .padding(.vertical, 23)
-                                .frame(maxWidth: 330)
-                                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 26, style: .continuous)
-                                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                                )
-                            } else {
-                                Label("正在接收实时画面", systemImage: "checkmark.circle.fill")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 14)
-                                    .padding(.vertical, 10)
-                                    .background(.ultraThinMaterial, in: Capsule())
-                            }
-
-                            Spacer()
-
-                            HStack(spacing: 7) {
-                                Image(systemName: "rectangle.expand.vertical")
-                                Text("完整画面 · 自适应显示")
-                            }
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(.white.opacity(0.72))
-                            .padding(.horizontal, 13)
-                            .padding(.vertical, 8)
-                            .background(.ultraThinMaterial, in: Capsule())
-                            .padding(.bottom, max(insets.bottom + 16, 28))
+                        Button {
+                            HapticFeedback.play(.button)
+                            wirelessSession.stopVideo()
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 36, height: 36)
+                                .background(.ultraThinMaterial, in: Circle())
+                                .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 1))
                         }
-                        .padding(.horizontal, 2)
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("关闭画面")
+                        .padding(.top, 12)
+                        .padding(.trailing, 12)
                     }
                     .frame(width: canvasSize.width, height: canvasSize.height)
                     .offset(x: canvasOffset.width, y: canvasOffset.height)
@@ -352,9 +259,8 @@ struct CameraScreen: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("结束无线共享")
                     .padding(.trailing, 8)
-                    // GeometryReader starts below the top safe area. Offset this pill back
-                    // up to screen coordinates so it sits beside, not below, the Dynamic Island.
-                    .offset(y: 44 - insets.top)
+                    // Place the stop pill beside the Dynamic Island rather than below it.
+                    .offset(y: 20 - insets.top)
                     .zIndex(200)
                 }
             }
@@ -1212,14 +1118,21 @@ struct TimerSettingsOverlay: View {
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.55)
-                .ignoresSafeArea()
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    guard dismissOnBlankTap else { return }
-                    HapticFeedback.play(.button)
-                    isPresented = false
-                }
+            // Use a dedicated full-screen button so backdrop taps never fall through
+            // to PreviewStage's focus/exposure gesture. When disabled, the backdrop still
+            // intercepts touches but leaves this timer panel open.
+            Button {
+                guard dismissOnBlankTap else { return }
+                HapticFeedback.play(.button)
+                isPresented = false
+            } label: {
+                Color.black.opacity(0.55)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("关闭倒计时设置")
             VStack(spacing: 16) {
                 HStack {
                     Image(systemName: "timer")
