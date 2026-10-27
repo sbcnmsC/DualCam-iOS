@@ -336,8 +336,10 @@ struct CameraScreen: View {
                             Circle()
                                 .fill(Color.white)
                                 .frame(width: 6, height: 6)
-                            Text("结束")
+                            Text("结束共享")
                                 .font(.system(size: 11, weight: .semibold))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
                             Image(systemName: "stop.fill")
                                 .font(.system(size: 9, weight: .bold))
                         }
