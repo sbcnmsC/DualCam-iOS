@@ -1,40 +1,35 @@
 import ActivityKit
 import Foundation
+import OSLog
 import UIKit
 
-/// Owns the complete ActivityKit lifecycle for the local share session.
-/// Lifecycle tokens prevent an older asynchronous start from resurrecting
-/// the Dynamic Island after the user has already stopped sharing.
+/// Owns the ActivityKit lifecycle for the local share session.
 @MainActor
 final class MonitorLiveActivityManager {
     static let shared = MonitorLiveActivityManager()
+    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.dualcam.app", category: "MonitorLiveActivity")
 
     private var lifecycleToken: UInt64 = 0
     private var currentActivity: Activity<MonitorShareAttributes>?
 
-    /// Call on the main actor when the local device begins sharing.
-    /// The public method changes the token synchronously so a rapid stop
-    /// invalidates this start before any asynchronous cleanup can finish.
-    func start() {
+    /// Call from a single MainActor task when local sharing begins.
+    /// The token changes before the first suspension point, so a queued stop
+    /// invalidates this request rather than allowing a stale activity to reappear.
+    func start() async {
         lifecycleToken &+= 1
         let token = lifecycleToken
-        Task { @MainActor in
-            await createActivity(for: token)
-        }
+        await createActivity(for: token)
     }
 
-    /// Call on the main actor for every local-share stop/disconnect path.
-    func stop() {
+    /// Ends every activity belonging to this app's monitor-share type.
+    func stop() async {
         lifecycleToken &+= 1
         let token = lifecycleToken
         currentActivity = nil
-        Task { @MainActor in
-            await endActivities(for: token)
-        }
+        await endActivities(for: token)
     }
 
     private func createActivity(for token: UInt64) async {
-        // Remove stale activities from an interrupted prior session first.
         for activity in Activity<MonitorShareAttributes>.activities {
             await activity.end(nil, dismissalPolicy: .immediate)
             guard token == lifecycleToken else { return }
@@ -42,6 +37,7 @@ final class MonitorLiveActivityManager {
 
         guard token == lifecycleToken else { return }
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            logger.error("Live Activities are disabled by system/user settings; cannot show Dynamic Island share status.")
             currentActivity = nil
             return
         }
@@ -59,21 +55,19 @@ final class MonitorLiveActivityManager {
         do {
             let activity = try Activity.request(
                 attributes: attributes,
-                content: ActivityContent(state: state, staleDate: nil),
+                content: ActivityContent(state: state, staleDate: nil, relevanceScore: 100),
                 pushType: nil
             )
 
-            // Activity.request is synchronous, but retain this guard so a
-            // future implementation that suspends here stays lifecycle-safe.
             guard token == lifecycleToken else {
                 await activity.end(nil, dismissalPolicy: .immediate)
                 return
             }
             currentActivity = activity
+            logger.info("Live Activity started successfully. id=\(activity.id, privacy: .public)")
         } catch {
-            // The camera sharing session still works when Live Activities
-            // are disabled or ActivityKit rejects the request.
             currentActivity = nil
+            logger.error("Live Activity request failed: \(String(describing: error), privacy: .public)")
         }
     }
 
@@ -84,6 +78,7 @@ final class MonitorLiveActivityManager {
         }
         if token == lifecycleToken {
             currentActivity = nil
+            logger.info("Live Activity ended for monitor share.")
         }
     }
 }
