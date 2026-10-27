@@ -225,6 +225,7 @@ final class WirelessMonitorSession: ObservableObject {
 
 struct WirelessMonitorSheet: View {
     @ObservedObject var session: WirelessMonitorSession
+    let onPairingSucceeded: () -> Void
     @EnvironmentObject private var cam: CameraManager
     @Environment(\.dismiss) private var dismiss
 
@@ -279,6 +280,7 @@ struct WirelessMonitorSheet: View {
         .onAppear {
             session.configure(cameraManager: cam)
             if session.isSecurelyPaired {
+                onPairingSucceeded()
                 dismiss()
             } else {
                 session.startDiscovery()
@@ -293,6 +295,7 @@ struct WirelessMonitorSheet: View {
         .onChange(of: session.isSecurelyPaired) { _, paired in
             if paired {
                 HapticFeedback.play(.success)
+                onPairingSucceeded()
                 dismiss()
             }
         }
