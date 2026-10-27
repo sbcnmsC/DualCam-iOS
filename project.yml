@@ -40,20 +40,22 @@ targets:
     sources:
       - path: DualCamLiveActivity
       - path: DualCam/LiveActivity/MonitorShareAttributes.swift
+      - path: DualCam/Streaming/StopWirelessShareIntent.swift
     settings:
       base:
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) DUALCAM_WIDGET_EXTENSION"
         PRODUCT_BUNDLE_IDENTIFIER: com.dualcam.app.LiveActivity
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: YES
-        CURRENT_PROJECT_VERSION: "11"
-        MARKETING_VERSION: "0.3.8"
-        INFOPLIST_KEY_CFBundleVersion: "11"
-        INFOPLIST_KEY_CFBundleShortVersionString: "0.3.8"
+        CURRENT_PROJECT_VERSION: "12"
+        MARKETING_VERSION: "0.3.9"
+        INFOPLIST_KEY_CFBundleVersion: "12"
+        INFOPLIST_KEY_CFBundleShortVersionString: "0.3.9"
         SKIP_INSTALL: YES
     info:
       path: DualCamLiveActivity/Info.plist
       properties:
-        CFBundleShortVersionString: "0.3.8"
-        CFBundleVersion: "11"
+        CFBundleShortVersionString: "0.3.9"
+        CFBundleVersion: "12"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension

@@ -1,4 +1,5 @@
 import ActivityKit
+import AppIntents
 import SwiftUI
 import WidgetKit
 
@@ -60,16 +61,28 @@ struct DualCamShareLiveActivity: Widget {
                 }
 
                 DynamicIslandExpandedRegion(.bottom) {
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 10) {
                         Label(
                             "合成画面 · \(context.state.resolution) / \(context.state.targetFPS) fps",
                             systemImage: "video.fill"
                         )
                         .font(.caption)
 
-                        Text("实际帧率取决于摄像头、网络和设备负载")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                        HStack {
+                            Text("无线共享仍在运行")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            Spacer(minLength: 8)
+                            Button(intent: StopWirelessShareIntent()) {
+                                Label("关闭共享", systemImage: "stop.fill")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 7)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.red)
+                            .accessibilityLabel("关闭无线共享")
+                        }
                     }
                 }
             } compactLeading: {

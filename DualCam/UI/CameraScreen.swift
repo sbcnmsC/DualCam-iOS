@@ -7,7 +7,7 @@ struct CameraScreen: View {
     @State private var panelTab: PanelTab = .pip
     @State private var showTimerSettings = false
     @State private var showWirelessMonitor = false
-    @StateObject private var wirelessSession = WirelessMonitorSession()
+    @StateObject private var wirelessSession = WirelessMonitorSession.shared
     @State private var showCreativeGallery = false
     @State private var timerDraft = 5
     @State private var bottomBarHeight: CGFloat = 222
@@ -41,6 +41,7 @@ struct CameraScreen: View {
                 : (activeOrientation == .landscapeRight ? -90 : 0)
             let topControlsBottom = insets.top + topBarHeight
             let dockTop = canvasSize.height - insets.bottom - bottomBarHeight
+            let hasSharingStopControl = wirelessSession.mode == .sending
 
             // Fit the selected output ratio against the whole device canvas.
             // In free mode this exactly matches the iPhone screen; fixed ratios use the largest
@@ -76,13 +77,45 @@ struct CameraScreen: View {
 
                 // Top and bottom controls float above the preview and keep their own hit targets.
                 VStack(spacing: 0) {
-                    TopBar(onTimerTap: {
-                        timerDraft = cam.timerSeconds > 0 ? cam.timerSeconds : 5
-                        showTimerSettings = true
-                    }, onWirelessMonitorTap: {
-                        showWirelessMonitor = true
-                    }, iconRotationDegrees: iconRotationDegrees)
-                    .frame(height: topBarHeight)
+                    HStack(spacing: 0) {
+                        TopBar(
+                            onTimerTap: {
+                                timerDraft = cam.timerSeconds > 0 ? cam.timerSeconds : 5
+                                showTimerSettings = true
+                            },
+                            onWirelessMonitorTap: {
+                                showWirelessMonitor = true
+                            },
+                            iconRotationDegrees: iconRotationDegrees,
+                            compactLayout: hasSharingStopControl
+                        )
+                        .frame(
+                            width: hasSharingStopControl ? max(controlCanvasWidth - 110, 220) : controlCanvasWidth,
+                            height: topBarHeight
+                        )
+
+                        if hasSharingStopControl {
+                            Button {
+                                HapticFeedback.play(.button)
+                                wirelessSession.stopVideo()
+                            } label: {
+                                Label("结束共享", systemImage: "stop.fill")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.8)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 8)
+                                    .frame(maxWidth: .infinity)
+                                    .background(Color.red.opacity(0.82), in: Capsule())
+                                    .overlay(Capsule().stroke(Color.white.opacity(0.22), lineWidth: 0.7))
+                            }
+                            .tint(.white)
+                            .accessibilityLabel("结束无线共享")
+                            .frame(width: 102, height: topBarHeight)
+                            .padding(.trailing, 8)
+                        }
+                    }
+                    .frame(width: controlCanvasWidth, height: topBarHeight, alignment: .leading)
 
                     Spacer(minLength: 0)
 
@@ -211,88 +244,127 @@ struct CameraScreen: View {
                     .ignoresSafeArea()
                     .zIndex(100)
                 } else if wirelessSession.isSecurelyPaired && wirelessSession.mode == .idle {
-                    // Pairing closes immediately on success. This small role chooser is now on
-                    // the main screen so the two devices can choose opposite roles explicitly.
                     ZStack {
-                        Color.black.opacity(0.90).ignoresSafeArea()
-                        VStack(spacing: 16) {
+                        Color(red: 0.015, green: 0.025, blue: 0.055).ignoresSafeArea()
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.03, green: 0.09, blue: 0.17),
+                                Color(red: 0.025, green: 0.035, blue: 0.075),
+                                Color(red: 0.015, green: 0.018, blue: 0.035)
+                            ],
+                            startPoint: .topLeading, endPoint: .bottomTrailing
+                        )
+                        .ignoresSafeArea()
+                        Circle().fill(Color.cyan.opacity(0.19))
+                            .frame(width: 300, height: 300).blur(radius: 80).offset(x: -150, y: -210)
+                        Circle().fill(Color.blue.opacity(0.18))
+                            .frame(width: 340, height: 340).blur(radius: 90).offset(x: 170, y: 190)
+
+                        VStack(spacing: 18) {
                             Image(systemName: "checkmark.shield.fill")
-                                .font(.system(size: 42))
-                                .foregroundStyle(.green)
-                            Text("安全配对已完成")
-                                .font(.title2.bold())
+                                .font(.system(size: 32, weight: .semibold))
                                 .foregroundStyle(.white)
-                            Text("选择这台设备的用途")
-                                .font(.subheadline)
-                                .foregroundStyle(.white.opacity(0.72))
+                                .frame(width: 68, height: 68)
+                                .background(
+                                    LinearGradient(colors: [Color.cyan.opacity(0.85), Color.blue.opacity(0.75)],
+                                                   startPoint: .topLeading, endPoint: .bottomTrailing),
+                                    in: RoundedRectangle(cornerRadius: 22, style: .continuous)
+                                )
+                                .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
+                                    .stroke(Color.white.opacity(0.25), lineWidth: 1))
 
-                            Button {
-                                HapticFeedback.play(.button)
-                                wirelessSession.startReceiving()
-                            } label: {
-                                Label("全屏接收画面", systemImage: "play.rectangle.fill")
-                                    .frame(maxWidth: .infinity)
+                            VStack(spacing: 8) {
+                                Text("安全配对已完成")
+                                    .font(.system(size: 25, weight: .bold, design: .rounded))
+                                    .foregroundStyle(.white)
+                                Text("选择这台设备的用途")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundStyle(.white.opacity(0.65))
+                                Text("两台设备分别选择接收端和发送端")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.white.opacity(0.43))
                             }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.large)
 
-                            Button {
-                                HapticFeedback.play(.button)
-                                wirelessSession.startSending()
-                            } label: {
-                                Label("共享本机合成画面", systemImage: "dot.radiowaves.left.and.right")
-                                    .frame(maxWidth: .infinity)
+                            VStack(spacing: 10) {
+                                Button {
+                                    HapticFeedback.play(.button)
+                                    wirelessSession.startReceiving()
+                                } label: {
+                                    HStack(spacing: 13) {
+                                        Image(systemName: "play.rectangle.fill")
+                                            .font(.system(size: 19, weight: .semibold))
+                                            .foregroundStyle(Color.cyan)
+                                            .frame(width: 46, height: 46)
+                                            .background(Color.cyan.opacity(0.12), in: RoundedRectangle(cornerRadius: 15))
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text("全屏接收画面").font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
+                                            Text("在这台设备上观看另一台设备").font(.system(size: 11)).foregroundStyle(.white.opacity(0.56))
+                                        }
+                                        Spacer(minLength: 0)
+                                        Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold)).foregroundStyle(.white.opacity(0.38))
+                                    }
+                                    .padding(13)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(Color.white.opacity(0.075), in: RoundedRectangle(cornerRadius: 19, style: .continuous))
+                                    .overlay(RoundedRectangle(cornerRadius: 19, style: .continuous).stroke(Color.cyan.opacity(0.35), lineWidth: 1))
+                                }
+                                .buttonStyle(.plain)
+
+                                Button {
+                                    HapticFeedback.play(.button)
+                                    wirelessSession.startSending()
+                                } label: {
+                                    HStack(spacing: 13) {
+                                        Image(systemName: "dot.radiowaves.left.and.right")
+                                            .font(.system(size: 19, weight: .semibold))
+                                            .foregroundStyle(Color.green)
+                                            .frame(width: 46, height: 46)
+                                            .background(Color.green.opacity(0.12), in: RoundedRectangle(cornerRadius: 15))
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text("共享本机合成画面").font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
+                                            Text("向已配对设备发送双摄合成预览").font(.system(size: 11)).foregroundStyle(.white.opacity(0.56))
+                                        }
+                                        Spacer(minLength: 0)
+                                        Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold)).foregroundStyle(.white.opacity(0.38))
+                                    }
+                                    .padding(13)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(Color.white.opacity(0.075), in: RoundedRectangle(cornerRadius: 19, style: .continuous))
+                                    .overlay(RoundedRectangle(cornerRadius: 19, style: .continuous).stroke(Color.green.opacity(0.32), lineWidth: 1))
+                                }
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.bordered)
-                            .tint(.white)
-                            .controlSize(.large)
 
                             Button(role: .destructive) {
                                 HapticFeedback.play(.button)
                                 wirelessSession.disconnectPairing()
                             } label: {
                                 Label("断开安全配对", systemImage: "lock.slash")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(.white.opacity(0.65))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 7)
                             }
-                            .padding(.top, 8)
+                            .buttonStyle(.plain)
                         }
-                        .padding(26)
-                        .frame(maxWidth: 420)
-                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28))
                         .padding(24)
+                        .frame(maxWidth: 420)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 30, style: .continuous)
+                                .stroke(
+                                    LinearGradient(colors: [Color.white.opacity(0.26), Color.white.opacity(0.06)],
+                                                   startPoint: .topLeading, endPoint: .bottomTrailing),
+                                    lineWidth: 1
+                                )
+                        )
+                        .shadow(color: .black.opacity(0.32), radius: 30, y: 12)
+                        .padding(22)
                     }
                     .frame(width: canvasSize.width, height: canvasSize.height)
                     .offset(x: canvasOffset.width, y: canvasOffset.height)
                     .ignoresSafeArea()
                     .zIndex(80)
-                } else if wirelessSession.mode == .sending {
-                    // Keep the stop action outside the Dynamic Island/notch area and below the
-                    // camera's top control row. Anchor it to the trailing edge instead of
-                    // centering it across the top of the preview.
-                    VStack(spacing: 0) {
-                        HStack {
-                            Spacer(minLength: 0)
-                            Button {
-                                HapticFeedback.play(.button)
-                                wirelessSession.stopVideo()
-                            } label: {
-                                Label("结束共享", systemImage: "stop.fill")
-                                    .font(.caption.weight(.semibold))
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 9)
-                                    .background(.black.opacity(0.72), in: Capsule())
-                                    .overlay(Capsule().stroke(.white.opacity(0.18), lineWidth: 0.8))
-                            }
-                            .tint(.white)
-                            .accessibilityLabel("停止共享")
-                        }
-                        .padding(.horizontal, max(insets.trailing + 16, 20))
-                        .padding(.top, insets.top + topBarHeight + 14)
-
-                        Spacer(minLength: 0)
-                    }
-                    .frame(width: canvasSize.width, height: canvasSize.height)
-                    .offset(x: canvasOffset.width, y: canvasOffset.height)
-                    .zIndex(40)
                 }
             }
             .animation(.spring(response: 0.36, dampingFraction: 0.88), value: isParameterPanelLandscape)
@@ -1164,118 +1236,232 @@ struct TimerSettingsOverlay: View {
     }
 }
 
-// MARK: - 顶部栏（闪光灯 / 实况 / 参数）
-
+// MARK: - 顶部栏（长按可自定义按钮）
 struct TopBar: View {
     @EnvironmentObject private var cam: CameraManager
+    @AppStorage("dualcam.topbar.actions")
+    private var actionOrderValue = "flash,livePhoto,liveMotion,timer,swapCamera,wireless"
+    @State private var isCustomizing = false
+
     let onTimerTap: () -> Void
     let onWirelessMonitorTap: () -> Void
     var iconRotationDegrees: CGFloat = 90
+    var compactLayout = false
 
-    /// 实况开启时，多出一颗按钮用来选动态片段取自哪颗镜头。
+    private static let allActionKeys = ["flash", "livePhoto", "liveMotion", "timer", "swapCamera", "wireless"]
     private var showLiveSource: Bool { cam.cfg.livePhoto && cam.captureMode == .photo }
+
+    private var actionKeys: [String] {
+        guard actionOrderValue != "none" else { return [] }
+        var seen = Set<String>()
+        return actionOrderValue.split(separator: ",").map(String.init).filter { key in
+            Self.allActionKeys.contains(key) && seen.insert(key).inserted
+        }
+    }
+
+    private var availableActionKeys: [String] { Self.allActionKeys.filter { !actionKeys.contains($0) } }
+    private var actionSpacing: CGFloat {
+        if isCustomizing { return 3 }
+        if compactLayout { return 4 }
+        return showLiveSource ? 14 : 22
+    }
+    private var actionIconSize: CGFloat {
+        if compactLayout && isCustomizing { return 26 }
+        if compactLayout { return 30 }
+        if isCustomizing { return 32 }
+        return 40
+    }
 
     var body: some View {
         ZStack {
             if cam.isRecording {
                 HStack(spacing: 6) {
                     Circle().fill(Color.red).frame(width: 8, height: 8)
-                    Text(timeString(cam.recordSeconds))
-                        .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                    Text(timeString(cam.recordSeconds)).font(.system(size: 15, weight: .semibold, design: .monospaced))
                 }
                 .foregroundStyle(Color.white)
                 .padding(.horizontal, 12)
                 .frame(height: 30)
                 .background(Capsule().fill(Color.red.opacity(0.85)))
             } else {
-                HStack(spacing: showLiveSource ? 14 : 22) {
-                    iconButton(cam.flashEnabled ? "bolt.fill" : "bolt.slash",
-                               active: cam.flashEnabled,
-                               label: cam.flashEnabled ? "关闭闪光灯" : "开启闪光灯") {
-                        HapticFeedback.play(.button)
-                        cam.flashEnabled.toggle()
-                    }
-                    iconButton(cam.cfg.livePhoto ? "livephoto" : "livephoto.slash",
-                               active: cam.cfg.livePhoto && cam.captureMode == .photo,
-                               dimmed: cam.captureMode == .video,
-                               label: "实况照片") {
-                        HapticFeedback.play(.selection)
-                        cam.cfg.livePhoto.toggle()
-                    }
-                    if showLiveSource {
-                        iconButton(cam.cfg.liveMotion.icon,
-                                   active: cam.cfg.liveMotion != .composite,
-                                   dimmed: cam.cfg.outputMode == .original,
-                                   label: "实况动态片段：\(cam.cfg.liveMotion.rawValue)",
-                                   badge: cam.cfg.liveMotion.badge) {
-                            if cam.cfg.outputMode == .original {
-                                // 原图直出没有合成图，每张原片的动态片段本来就取自各自的镜头。
-                                HapticFeedback.play(.button)
-                                cam.showToast("「原图直出」没有合成图，动态片段取自各自镜头")
-                                return
+                HStack(spacing: actionSpacing) {
+                    if isCustomizing {
+                        Menu {
+                            ForEach(availableActionKeys, id: \.self) { key in
+                                Button { addAction(key) } label: {
+                                    Label(actionTitle(key), systemImage: actionSystemImage(key))
+                                }
                             }
-                            HapticFeedback.play(.selection)
-                            cam.cfg.liveMotion = cam.cfg.liveMotion.next
-                            cam.showToast("实况动态：\(cam.cfg.liveMotion.rawValue)")
+                        } label: {
+                            Image(systemName: "plus.circle.fill")
+                                .font(.system(size: compactLayout ? 23 : 27, weight: .semibold))
+                                .foregroundStyle(Color.green)
+                                .frame(width: compactLayout ? 28 : 32, height: compactLayout ? 28 : 32)
+                                .background(Circle().fill(Color.white.opacity(0.09)))
                         }
+                        .disabled(availableActionKeys.isEmpty)
+                        .accessibilityLabel("添加顶部按钮")
+
+                        Button {
+                            withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) { isCustomizing = false }
+                        } label: {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: compactLayout ? 22 : 25, weight: .semibold))
+                                .foregroundStyle(Color.yellow)
+                                .frame(width: compactLayout ? 28 : 32, height: compactLayout ? 28 : 32)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("完成自定义")
                     }
-                    iconButton(cam.timerSeconds == 0 ? "timer" : "timer.circle.fill",
-                               active: cam.timerSeconds > 0,
-                               label: cam.timerSeconds == 0 ? "设置倒计时" : "倒计时：\(cam.timerSeconds) 秒",
-                               badge: cam.timerSeconds == 0 ? nil : "\(cam.timerSeconds)") {
-                        HapticFeedback.play(.button)
-                        onTimerTap()
-                    }
-                    iconButton("arrow.triangle.2.circlepath",
-                               active: false,
-                               label: "切换主副摄像头") {
-                        cam.swapCameras()
-                    }
-                    iconButton("dot.radiowaves.left.and.right",
-                               active: false,
-                               label: "无线监看") {
-                        HapticFeedback.play(.button)
-                        onWirelessMonitorTap()
-                    }
+
+                    ForEach(actionKeys, id: \.self) { key in actionButton(for: key) }
                 }
             }
-
-            // Resolution and FPS readout intentionally omitted; keep the top edge visually clean.
         }
-
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func iconButton(_ icon: String, active: Bool, dimmed: Bool = false,
-                            label: String, badge: String? = nil,
-                            action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+    @ViewBuilder
+    private func actionButton(for key: String) -> some View {
+        switch key {
+        case "flash":
+            iconButton(actionKey: key, icon: cam.flashEnabled ? "bolt.fill" : "bolt.slash",
+                       active: cam.flashEnabled, label: cam.flashEnabled ? "关闭闪光灯" : "开启闪光灯") {
+                HapticFeedback.play(.button)
+                cam.flashEnabled.toggle()
+            }
+        case "livePhoto":
+            iconButton(actionKey: key, icon: cam.cfg.livePhoto ? "livephoto" : "livephoto.slash",
+                       active: cam.cfg.livePhoto && cam.captureMode == .photo,
+                       dimmed: cam.captureMode == .video, label: "实况照片") {
+                HapticFeedback.play(.selection)
+                cam.cfg.livePhoto.toggle()
+            }
+        case "liveMotion":
+            if showLiveSource {
+                iconButton(actionKey: key, icon: cam.cfg.liveMotion.icon,
+                           active: cam.cfg.liveMotion != .composite, dimmed: cam.cfg.outputMode == .original,
+                           label: "实况动态片段：\(cam.cfg.liveMotion.rawValue)", badge: cam.cfg.liveMotion.badge) {
+                    if cam.cfg.outputMode == .original {
+                        HapticFeedback.play(.button)
+                        cam.showToast("「原图直出」没有合成图，动态片段取自各自镜头")
+                        return
+                    }
+                    HapticFeedback.play(.selection)
+                    cam.cfg.liveMotion = cam.cfg.liveMotion.next
+                    cam.showToast("实况动态：\(cam.cfg.liveMotion.rawValue)")
+                }
+            } else {
+                EmptyView()
+            }
+        case "timer":
+            iconButton(actionKey: key, icon: cam.timerSeconds == 0 ? "timer" : "timer.circle.fill",
+                       active: cam.timerSeconds > 0,
+                       label: cam.timerSeconds == 0 ? "设置倒计时" : "倒计时：\(cam.timerSeconds) 秒",
+                       badge: cam.timerSeconds == 0 ? nil : "\(cam.timerSeconds)") {
+                HapticFeedback.play(.button)
+                onTimerTap()
+            }
+        case "swapCamera":
+            iconButton(actionKey: key, icon: "arrow.triangle.2.circlepath", active: false,
+                       label: "切换主副摄像头") { cam.swapCameras() }
+        case "wireless":
+            iconButton(actionKey: key, icon: "dot.radiowaves.left.and.right", active: false,
+                       label: "无线监看") {
+                HapticFeedback.play(.button)
+                onWirelessMonitorTap()
+            }
+        default:
+            EmptyView()
+        }
+    }
+
+    private func iconButton(actionKey: String, icon: String, active: Bool, dimmed: Bool = false,
+                            label: String, badge: String? = nil, action: @escaping () -> Void) -> some View {
+        Button {
+            if isCustomizing { removeAction(actionKey) } else { action() }
+        } label: {
             Image(systemName: icon)
                 .rotationEffect(.degrees(iconRotationDegrees))
                 .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
-                .font(.system(size: 18, weight: .semibold))
+                .font(.system(size: compactLayout ? 16 : 18, weight: .semibold))
                 .foregroundStyle(active ? Color.yellow : Color.white)
-                .frame(width: 40, height: 40)
+                .frame(width: actionIconSize, height: actionIconSize)
                 .background(Circle().fill(active ? Color.yellow.opacity(0.14) : Color.white.opacity(0.07)))
                 .overlay(Circle().stroke(Color.white.opacity(active ? 0.2 : 0.1), lineWidth: 0.6))
                 .overlay(alignment: .topTrailing) {
-                    if let badge {
-                        Text(badge)
-                            .font(.system(size: 8, weight: .bold, design: .rounded))
-                            .foregroundStyle(Color.black)
-                            .frame(minWidth: 13, minHeight: 13)
-                            .background(Circle().fill(Color.yellow))
-                            .offset(x: 3, y: -2)
+                    if let badge, !isCustomizing {
+                        Text(badge).font(.system(size: 8, weight: .bold, design: .rounded))
+                            .foregroundStyle(Color.black).frame(minWidth: 13, minHeight: 13)
+                            .background(Circle().fill(Color.yellow)).offset(x: 3, y: -2)
+                    }
+                }
+                .overlay(alignment: .topLeading) {
+                    if isCustomizing {
+                        Image(systemName: "minus.circle.fill").font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(.white, Color.red).offset(x: -3, y: -3)
                     }
                 }
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(label)
+        .accessibilityLabel(isCustomizing ? "删除按钮：\(actionTitle(actionKey))" : label)
         .opacity(dimmed ? 0.4 : 1)
+        .contextMenu {
+            Button {
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) { isCustomizing = true }
+            } label: {
+                Label("自定义顶部导航栏", systemImage: "slider.horizontal.3")
+            }
+            Button(role: .destructive) { removeAction(actionKey) } label: {
+                Label("删除此按钮", systemImage: "minus.circle")
+            }
+        }
+    }
+
+    private func addAction(_ key: String) {
+        guard Self.allActionKeys.contains(key), !actionKeys.contains(key) else { return }
+        saveActionKeys(actionKeys + [key])
+        HapticFeedback.play(.selection)
+    }
+
+    private func removeAction(_ key: String) {
+        guard actionKeys.contains(key) else { return }
+        saveActionKeys(actionKeys.filter { $0 != key })
+        HapticFeedback.play(.button)
+        isCustomizing = true
+    }
+
+    private func saveActionKeys(_ keys: [String]) {
+        actionOrderValue = keys.isEmpty ? "none" : keys.joined(separator: ",")
+    }
+
+    private func actionTitle(_ key: String) -> String {
+        switch key {
+        case "flash": return "闪光灯"
+        case "livePhoto": return "实况照片"
+        case "liveMotion": return "实况动态来源"
+        case "timer": return "倒计时"
+        case "swapCamera": return "切换摄像头"
+        case "wireless": return "无线监看"
+        default: return key
+        }
+    }
+
+    private func actionSystemImage(_ key: String) -> String {
+        switch key {
+        case "flash": return "bolt.fill"
+        case "livePhoto": return "livephoto"
+        case "liveMotion": return "waveform"
+        case "timer": return "timer"
+        case "swapCamera": return "arrow.triangle.2.circlepath"
+        case "wireless": return "dot.radiowaves.left.and.right"
+        default: return "plus"
+        }
     }
 
     private func timeString(_ s: Int) -> String {
-        return String(format: "%02d:%02d", s / 60, s % 60)
+        String(format: "%02d:%02d", s / 60, s % 60)
     }
 }
 

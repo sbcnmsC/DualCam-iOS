@@ -11,6 +11,10 @@ enum MonitorMode: Equatable {
 /// Lives with the camera screen, not the pairing sheet. Dismissing the sheet must not
 /// stop the secure signalling connection or detach the active video session.
 final class WirelessMonitorSession: ObservableObject {
+    /// Shared with LiveActivityIntent so the Dynamic Island's Stop action can end the active
+    /// WebRTC session instead of merely dismissing the activity UI.
+    static let shared = WirelessMonitorSession()
+
     let network = NetworkMonitorService()
     let rtc = LiveMonitorRTCService()
 
@@ -163,10 +167,12 @@ final class WirelessMonitorSession: ObservableObject {
         rtc.startReceiving()
     }
 
-    func stopVideo(notifyPeer: Bool = true) {
+    func stopVideo(notifyPeer: Bool = true, endActivity: Bool = true) {
         // Always end any local Live Activity, even if the camera mode already
         // returned to idle after an interrupted/disconnected share.
-        Task { @MainActor in await MonitorLiveActivityManager.shared.stop() }
+        if endActivity {
+            Task { @MainActor in await MonitorLiveActivityManager.shared.stop() }
+        }
         guard mode != .idle || rtc.remoteVideoTrack != nil else { return }
         let wasReceiving = mode == .receiving
         let wasSending = mode == .sending
@@ -182,6 +188,14 @@ final class WirelessMonitorSession: ObservableObject {
         if wasSending { restoreWirelessStreamPreset() }
         mode = .idle
         remoteVideoFrameReceived = false
+    }
+
+    /// Runs from the Live Activity's app-process intent. Stop the actual sender/receiver first,
+    /// then await ActivityKit cleanup so tapping "关闭共享" cannot leave a live stream behind.
+    @MainActor
+    func stopFromLiveActivity() async {
+        stopVideo(endActivity: false)
+        await MonitorLiveActivityManager.shared.stop()
     }
 
     func disconnectPairing() {
