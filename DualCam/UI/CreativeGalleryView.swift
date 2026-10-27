@@ -1,8 +1,10 @@
 import SwiftUI
 import UIKit
+import ImageIO
 import Photos
 
-/// Private, app-owned creative workspace. It intentionally does not query or write to Photos.
+/// App-owned archive of composite photos. Browsing it never queries the Photos library; the
+/// camera also saves each composite to Photos when it is taken, and "导出" copies it there again.
 struct CreativeGalleryView: View {
     @EnvironmentObject private var cam: CameraManager
     @Environment(\.dismiss) private var dismiss
@@ -76,7 +78,7 @@ struct CreativeGalleryView: View {
                     .foregroundStyle(Color.yellow.opacity(0.9))
                 Text(title)
                     .font(.system(size: 27, weight: .bold, design: .rounded))
-                Text("\(cam.compositePhotoURLs.count) 件作品 · 仅存储于本机 App")
+                Text("\(cam.compositePhotoURLs.count) 件作品 · DualCam 本机归档")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.white.opacity(0.48))
             }
@@ -162,7 +164,7 @@ struct CreativeGalleryView: View {
                         .foregroundStyle(Color.yellow.opacity(0.85))
                     Text("开始你的第一组双摄创作")
                         .font(.system(size: 16, weight: .semibold))
-                    Text("拍摄的合成照片会自动保存在 DualCam 内部，不会写入系统照片图库。")
+                    Text("拍摄的合成照片会归档在 DualCam 内部，同时保存到系统照片图库。")
                         .font(.system(size: 12))
                         .foregroundStyle(.white.opacity(0.48))
                         .multilineTextAlignment(.center)
@@ -314,12 +316,12 @@ struct CreativeGalleryView: View {
     private var settings: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                sectionHeading("当前拍摄配置", subtitle: "只读快照，不会在相册里擅自改动相机实时参数")
-                parameterRow("输出画幅", value: String(describing: cam.cfg.aspect))
-                parameterRow("输出分辨率", value: String(describing: cam.cfg.resolution))
+                sectionHeading("当前拍摄配置", subtitle: "上方为当前参数；下面的开关和滑块会直接改动相机的实时设置")
+                parameterRow("输出画幅", value: cam.cfg.aspect.rawValue)
+                parameterRow("输出分辨率", value: cam.cfg.resolution.rawValue)
                 parameterRow("目标帧率", value: "\(cam.cfg.fps) FPS")
                 parameterRow("实际帧率", value: "\(cam.effectiveFPS) FPS")
-                parameterRow("合成布局", value: String(describing: cam.cfg.layout))
+                parameterRow("合成布局", value: cam.cfg.layout.rawValue)
                 parameterRow("输出模式", value: cam.cfg.outputMode.rawValue)
                 Toggle("防抖", isOn: $cam.cfg.stabilization)
                     .tint(.yellow)
@@ -362,7 +364,7 @@ struct CreativeGalleryView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("本机私有归档")
                             .font(.system(size: 13, weight: .semibold))
-                        Text("作品只保存在 DualCam 的 Documents 目录。分享或导出时，才会交给系统分享面板。")
+                        Text("合成照片在系统照片图库之外，另存一份在 DualCam 的 Documents 目录（不计入 iCloud 备份，最多保留 300 张）。在这里删除只影响这份归档。")
                             .font(.system(size: 11))
                             .foregroundStyle(.white.opacity(0.52))
                     }
@@ -423,7 +425,8 @@ struct CreativeGalleryView: View {
             return
         }
         PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
-            guard status == .authorized else {
+            // Same rule as the camera's own save path, which also accepts .limited.
+            guard status == .authorized || status == .limited else {
                 DispatchQueue.main.async {
                     exportMessage = status == .denied || status == .restricted
                         ? "没有照片图库写入权限。请在系统设置中允许 DualCam 添加照片后重试。"
@@ -460,8 +463,57 @@ private enum WorkspaceTab {
     case library, compare, settings
 }
 
+/// Decodes archive photos at the size they are shown. `UIImage(contentsOfFile:)` inflates the whole
+/// 12–48 MP JPEG (up to ~190 MB of bitmap) for a thumbnail a few hundred pixels wide, and a grid
+/// shows a dozen of them at once. ImageIO decodes straight to the target size instead.
+private enum GalleryImageLoader {
+    private static let cache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.totalCostLimit = 96 * 1024 * 1024
+        return cache
+    }()
+
+    static func cached(_ url: URL, maxPixel: Int) -> UIImage? {
+        cache.object(forKey: key(url, maxPixel))
+    }
+
+    static func load(_ url: URL, maxPixel: Int, priority: TaskPriority) async -> UIImage? {
+        let cacheKey = key(url, maxPixel)
+        if let hit = cache.object(forKey: cacheKey) { return hit }
+        // Cells that scrolled away before their turn never start decoding.
+        if Task.isCancelled { return nil }
+        let path = url.path
+        let image = await Task.detached(priority: priority) { downsample(path: path, maxPixel: maxPixel) }.value
+        if let image, let cg = image.cgImage {
+            cache.setObject(image, forKey: cacheKey, cost: cg.bytesPerRow * cg.height)
+        }
+        return image
+    }
+
+    private static func key(_ url: URL, _ maxPixel: Int) -> NSString {
+        "\(url.path)#\(maxPixel)" as NSString
+    }
+
+    private static func downsample(path: String, maxPixel: Int) -> UIImage? {
+        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, sourceOptions) else {
+            return nil
+        }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        return UIImage(cgImage: cg)
+    }
+}
+
 private struct GalleryThumbnail: View {
     let url: URL
+    /// Pixels on the long edge: a 3-column cell is ~130 pt, ~400 px on a 3x screen.
+    private static let maxPixel = 420
     @State private var image: UIImage?
 
     var body: some View {
@@ -482,9 +534,11 @@ private struct GalleryThumbnail: View {
             }
         }
         .task(id: url) {
-            let path = url.path
-            let decoded = await Task.detached(priority: .utility) { UIImage(contentsOfFile: path) }.value
-            await MainActor.run { image = decoded }
+            if let hit = GalleryImageLoader.cached(url, maxPixel: Self.maxPixel) {
+                image = hit
+                return
+            }
+            image = await GalleryImageLoader.load(url, maxPixel: Self.maxPixel, priority: .utility)
         }
     }
 }
@@ -503,9 +557,7 @@ private struct GalleryLargePreview: View {
             }
         }
         .task(id: url) {
-            let path = url.path
-            let decoded = await Task.detached(priority: .userInitiated) { UIImage(contentsOfFile: path) }.value
-            await MainActor.run { image = decoded }
+            image = await GalleryImageLoader.load(url, maxPixel: 1600, priority: .userInitiated)
         }
     }
 }
@@ -657,15 +709,13 @@ private struct PhotoDetailSheet: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black.ignoresSafeArea())
         .task {
-            let photoPath = url.path
-            let sourcePath = secondaryPreviewURL?.path
-            let loaded = await Task.detached(priority: .userInitiated) {
-                (UIImage(contentsOfFile: photoPath),
-                 sourcePath.flatMap { UIImage(contentsOfFile: $0) })
-            }.value
-            image = loaded.0
-            secondaryImage = loaded.1
-            loadFailed = loaded.0 == nil
+            // 4096 px keeps pinch-zoom sharp without decoding a full 48 MP bitmap.
+            let loadedMain = await GalleryImageLoader.load(url, maxPixel: 4096, priority: .userInitiated)
+            image = loadedMain
+            loadFailed = loadedMain == nil
+            if let secondaryPreviewURL {
+                secondaryImage = await GalleryImageLoader.load(secondaryPreviewURL, maxPixel: 4096, priority: .userInitiated)
+            }
         }
         .preferredColorScheme(.dark)
     }
@@ -700,8 +750,19 @@ private struct PhotoDetailSheet: View {
 
     /// Older saved photos have no source companion, so crop the inset as a fallback.
     private func crop(_ image: UIImage, normalized: CGRect) -> UIImage? {
-        let renderer = UIGraphicsImageRenderer(size: image.size)
-        let upright = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: image.size)) }
+        // Draw at scale 1 (the renderer's default is the screen scale, which would allocate a bitmap
+        // 9x the photo's pixel count) and skip the redraw entirely when the image is already upright.
+        let upright: UIImage
+        if image.imageOrientation == .up {
+            upright = image
+        } else {
+            let format = UIGraphicsImageRendererFormat.default()
+            format.scale = 1
+            let pixelSize = CGSize(width: image.size.width * image.scale, height: image.size.height * image.scale)
+            upright = UIGraphicsImageRenderer(size: pixelSize, format: format).image { _ in
+                image.draw(in: CGRect(origin: .zero, size: pixelSize))
+            }
+        }
         guard let cgImage = upright.cgImage else { return nil }
         let bounded = normalized.intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
         guard !bounded.isNull, bounded.width > 0, bounded.height > 0 else { return nil }

@@ -154,6 +154,9 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var burstCaptureCount = 0
 
     private let compositeArchiveKey = "DualCam.CompositePhotoFilenames"
+    private let archiveQueue = DispatchQueue(label: "dualcam.archive", qos: .utility)
+    /// Each archived photo is a full-resolution JPEG; this bounds the app's own storage use.
+    private static let maxArchivedPhotos = 300
 
     /// 合成后的预览画面直接送进这个显示层（GPU 渲染 → 像素缓冲 → 显示层，不经过 CPU 回读和主线程）。
     let displayLayer: AVSampleBufferDisplayLayer = {
@@ -226,6 +229,10 @@ final class CameraManager: NSObject, ObservableObject {
     private var highResolutionBatchBurstCompletion: (([Data]) -> Void)?
     private var highResolutionBurstMode = false
     private var highResolutionBurstStopRequested = false
+    private var highResolutionPreparedSlot: Int? = nil
+    private var highResolutionBurstBytes = 0
+    /// Upper bound for the encoded stills a single burst may hold in memory (≈ 15 × 12 MP JPEGs).
+    private static let maxBurstBytes = 320 * 1024 * 1024
     /// sessionQueue-owned bookkeeping for the temporary single-camera still session.
     private var highResolutionBatchActive = false
     private var highResolutionBatchToken: UInt64 = 0
@@ -1639,8 +1646,8 @@ final class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    /// Create a high-detail composite still from a native primary photo and the other camera's
-    /// current video frame. Output dimensions fit inside the native still instead of upscaling it.
+    /// Press-and-hold burst: up to 15 native stills from the main camera, ended by releasing the
+    /// shutter. Each still is then composed / saved exactly like a single high-resolution photo.
     func startBurstCapture() {
         guard canStartBurstCapture else { return }
         let captureConfig = cfg
@@ -1653,6 +1660,7 @@ final class CameraManager: NSObject, ObservableObject {
         burstCaptureCount = 0
         shutterPulse &+= 1
         captureStatus = "准备连拍…"
+        HapticFeedback.play(.shutter)
         CaptureCuePlayer.shared.play(.shutter)
         if flashEnabled { flash(on: true) }
 
@@ -1712,7 +1720,10 @@ final class CameraManager: NSObject, ObservableObject {
                         self.isCapturingPhoto = false
                         self.burstCaptureCount = capturedPhotos.count
                         if outputPhotos.isEmpty {
+                            HapticFeedback.play(.error)
                             self.showToast("连拍失败：没有可保存的照片")
+                        } else {
+                            HapticFeedback.play(.success)
                         }
                     }
                 }
@@ -1727,14 +1738,15 @@ final class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    /// Create a high-detail composite still from a native primary photo and the other camera's
-    /// current video frame. Output dimensions fit inside the native still instead of upscaling it.
+    /// The secondary camera's own picture (mirrored + filtered like the composite), stored next to a
+    /// picture-in-picture composite so the gallery can show it full-size. Split layouts have no
+    /// inset to tap, so skip the extra full-frame JPEG encode for them.
     private func highResolutionSecondaryJPEG(
         secondaryFrame: CVPixelBuffer?,
         config: Config,
         slot: Int
     ) -> Data? {
-        guard let secondaryFrame else { return nil }
+        guard config.layout == .pip, let secondaryFrame else { return nil }
         var image = orient(CIImage(cvPixelBuffer: secondaryFrame))
         lock.lock()
         let front = slotFront
@@ -1746,6 +1758,8 @@ final class CameraManager: NSObject, ObservableObject {
         return jpeg(image)
     }
 
+    /// Create a high-detail composite still from a native primary photo and the other camera's
+    /// current video frame. Output dimensions fit inside the native still instead of upscaling it.
     private func highResolutionCompositeJPEG(
         mainPhotoData: Data?,
         secondaryFrame: CVPixelBuffer?,
@@ -1833,6 +1847,8 @@ final class CameraManager: NSObject, ObservableObject {
             self.highResolutionSession = AVCaptureSession()
             self.highResolutionPhotoOutput = AVCapturePhotoOutput()
             self.highResolutionPhotoInput = nil
+            self.highResolutionPreparedSlot = nil
+            self.highResolutionBurstBytes = 0
             self.highResolutionBatchSlots = slots
             self.highResolutionBatchIndex = 0
             self.highResolutionBatchData = [:]
@@ -1846,7 +1862,9 @@ final class CameraManager: NSObject, ObservableObject {
     }
 
     private func advanceHighResolutionCaptureBatch() {
-        if highResolutionBurstMode && highResolutionBurstStopRequested {
+        // Releasing the shutter ends a burst, but only once the first attempt has finished:
+        // stopping before any still exists would leave nothing but a low-resolution video frame.
+        if highResolutionBurstMode && highResolutionBurstStopRequested && highResolutionBatchIndex > 0 {
             highResolutionBatchIndex = highResolutionBatchSlots.count
         }
         guard highResolutionBatchIndex < highResolutionBatchSlots.count else {
@@ -1855,10 +1873,25 @@ final class CameraManager: NSObject, ObservableObject {
         }
 
         let slot = highResolutionBatchSlots[highResolutionBatchIndex]
-        guard prepareSingleCameraPhotoSession(slot: slot),
-              let output = highResolutionPhotoOutput,
+        // Consecutive shots from the same lens (burst) reuse the running session. Re-preparing it
+        // stops the session, re-locks the device and restarts it for every single frame, which is
+        // what made a "burst" crawl.
+        let canReuseSession = highResolutionPreparedSlot == slot
+            && highResolutionSession?.isRunning == true
+            && highResolutionPhotoInput != nil
+        if !canReuseSession {
+            highResolutionPreparedSlot = nil
+            guard prepareSingleCameraPhotoSession(slot: slot) else {
+                // Continue with the next camera if one lens can't provide a still-photo format.
+                highResolutionBatchIndex += 1
+                advanceHighResolutionCaptureBatch()
+                return
+            }
+            highResolutionPreparedSlot = slot
+        }
+        guard let output = highResolutionPhotoOutput,
               let device = highResolutionPhotoInput?.device else {
-            // Continue with the next camera if one lens can't provide a still-photo format.
+            highResolutionPreparedSlot = nil
             highResolutionBatchIndex += 1
             advanceHighResolutionCaptureBatch()
             return
@@ -1908,6 +1941,12 @@ final class CameraManager: NSObject, ObservableObject {
                     self.highResolutionBatchData[slot] = data
                     self.highResolutionBatchIndexedData[stepIndex] = data
                     if self.highResolutionBurstMode {
+                        // Every burst still stays in memory until the batch is processed; stop early
+                        // instead of letting 15 full-resolution frames get the app killed.
+                        self.highResolutionBurstBytes += data.count
+                        if self.highResolutionBurstBytes >= Self.maxBurstBytes {
+                            self.highResolutionBurstStopRequested = true
+                        }
                         DispatchQueue.main.async {
                             self.burstCaptureCount = stepIndex + 1
                             self.captureStatus = "连拍 \(stepIndex + 1)/15"
@@ -2065,6 +2104,8 @@ final class CameraManager: NSObject, ObservableObject {
         highResolutionBatchBurstCompletion = nil
         highResolutionBurstMode = false
         highResolutionBurstStopRequested = false
+        highResolutionPreparedSlot = nil
+        highResolutionBurstBytes = 0
         highResolutionBatchFlashSlot = nil
         highResolutionBatchActive = false
 
@@ -2260,14 +2301,39 @@ final class CameraManager: NSObject, ObservableObject {
     }
 
     private func setThumb(data: Data) {
-        guard let img = UIImage(data: data) else { return }
-        let thumb = img.preparingThumbnail(of: CGSize(width: 160, height: 160)) ?? img
+        // ImageIO decodes straight to a small bitmap. UIImage(data:) would decode the whole
+        // 12–48 MP photo first, which is a large allocation just to draw a 160 px corner button.
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: 320
+        ]
+        let thumb: UIImage
+        if let source = CGImageSourceCreateWithData(data as CFData, nil),
+           let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) {
+            thumb = UIImage(cgImage: cg)
+        } else if let img = UIImage(data: data) {
+            thumb = img.preparingThumbnail(of: CGSize(width: 160, height: 160)) ?? img
+        } else {
+            return
+        }
         DispatchQueue.main.async { self.lastThumb = thumb }
     }
 
     private var compositeArchiveDirectory: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("DualCamCompositePhotos", isDirectory: true)
+    }
+
+    /// The archive is a second copy of photos that already live in the Photos library, so keep it
+    /// out of iCloud / device backups instead of doubling every backup with full-resolution JPEGs.
+    private func prepareArchiveDirectory(_ directory: URL) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        var excluded = directory
+        try? excluded.setResourceValues(values)
     }
 
     private func archiveLayoutURL(for photoURL: URL) -> URL {
@@ -2278,14 +2344,18 @@ final class CameraManager: NSObject, ObservableObject {
         photoURL.deletingPathExtension().appendingPathExtension("sub.jpg")
     }
 
+    /// Archive bookkeeping (file writes + the filename list in UserDefaults) all runs on this serial
+    /// queue. Saves arrive from the video queue, the Photos callback and the burst path at once;
+    /// unsynchronised read-modify-write of the list would lose entries and leave orphan files.
     private func loadCompositeArchive() {
         let directory = compositeArchiveDirectory
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let names = UserDefaults.standard.stringArray(forKey: compositeArchiveKey) ?? []
-        let urls = names.map { directory.appendingPathComponent($0) }
-            .filter { FileManager.default.fileExists(atPath: $0.path) }
-        DispatchQueue.main.async {
-            self.compositePhotoURLs = urls
+        archiveQueue.async { [weak self] in
+            guard let self else { return }
+            try? self.prepareArchiveDirectory(directory)
+            let names = UserDefaults.standard.stringArray(forKey: self.compositeArchiveKey) ?? []
+            let urls = names.map { directory.appendingPathComponent($0) }
+                .filter { FileManager.default.fileExists(atPath: $0.path) }
+            DispatchQueue.main.async { self.compositePhotoURLs = urls }
             if let first = urls.first, let data = try? Data(contentsOf: first) {
                 self.setThumb(data: data)
             }
@@ -2319,47 +2389,57 @@ final class CameraManager: NSObject, ObservableObject {
     ) {
         guard !images.isEmpty else { return }
         let directory = compositeArchiveDirectory
-        do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            var names = UserDefaults.standard.stringArray(forKey: compositeArchiveKey) ?? []
-            for (index, data) in images.enumerated() {
-                let name = "\(UUID().uuidString).jpg"
-                let photoURL = directory.appendingPathComponent(name)
-                try data.write(to: photoURL, options: .atomic)
-                if let config {
-                    let rect = Compositor.pipRectNormalized(cfg: config)
-                    let metadata = ArchivedCompositeLayout(
-                        layout: config.layout.rawValue,
-                        x: config.layout == .pip ? Double(rect.minX) : nil,
-                        y: config.layout == .pip ? Double(rect.minY) : nil,
-                        width: config.layout == .pip ? Double(rect.width) : nil,
-                        height: config.layout == .pip ? Double(rect.height) : nil
-                    )
-                    if let data = try? JSONEncoder().encode(metadata) {
-                        try? data.write(to: archiveLayoutURL(for: photoURL), options: .atomic)
+        archiveQueue.async { [weak self] in
+            guard let self else { return }
+            var failed = false
+            var written: [String] = []
+            do {
+                try self.prepareArchiveDirectory(directory)
+                for (index, data) in images.enumerated() {
+                    let name = "\(UUID().uuidString).jpg"
+                    let photoURL = directory.appendingPathComponent(name)
+                    try data.write(to: photoURL, options: .atomic)
+                    written.append(name)
+                    if let config {
+                        let rect = Compositor.pipRectNormalized(cfg: config)
+                        let metadata = ArchivedCompositeLayout(
+                            layout: config.layout.rawValue,
+                            x: config.layout == .pip ? Double(rect.minX) : nil,
+                            y: config.layout == .pip ? Double(rect.minY) : nil,
+                            width: config.layout == .pip ? Double(rect.width) : nil,
+                            height: config.layout == .pip ? Double(rect.height) : nil
+                        )
+                        if let encoded = try? JSONEncoder().encode(metadata) {
+                            try? encoded.write(to: self.archiveLayoutURL(for: photoURL), options: .atomic)
+                        }
+                    }
+                    if secondaryImages.indices.contains(index), let source = secondaryImages[index] {
+                        try? source.write(to: self.archiveSecondaryURL(for: photoURL), options: .atomic)
                     }
                 }
-                if secondaryImages.indices.contains(index), let source = secondaryImages[index] {
-                    try? source.write(to: archiveSecondaryURL(for: photoURL), options: .atomic)
-                }
-                names.insert(name, at: 0)
+            } catch {
+                // e.g. the disk filled up part-way through a burst. Still register everything that
+                // was written, otherwise those files are orphaned and never shown or cleaned up.
+                failed = true
             }
 
-            let retained = Array(names.prefix(300))
+            var names = UserDefaults.standard.stringArray(forKey: self.compositeArchiveKey) ?? []
+            // Newest first: the last image of a batch ends up at index 0.
+            for name in written { names.insert(name, at: 0) }
+            let retained = Array(names.prefix(Self.maxArchivedPhotos))
             let retainedSet = Set(retained)
             for name in names where !retainedSet.contains(name) {
                 let oldURL = directory.appendingPathComponent(name)
                 try? FileManager.default.removeItem(at: oldURL)
-                try? FileManager.default.removeItem(at: archiveLayoutURL(for: oldURL))
-                try? FileManager.default.removeItem(at: archiveSecondaryURL(for: oldURL))
+                try? FileManager.default.removeItem(at: self.archiveLayoutURL(for: oldURL))
+                try? FileManager.default.removeItem(at: self.archiveSecondaryURL(for: oldURL))
             }
-            UserDefaults.standard.set(retained, forKey: compositeArchiveKey)
+            UserDefaults.standard.set(retained, forKey: self.compositeArchiveKey)
             DispatchQueue.main.async {
                 self.compositePhotoURLs = retained.map { directory.appendingPathComponent($0) }
             }
-            if let newest = images.last { setThumb(data: newest) }
-        } catch {
-            showToast("照片未能归档到 DualCam，请检查可用存储空间")
+            if let newest = images.last, !written.isEmpty { self.setThumb(data: newest) }
+            if failed { self.showToast("照片未能完整归档到 DualCam，请检查可用存储空间") }
         }
     }
 
@@ -2367,18 +2447,27 @@ final class CameraManager: NSObject, ObservableObject {
         let current = compositePhotoURLs
         let removed = Set(offsets.compactMap { current.indices.contains($0) ? current[$0] : nil })
         guard !removed.isEmpty else { return }
-        for url in removed {
-            try? FileManager.default.removeItem(at: url)
-            try? FileManager.default.removeItem(at: archiveLayoutURL(for: url))
-            try? FileManager.default.removeItem(at: archiveSecondaryURL(for: url))
-        }
-        let remaining = current.filter { !removed.contains($0) }
-        UserDefaults.standard.set(remaining.map { $0.lastPathComponent }, forKey: compositeArchiveKey)
-        compositePhotoURLs = remaining
-        if let first = remaining.first, let data = try? Data(contentsOf: first) {
-            setThumb(data: data)
-        } else {
-            lastThumb = nil
+        let removedNames = Set(removed.map { $0.lastPathComponent })
+        let directory = compositeArchiveDirectory
+        // Update the grid immediately; the file clean-up runs on the archive queue, in order with saves.
+        compositePhotoURLs = current.filter { !removed.contains($0) }
+        archiveQueue.async { [weak self] in
+            guard let self else { return }
+            for url in removed {
+                try? FileManager.default.removeItem(at: url)
+                try? FileManager.default.removeItem(at: self.archiveLayoutURL(for: url))
+                try? FileManager.default.removeItem(at: self.archiveSecondaryURL(for: url))
+            }
+            let names = (UserDefaults.standard.stringArray(forKey: self.compositeArchiveKey) ?? [])
+                .filter { !removedNames.contains($0) }
+            UserDefaults.standard.set(names, forKey: self.compositeArchiveKey)
+            let urls = names.map { directory.appendingPathComponent($0) }
+            DispatchQueue.main.async { self.compositePhotoURLs = urls }
+            if let first = urls.first, let data = try? Data(contentsOf: first) {
+                self.setThumb(data: data)
+            } else {
+                DispatchQueue.main.async { self.lastThumb = nil }
+            }
         }
     }
 

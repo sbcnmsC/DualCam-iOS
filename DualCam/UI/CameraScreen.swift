@@ -1413,7 +1413,14 @@ private struct ShutterPressStyle: ButtonStyle {
 struct ShutterButton: View {
     @EnvironmentObject private var cam: CameraManager
 
+    /// True from the moment a hold turned into a burst until just after the finger lifts, so the
+    /// Button's own tap action (fired on touch-up) doesn't also take a normal photo.
     @State private var burstGestureTriggered = false
+    @State private var pressActive = false
+    @State private var burstArm: DispatchWorkItem?
+
+    private static let burstHoldDelay: TimeInterval = 0.35
+    private static let burstMaxMovement: CGFloat = 24
 
     var body: some View {
         Button {
@@ -1436,21 +1443,46 @@ struct ShutterButton: View {
             .animation(.easeInOut(duration: 0.2), value: cam.isRecording)
         }
         .buttonStyle(ShutterPressStyle())
+        // A zero-distance drag reports both touch-down and lift. LongPressGesture can't be used for
+        // this: its onChanged fires the moment the finger lands (not after the hold time), and its
+        // onEnded fires when the hold time is reached rather than when the finger lifts.
         .simultaneousGesture(
-            LongPressGesture(minimumDuration: 0.35, maximumDistance: 24)
-                .onChanged { reachedThreshold in
-                    guard reachedThreshold, !burstGestureTriggered, cam.canStartBurstCapture else { return }
-                    burstGestureTriggered = true
-                    cam.startBurstCapture()
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    if !pressActive {
+                        pressActive = true
+                        let arm = DispatchWorkItem {
+                            guard pressActive, !burstGestureTriggered, cam.canStartBurstCapture else { return }
+                            burstGestureTriggered = true
+                            cam.startBurstCapture()
+                        }
+                        burstArm = arm
+                        DispatchQueue.main.asyncAfter(deadline: .now() + Self.burstHoldDelay, execute: arm)
+                    }
+                    // Dragging away from the button cancels the pending burst.
+                    if !burstGestureTriggered,
+                       hypot(value.translation.width, value.translation.height) > Self.burstMaxMovement {
+                        burstArm?.cancel()
+                        burstArm = nil
+                    }
                 }
                 .onEnded { _ in
+                    pressActive = false
+                    burstArm?.cancel()
+                    burstArm = nil
                     guard burstGestureTriggered else { return }
                     cam.stopBurstCapture()
+                    // Keep the flag until after the Button's touch-up action has been swallowed.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
                         burstGestureTriggered = false
                     }
                 }
         )
+        .onChange(of: cam.isBurstCapturing) { _, active in
+            // A burst can also end by itself (15 shots, memory cap) while the finger is still down;
+            // the flag must stay set until the finger lifts so that release isn't read as a tap.
+            if !active, !pressActive { burstGestureTriggered = false }
+        }
         .disabled(!cam.ready || (cam.isCapturingPhoto && !cam.isBurstCapturing))
         .opacity(cam.ready ? ((cam.isCapturingPhoto && !cam.isBurstCapturing) ? 0.8 : 1) : 0.4)
         .accessibilityLabel(cam.captureMode == .photo ? "拍照" : (cam.isRecording ? "停止录像" : "开始录像"))
