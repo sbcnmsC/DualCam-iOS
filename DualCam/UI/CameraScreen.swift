@@ -287,7 +287,8 @@ struct CameraScreen: View {
                         .padding(.trailing, 6)
                         .padding(.vertical, 5)
                         .background(.black.opacity(0.52), in: Capsule())
-                        .padding(.top, max(insets.top + 92, 132))
+                        // Pin the compact sharing indicator to the top safe area.
+                        .padding(.top, max(insets.top + 6, 10))
                         Spacer()
                     }
                     .frame(width: canvasSize.width, height: canvasSize.height)
