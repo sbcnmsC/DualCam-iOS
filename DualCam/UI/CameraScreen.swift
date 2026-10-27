@@ -254,125 +254,160 @@ struct CameraScreen: View {
                     .zIndex(100)
                 } else if wirelessSession.isSecurelyPaired && wirelessSession.mode == .idle {
                     ZStack {
-                        Color(red: 0.015, green: 0.025, blue: 0.055).ignoresSafeArea()
-                        LinearGradient(
-                            colors: [
-                                Color(red: 0.03, green: 0.09, blue: 0.17),
-                                Color(red: 0.025, green: 0.035, blue: 0.075),
-                                Color(red: 0.015, green: 0.018, blue: 0.035)
-                            ],
-                            startPoint: .topLeading, endPoint: .bottomTrailing
-                        )
-                        .ignoresSafeArea()
-                        Circle().fill(Color.cyan.opacity(0.19))
-                            .frame(width: 300, height: 300).blur(radius: 80).offset(x: -150, y: -210)
-                        Circle().fill(Color.blue.opacity(0.18))
-                            .frame(width: 340, height: 340).blur(radius: 90).offset(x: 170, y: 190)
+                        Color(uiColor: .systemGroupedBackground).ignoresSafeArea()
 
-                        VStack(spacing: 18) {
-                            Image(systemName: "checkmark.shield.fill")
-                                .font(.system(size: 32, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 68, height: 68)
-                                .background(
-                                    LinearGradient(colors: [Color.cyan.opacity(0.85), Color.blue.opacity(0.75)],
-                                                   startPoint: .topLeading, endPoint: .bottomTrailing),
-                                    in: RoundedRectangle(cornerRadius: 22, style: .continuous)
-                                )
-                                .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
-                                    .stroke(Color.white.opacity(0.25), lineWidth: 1))
+                        ScrollView(showsIndicators: false) {
+                            VStack(spacing: 22) {
+                                VStack(spacing: 13) {
+                                    Image(systemName: "checkmark.shield.fill")
+                                        .font(.system(size: 30, weight: .semibold))
+                                        .foregroundStyle(.white)
+                                        .frame(width: 76, height: 76)
+                                        .background(
+                                            LinearGradient(
+                                                colors: [
+                                                    Color(uiColor: .systemBlue),
+                                                    Color(uiColor: .systemIndigo)
+                                                ],
+                                                startPoint: .topLeading,
+                                                endPoint: .bottomTrailing
+                                            ),
+                                            in: RoundedRectangle(cornerRadius: 25, style: .continuous)
+                                        )
+                                        .shadow(color: Color(uiColor: .systemBlue).opacity(0.18), radius: 18, y: 8)
 
-                            VStack(spacing: 8) {
-                                Text("安全配对已完成")
-                                    .font(.system(size: 25, weight: .bold, design: .rounded))
-                                    .foregroundStyle(.white)
-                                Text("选择这台设备的用途")
-                                    .font(.system(size: 14, weight: .medium))
-                                    .foregroundStyle(.white.opacity(0.65))
-                                Text("两台设备分别选择接收端和发送端")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.white.opacity(0.43))
-                            }
-
-                            VStack(spacing: 10) {
-                                Button {
-                                    HapticFeedback.play(.button)
-                                    wirelessSession.startReceiving()
-                                } label: {
-                                    HStack(spacing: 13) {
-                                        Image(systemName: "play.rectangle.fill")
-                                            .font(.system(size: 19, weight: .semibold))
-                                            .foregroundStyle(Color.cyan)
-                                            .frame(width: 46, height: 46)
-                                            .background(Color.cyan.opacity(0.12), in: RoundedRectangle(cornerRadius: 15))
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text("全屏接收画面").font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
-                                            Text("在这台设备上观看另一台设备").font(.system(size: 11)).foregroundStyle(.white.opacity(0.56))
+                                    VStack(spacing: 6) {
+                                        Text("设备已安全连接")
+                                            .font(.system(.title2, design: .rounded, weight: .bold))
+                                            .foregroundStyle(.primary)
+                                        Text("选择这台 iPhone 的用途")
+                                            .font(.subheadline)
+                                            .foregroundStyle(.secondary)
+                                        HStack(spacing: 6) {
+                                            Circle()
+                                                .fill(Color(uiColor: .systemGreen))
+                                                .frame(width: 7, height: 7)
+                                            Text("已与 \(wirelessSession.localDeviceName) 完成配对")
+                                                .font(.caption.weight(.medium))
+                                                .foregroundStyle(.secondary)
                                         }
-                                        Spacer(minLength: 0)
-                                        Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold)).foregroundStyle(.white.opacity(0.38))
+                                        .padding(.top, 3)
                                     }
-                                    .padding(13)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(Color.white.opacity(0.075), in: RoundedRectangle(cornerRadius: 19, style: .continuous))
-                                    .overlay(RoundedRectangle(cornerRadius: 19, style: .continuous).stroke(Color.cyan.opacity(0.35), lineWidth: 1))
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.top, max(insets.top + 22, 40))
+
+                                VStack(spacing: 12) {
+                                    Button {
+                                        HapticFeedback.play(.button)
+                                        wirelessSession.startReceiving()
+                                    } label: {
+                                        HStack(spacing: 14) {
+                                            Image(systemName: "play.rectangle.on.rectangle")
+                                                .font(.system(size: 22, weight: .semibold))
+                                                .foregroundStyle(Color(uiColor: .systemBlue))
+                                                .frame(width: 52, height: 52)
+                                                .background(Color(uiColor: .systemBlue).opacity(0.10),
+                                                            in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+                                            VStack(alignment: .leading, spacing: 5) {
+                                                Text("全屏接收画面")
+                                                    .font(.headline)
+                                                    .foregroundStyle(.primary)
+                                                Text("在这台设备上实时观看另一台设备")
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                                    .multilineTextAlignment(.leading)
+                                            }
+                                            Spacer(minLength: 0)
+                                            Image(systemName: "chevron.right")
+                                                .font(.system(size: 13, weight: .semibold))
+                                                .foregroundStyle(.tertiary)
+                                        }
+                                        .padding(16)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .background(Color(uiColor: .secondarySystemGroupedBackground),
+                                                    in: RoundedRectangle(cornerRadius: 23, style: .continuous))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 23, style: .continuous)
+                                                .stroke(Color(uiColor: .systemBlue).opacity(0.20), lineWidth: 1)
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+
+                                    Button {
+                                        HapticFeedback.play(.button)
+                                        wirelessSession.startSending()
+                                    } label: {
+                                        HStack(spacing: 14) {
+                                            Image(systemName: "dot.radiowaves.left.and.right")
+                                                .font(.system(size: 22, weight: .semibold))
+                                                .foregroundStyle(Color(uiColor: .systemTeal))
+                                                .frame(width: 52, height: 52)
+                                                .background(Color(uiColor: .systemTeal).opacity(0.11),
+                                                            in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+                                            VStack(alignment: .leading, spacing: 5) {
+                                                Text("共享本机合成画面")
+                                                    .font(.headline)
+                                                    .foregroundStyle(.primary)
+                                                Text("发送双摄、画中画 / 分屏与滤镜画面")
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                                    .multilineTextAlignment(.leading)
+                                            }
+                                            Spacer(minLength: 0)
+                                            Image(systemName: "chevron.right")
+                                                .font(.system(size: 13, weight: .semibold))
+                                                .foregroundStyle(.tertiary)
+                                        }
+                                        .padding(16)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .background(Color(uiColor: .secondarySystemGroupedBackground),
+                                                    in: RoundedRectangle(cornerRadius: 23, style: .continuous))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 23, style: .continuous)
+                                                .stroke(Color(uiColor: .systemTeal).opacity(0.23), lineWidth: 1)
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+
+                                Button(role: .destructive) {
+                                    HapticFeedback.play(.button)
+                                    wirelessSession.disconnectPairing()
+                                } label: {
+                                    Label("断开安全配对", systemImage: "lock.slash")
+                                        .font(.subheadline.weight(.medium))
+                                        .foregroundStyle(Color(uiColor: .systemRed))
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 13)
+                                        .background(Color(uiColor: .secondarySystemGroupedBackground),
+                                                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                                 }
                                 .buttonStyle(.plain)
 
-                                Button {
-                                    HapticFeedback.play(.button)
-                                    wirelessSession.startSending()
-                                } label: {
-                                    HStack(spacing: 13) {
-                                        Image(systemName: "dot.radiowaves.left.and.right")
-                                            .font(.system(size: 19, weight: .semibold))
-                                            .foregroundStyle(Color.green)
-                                            .frame(width: 46, height: 46)
-                                            .background(Color.green.opacity(0.12), in: RoundedRectangle(cornerRadius: 15))
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text("共享本机合成画面").font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
-                                            Text("向已配对设备发送双摄合成预览").font(.system(size: 11)).foregroundStyle(.white.opacity(0.56))
-                                        }
-                                        Spacer(minLength: 0)
-                                        Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold)).foregroundStyle(.white.opacity(0.38))
-                                    }
-                                    .padding(13)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(Color.white.opacity(0.075), in: RoundedRectangle(cornerRadius: 19, style: .continuous))
-                                    .overlay(RoundedRectangle(cornerRadius: 19, style: .continuous).stroke(Color.green.opacity(0.32), lineWidth: 1))
+                                HStack(alignment: .top, spacing: 10) {
+                                    Image(systemName: "lock.shield")
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundStyle(Color(uiColor: .systemGreen))
+                                        .padding(.top, 1)
+                                    Text("实时视频经加密传输，不启用麦克风。退出当前窗口不会自动断开已建立的配对。")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    Spacer(minLength: 0)
                                 }
-                                .buttonStyle(.plain)
+                                .padding(.horizontal, 4)
                             }
-
-                            Button(role: .destructive) {
-                                HapticFeedback.play(.button)
-                                wirelessSession.disconnectPairing()
-                            } label: {
-                                Label("断开安全配对", systemImage: "lock.slash")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(.white.opacity(0.65))
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 7)
-                            }
-                            .buttonStyle(.plain)
+                            .padding(.horizontal, 22)
+                            .padding(.bottom, max(insets.bottom + 26, 40))
+                            .frame(maxWidth: 440)
+                            .frame(maxWidth: .infinity)
                         }
-                        .padding(24)
-                        .frame(maxWidth: 420)
-                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 30, style: .continuous)
-                                .stroke(
-                                    LinearGradient(colors: [Color.white.opacity(0.26), Color.white.opacity(0.06)],
-                                                   startPoint: .topLeading, endPoint: .bottomTrailing),
-                                    lineWidth: 1
-                                )
-                        )
-                        .shadow(color: .black.opacity(0.32), radius: 30, y: 12)
-                        .padding(22)
                     }
                     .frame(width: canvasSize.width, height: canvasSize.height)
                     .offset(x: canvasOffset.width, y: canvasOffset.height)
                     .ignoresSafeArea()
+                    .tint(Color(uiColor: .systemBlue))
                     .zIndex(80)
                 }
             }
