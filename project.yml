@@ -1,4 +1,5 @@
 name: DualCam
+# Build 15: Refresh wireless pairing and connected-role screens with native Apple-style adaptive colors and cards. Front-camera mirroring remains opt-in.
 
 options:
   bundleIdPrefix: com.dualcam
@@ -24,6 +25,8 @@ targets:
           - Info.plist
     dependencies:
       - package: WebRTC
+      - target: DualCamLiveActivityExtension
+        embed: true
     settings:
       base:
         INFOPLIST_FILE: DualCam/Info.plist
@@ -32,3 +35,28 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+  DualCamLiveActivityExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: DualCamLiveActivity
+      - path: DualCam/LiveActivity/MonitorShareAttributes.swift
+      - path: DualCam/Streaming/StopWirelessShareIntent.swift
+    settings:
+      base:
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) DUALCAM_WIDGET_EXTENSION"
+        PRODUCT_BUNDLE_IDENTIFIER: com.dualcam.app.LiveActivity
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: YES
+        CURRENT_PROJECT_VERSION: "15"
+        MARKETING_VERSION: "0.4.2"
+        INFOPLIST_KEY_CFBundleVersion: "15"
+        INFOPLIST_KEY_CFBundleShortVersionString: "0.4.2"
+        SKIP_INSTALL: YES
+    info:
+      path: DualCamLiveActivity/Info.plist
+      properties:
+        CFBundleShortVersionString: "0.4.2"
+        CFBundleVersion: "15"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension

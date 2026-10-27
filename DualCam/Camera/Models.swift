@@ -148,7 +148,8 @@ struct Config: Equatable {
     var pipOpacity: CGFloat = 1
     var pipSnap = true
     var splitRatio: CGFloat = 0.5               // 主画面占比（竖 / 方画幅为上半部分，宽画幅为左半部分）
-    var mirrorFront = true
+    /// Optional left-right selfie mirroring. Disabled by default so text and gestures are not reversed.
+    var mirrorFront = false
     // 滤镜
     var filter: FilterKind = .original
     var filterIntensity: CGFloat = 1

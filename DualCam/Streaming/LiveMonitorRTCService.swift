@@ -5,7 +5,7 @@ import Foundation
 import WebRTC
 
 /// WebRTC media plane. Only the already-composited DualCam preview is sent.
-/// ICE servers intentionally remain empty: this version attempts direct host-candidate LAN paths only.
+/// Uses direct LAN candidates plus public STUN discovery; no TURN relay or cloud media server is used.
 final class LiveMonitorRTCService: NSObject, ObservableObject {
     @Published private(set) var remoteVideoTrack: RTCVideoTrack?
     @Published private(set) var statusText = "等待安全配对"
@@ -33,6 +33,13 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
     private var videoSource: RTCVideoSource?
     private var frameCapturer: CompositedVideoCapturer?
     private var lastAdaptedSize = CGSize.zero
+    /// Live monitoring prioritizes motion clarity over pushing full-res preview frames through
+    /// the real-time encoder.
+    private let maximumStreamingLongEdge = 1920
+    private let streamingFrameRate = 60
+    private let streamingMaximumBitrateBps = 12_000_000
+    private let streamingStartBitrateKbps = 6_000
+    private let streamingMinimumBitrateKbps = 2_500
 
     // Everything below is main-thread only. WebRTC completion handlers hop back to main first.
     private var peerConnection: RTCPeerConnection?
@@ -42,6 +49,7 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
     private var isReceivingEnabled = false
     private var pendingOffer: Signal?
     private var announcedConnected = false
+    private var statsProbeGeneration = 0
 
     private struct Signal: Codable {
         let type: String
@@ -77,14 +85,55 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
                 self?.updateStatus("生成视频请求失败：\(error?.localizedDescription ?? "未知错误")")
                 return
             }
-            pc.setLocalDescription(description) { [weak self] error in
+            // LibWebRTC in the bundled SDK doesn't expose RTCRtpSender.setParameters.
+            // Use its supported SDP bitrate hints while retaining the bounded source output below.
+            let tunedSDP = self.addVideoBitrateHints(to: description.sdp)
+            let tunedDescription = RTCSessionDescription(type: .offer, sdp: tunedSDP)
+            pc.setLocalDescription(tunedDescription) { [weak self] error in
                 guard let self, error == nil else {
                     self?.updateStatus("设置本地视频描述失败：\(error?.localizedDescription ?? "未知错误")")
                     return
                 }
-                self.send(Signal(type: "offer", sdp: description.sdp, sdpType: "offer"))
+                self.send(Signal(type: "offer", sdp: tunedSDP, sdpType: "offer"))
             }
         }
+    }
+
+    /// Hints LibWebRTC to start near 6 Mbps and permit up to 12 Mbps on a fast local network.
+    /// A low bitrate floor avoids an overly soft default image; congestion control can still adapt.
+    private func addVideoBitrateHints(to sdp: String) -> String {
+        let lines = sdp.components(separatedBy: "\r\n")
+        let maxKbps = streamingMaximumBitrateBps / 1_000
+        var output: [String] = []
+        var inVideoSection = false
+        var addedBandwidth = false
+
+        for rawLine in lines {
+            if rawLine.hasPrefix("m=") {
+                if inVideoSection && !addedBandwidth {
+                    output.append("b=AS:\(maxKbps)")
+                }
+                inVideoSection = rawLine.hasPrefix("m=video ")
+                addedBandwidth = false
+            }
+
+            var line = rawLine
+            if inVideoSection, line.hasPrefix("a=fmtp:"), !line.contains("x-google-max-bitrate=") {
+                line += ";x-google-start-bitrate=\(streamingStartBitrateKbps)" +
+                        ";x-google-min-bitrate=\(streamingMinimumBitrateKbps)" +
+                        ";x-google-max-bitrate=\(maxKbps)"
+            }
+            output.append(line)
+
+            if inVideoSection, line.hasPrefix("c="), !addedBandwidth {
+                output.append("b=AS:\(maxKbps)")
+                addedBandwidth = true
+            }
+        }
+        if inVideoSection && !addedBandwidth {
+            output.append("b=AS:\(maxKbps)")
+        }
+        return output.joined(separator: "\r\n")
     }
 
     func startReceiving() {
@@ -105,12 +154,11 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
             frameLock.unlock()
             return
         }
-        // Cap at ~30 fps for a 60 fps source. The threshold sits below 1/30 s on purpose: camera
-        // timestamps jitter by a few ms, and an exact 1/30 s cut-off would also drop roughly every
-        // other frame of a plain 30 fps feed.
+        // Allow up to 60 fps when the source supplies it. The threshold is slightly below 1/60 s
+        // to tolerate timestamp jitter; the latest-frame drain still drops stale work under load.
         if frame.presentationTime.isValid, lastQueuedPTS.isValid {
             let delta = CMTimeGetSeconds(CMTimeSubtract(frame.presentationTime, lastQueuedPTS))
-            if delta >= 0, delta < (0.8 / 30.0) {
+            if delta >= 0, delta < (0.8 / 60.0) {
                 frameLock.unlock()
                 return
             }
@@ -134,10 +182,15 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
         let source = videoSource
         let capturer = frameCapturer
         var needsAdapt = false
+        var targetSize = CGSize.zero
         if let frame {
-            let size = CGSize(width: frame.width, height: frame.height)
-            if size != lastAdaptedSize {
-                lastAdaptedSize = size
+            let inputSize = CGSize(width: frame.width, height: frame.height)
+            let scale = min(1.0, CGFloat(maximumStreamingLongEdge) / max(inputSize.width, inputSize.height))
+            let targetWidth = max(2, Int((inputSize.width * scale / 2).rounded() * 2))
+            let targetHeight = max(2, Int((inputSize.height * scale / 2).rounded() * 2))
+            targetSize = CGSize(width: targetWidth, height: targetHeight)
+            if targetSize != lastAdaptedSize {
+                lastAdaptedSize = targetSize
                 needsAdapt = true
             }
         }
@@ -145,7 +198,11 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
 
         if let frame, sending, let source, let capturer {
             if needsAdapt {
-                source.adaptOutputFormat(toWidth: Int32(frame.width), height: Int32(frame.height), fps: 30)
+                source.adaptOutputFormat(
+                    toWidth: Int32(targetSize.width),
+                    height: Int32(targetSize.height),
+                    fps: Int32(streamingFrameRate)
+                )
             }
             capturer.capture(pixelBuffer: frame.pixelBuffer, presentationTime: frame.presentationTime)
         }
@@ -232,6 +289,7 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
         pendingRemoteCandidates.removeAll()
         hasRemoteDescription = false
         announcedConnected = false
+        statsProbeGeneration += 1
         updateStatus("视频已停止")
     }
 
@@ -247,10 +305,9 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
             return
         }
         pendingRemoteCandidates = queuedCandidates
-        let transceiver = RTCRtpTransceiverInit()
-        transceiver.direction = .recvOnly
-        _ = pc.addTransceiver(of: .video, init: transceiver)
-
+        // The incoming offer already contains the sender's video m-line.
+        // Let setRemoteDescription create/match its receiver transceiver; adding a second
+        // recvOnly transceiver here can produce an unmatched m-line and a connected-but-black view.
         pc.setRemoteDescription(RTCSessionDescription(type: .offer, sdp: sdp)) { [weak self, weak pc] error in
             // WebRTC calls this on its signalling thread; connection state is main-thread only.
             DispatchQueue.main.async {
@@ -283,7 +340,13 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
 
     private func makePeerConnection() -> RTCPeerConnection? {
         let configuration = RTCConfiguration()
-        configuration.iceServers = []
+        // Keep direct LAN candidates, but also gather server-reflexive candidates.
+        // Secure pairing/signalling can succeed even when WebRTC media cannot traverse
+        // the network path; STUN helps when local-network paths are insufficient.
+        configuration.iceServers = [
+            RTCIceServer(urlStrings: ["stun:stun.l.google.com:19302"]),
+            RTCIceServer(urlStrings: ["stun:stun1.l.google.com:19302"])
+        ]
         configuration.sdpSemantics = .unifiedPlan
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
         guard let pc = Self.factory.peerConnection(with: configuration, constraints: constraints, delegate: nil) else {
@@ -316,8 +379,54 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
 
     private func refreshRemoteTrack(from pc: RTCPeerConnection) {
         if let track = pc.transceivers.compactMap({ $0.receiver.track as? RTCVideoTrack }).first {
-            DispatchQueue.main.async { self.remoteVideoTrack = track }
+            DispatchQueue.main.async {
+                track.isEnabled = true
+                self.remoteVideoTrack = track
+                self.updateStatus("已建立远端视频轨道，等待画面帧…")
+            }
         }
+    }
+
+    /// Diagnose black screens at the media layer instead of treating ICE connectivity as video success.
+    /// RTCStatistics exposes inbound RTP byte/frame counters; the generation token prevents stale
+    /// callbacks from an old peer connection overwriting the current session's status.
+    private func startStatsProbe(for connection: RTCPeerConnection?) {
+        guard let connection else { return }
+        statsProbeGeneration += 1
+        let generation = statsProbeGeneration
+
+        func poll() {
+            guard self.statsProbeGeneration == generation,
+                  self.peerConnection === connection else { return }
+            connection.statistics { [weak self, weak connection] report in
+                guard let self, let connection else { return }
+                DispatchQueue.main.async {
+                    guard self.statsProbeGeneration == generation,
+                          self.peerConnection === connection else { return }
+
+                    let inboundVideo = report.statistics.values.first { item in
+                        item.type == "inbound-rtp" &&
+                        ((item.values["kind"] as? String) == "video" ||
+                         (item.values["mediaType"] as? String) == "video")
+                    }
+                    if let inboundVideo {
+                        let bytes = (inboundVideo.values["bytesReceived"] as? NSNumber)?.intValue ?? 0
+                        let decoded = (inboundVideo.values["framesDecoded"] as? NSNumber)?.intValue ?? 0
+                        if decoded > 0 {
+                            self.updateStatus("已收到并解码视频帧，等待画面显示…")
+                        } else if bytes > 0 {
+                            self.updateStatus("已收到视频数据，但尚未成功解码；请重新开始共享")
+                        } else {
+                            self.updateStatus("网络已连接，但暂未收到视频数据；请确认发送端正在共享")
+                        }
+                    } else {
+                        self.updateStatus("网络已连接，正在等待视频接收通道…")
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { poll() }
+                }
+            }
+        }
+        poll()
     }
 
     private func send(_ signal: Signal) {
@@ -362,7 +471,11 @@ extension LiveMonitorRTCService: RTCPeerConnectionDelegate {
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {
         if let track = stream.videoTracks.first {
-            DispatchQueue.main.async { self.remoteVideoTrack = track }
+            DispatchQueue.main.async {
+                track.isEnabled = true
+                self.remoteVideoTrack = track
+                self.updateStatus("收到远端视频轨道，正在显示合成画面…")
+            }
         }
     }
     func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {
@@ -372,8 +485,11 @@ extension LiveMonitorRTCService: RTCPeerConnectionDelegate {
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
         switch newState {
         case .connected, .completed:
-            updateStatus("实时画面已连接")
+            // ICE only proves that a network path exists; it does not prove that video RTP
+            // is arriving or that the receiver can decode/render it. Keep the UI truthful.
+            updateStatus("网络通道已建立，正在检查视频数据…")
             announceConnection(connected: true)
+            startStatsProbe(for: peerConnection)
         case .checking:
             updateStatus("正在连接设备…")
         case .disconnected:
@@ -398,7 +514,11 @@ extension LiveMonitorRTCService: RTCPeerConnectionDelegate {
     func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didStartReceivingOn transceiver: RTCRtpTransceiver) {
         if let track = transceiver.receiver.track as? RTCVideoTrack {
-            DispatchQueue.main.async { self.remoteVideoTrack = track }
+            DispatchQueue.main.async {
+                track.isEnabled = true
+                self.remoteVideoTrack = track
+                self.updateStatus("远端开始发送视频帧…")
+            }
         }
     }
 }

@@ -13,6 +13,7 @@ struct CreativeGalleryView: View {
     @State private var selectedForExport: Set<String> = []
     @State private var exportAlert = false
     @State private var exportMessage = ""
+    @State private var deleteConfirm = false
 
     private let columns = [
         GridItem(.flexible(), spacing: 3),
@@ -40,13 +41,30 @@ struct CreativeGalleryView: View {
             CameraAlbumPhotoDetail(
                 photoURLs: cam.compositePhotoURLs,
                 initialURL: item.url,
-                onExport: { url in exportToSystemPhotos([url]) }
+                onExport: { url in exportToSystemPhotos([url]) },
+                onDelete: { url in
+                    cam.deleteCompositePhoto(url)
+                    detailItem = nil
+                    selectedForExport.remove(url.path)
+                }
             )
         }
         .alert("导出到系统相册", isPresented: $exportAlert) {
             Button("好", role: .cancel) {}
         } message: {
             Text(exportMessage)
+        }
+        .confirmationDialog(
+            "确定删除选中的照片？",
+            isPresented: $deleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("删除 \(selectedForExport.count) 张照片", role: .destructive) {
+                deleteSelectedPhotos()
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("照片及其关联的小窗预览与实况片段会一起从 DualCam 相机相册中删除。")
         }
     }
 
@@ -173,26 +191,51 @@ struct CreativeGalleryView: View {
     }
 
     private var exportSelectionBar: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
             Text("已选 \(selectedForExport.count) 张")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.8))
-            Spacer(minLength: 4)
+            Spacer(minLength: 2)
+            Button(role: .destructive) {
+                deleteConfirm = true
+            } label: {
+                Label("删除", systemImage: "trash")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Color.red.opacity(0.78), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("删除选中照片")
             Button {
                 exportToSystemPhotos(cam.compositePhotoURLs.filter { selectedForExport.contains($0.path) })
             } label: {
-                Label("导出到系统相册", systemImage: "square.and.arrow.down")
+                Label("导出", systemImage: "square.and.arrow.down")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.black)
-                    .padding(.horizontal, 14)
+                    .padding(.horizontal, 13)
                     .padding(.vertical, 10)
                     .background(Color.yellow, in: Capsule())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("导出选中照片到系统相册")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(Color(red: 0.07, green: 0.07, blue: 0.075))
+    }
+
+    private func deleteSelectedPhotos() {
+        let selectedIndices = IndexSet(
+            cam.compositePhotoURLs.enumerated().compactMap { index, url in
+                selectedForExport.contains(url.path) ? index : nil
+            }
+        )
+        guard !selectedIndices.isEmpty else { return }
+        cam.deleteCompositePhotos(at: selectedIndices)
+        selectedForExport.removeAll()
+        selectionMode = false
     }
 
     private func exportToSystemPhotos(_ urls: [URL]) {
@@ -320,9 +363,11 @@ private struct CameraAlbumPhotoDetail: View {
     let photoURLs: [URL]
     let initialURL: URL
     let onExport: (URL) -> Void
+    let onDelete: (URL) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var currentIndex: Int
+    @State private var showingDeleteConfirmation = false
     @State private var image: UIImage?
     @State private var secondaryImage: UIImage?
     @State private var showingSubwindow = false
@@ -331,10 +376,16 @@ private struct CameraAlbumPhotoDetail: View {
     @State private var livePlayer: AVPlayer?
     @State private var showingLiveMotion = false
 
-    init(photoURLs: [URL], initialURL: URL, onExport: @escaping (URL) -> Void) {
+    init(
+        photoURLs: [URL],
+        initialURL: URL,
+        onExport: @escaping (URL) -> Void,
+        onDelete: @escaping (URL) -> Void
+    ) {
         self.photoURLs = photoURLs
         self.initialURL = initialURL
         self.onExport = onExport
+        self.onDelete = onDelete
         _currentIndex = State(initialValue: max(0, photoURLs.firstIndex(of: initialURL) ?? 0))
     }
 
@@ -393,6 +444,18 @@ private struct CameraAlbumPhotoDetail: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel(showingLiveMotion ? "返回实况静态照片" : "播放实况")
                 }
+
+                Button {
+                    showingDeleteConfirmation = true
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(width: 42, height: 42)
+                        .background(Circle().fill(Color.red.opacity(0.82)))
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("删除当前照片")
 
                 Button {
                     onExport(currentURL)
@@ -565,6 +628,22 @@ private struct CameraAlbumPhotoDetail: View {
         .onDisappear {
             livePlayer?.pause()
             livePlayer = nil
+        }
+        .confirmationDialog(
+            "删除这张照片？",
+            isPresented: $showingDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("删除照片", role: .destructive) {
+                let url = currentURL
+                livePlayer?.pause()
+                livePlayer = nil
+                onDelete(url)
+                dismiss()
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("照片及其关联的小窗预览与实况片段会一起删除，无法撤销。")
         }
         .preferredColorScheme(.dark)
     }

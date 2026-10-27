@@ -709,7 +709,7 @@ struct SettingsTab: View {
             }
             Toggle("弱光增亮", isOn: $cam.cfg.lowLight).font(.system(size: 13))
             Toggle("视频防抖（开启会增加预览延迟）", isOn: $cam.cfg.stabilization).font(.system(size: 13))
-            Toggle("前置镜像", isOn: $cam.cfg.mirrorFront).font(.system(size: 13))
+            Toggle("前置镜像（左右翻转）", isOn: $cam.cfg.mirrorFront).font(.system(size: 13))
             Toggle("三分参考线", isOn: $cam.cfg.showGrid).font(.system(size: 13))
 
             VStack(alignment: .leading, spacing: 8) {
@@ -773,31 +773,135 @@ struct SettingsTab: View {
 
 // MARK: - 快捷参数栏（选择参数类型后即时显示调节器）
 
-private enum QuickParameter: String, CaseIterable, Identifiable {
-    case exposure = "曝光"
+enum QuickParameter: String, CaseIterable, Identifiable {
+    case exposure = "曝光补偿"
     case iso = "ISO"
     case shutter = "快门"
+    case manualExposure = "手动曝光"
     case focus = "对焦"
+    case manualFocus = "手动对焦"
+    case focusDistance = "对焦距离"
+    case focusExposureLock = "锁定对焦/曝光"
     case whiteBalance = "白平衡"
+    case manualWhiteBalance = "手动白平衡"
+    case temperature = "色温"
+    case tint = "色调"
     case zoom = "变焦"
+    case pipWidth = "小窗大小"
+    case pipShape = "小窗形状"
+    case pipRatio = "小窗比例"
+    case pipCorner = "小窗圆角"
+    case pipBorder = "小窗边框"
+    case pipOpacity = "小窗透明度"
+    case pipSnap = "小窗吸附"
+    case splitRatio = "分屏比例"
+    case aspect = "画幅"
+    case filter = "滤镜"
+    case filterIntensity = "滤镜强度"
     case resolution = "分辨率"
     case frameRate = "帧率"
+    case outputMode = "保存模式"
+    case livePhoto = "实况照片"
+    case liveMotion = "实况动态来源"
     case timer = "定时器"
+    case lowLight = "弱光增亮"
     case stabilization = "防抖"
+    case mirrorFront = "前置镜像"
+    case showGrid = "参考线"
+    case lensCombo = "镜头组合"
+    case haptics = "触觉反馈"
+    case cueSounds = "提示音总开关"
+    case shutterSound = "拍照提示音"
+    case recordingStartSound = "开始录像提示音"
+    case recordingStopSound = "结束录像提示音"
 
     var id: String { rawValue }
+
+    var shortcutKey: String {
+        switch self {
+        case .exposure: return "exposure"
+        case .iso: return "iso"
+        case .shutter: return "shutter"
+        case .manualExposure: return "manual-exposure"
+        case .focus: return "focus"
+        case .manualFocus: return "manual-focus"
+        case .focusDistance: return "focus-distance"
+        case .focusExposureLock: return "focus-exposure-lock"
+        case .whiteBalance: return "white-balance"
+        case .manualWhiteBalance: return "manual-white-balance"
+        case .temperature: return "temperature"
+        case .tint: return "tint"
+        case .zoom: return "zoom"
+        case .pipWidth: return "pip-width"
+        case .pipShape: return "pip-shape"
+        case .pipRatio: return "pip-ratio"
+        case .pipCorner: return "pip-corner"
+        case .pipBorder: return "pip-border"
+        case .pipOpacity: return "pip-opacity"
+        case .pipSnap: return "pip-snap"
+        case .splitRatio: return "split-ratio"
+        case .aspect: return "aspect"
+        case .filter: return "filter"
+        case .filterIntensity: return "filter-intensity"
+        case .resolution: return "resolution"
+        case .frameRate: return "frame-rate"
+        case .outputMode: return "output-mode"
+        case .livePhoto: return "live-photo"
+        case .liveMotion: return "live-motion"
+        case .timer: return "timer"
+        case .lowLight: return "low-light"
+        case .stabilization: return "stabilization"
+        case .mirrorFront: return "mirror-front"
+        case .showGrid: return "show-grid"
+        case .lensCombo: return "lens-combo"
+        case .haptics: return "haptics"
+        case .cueSounds: return "cue-sounds"
+        case .shutterSound: return "shutter-sound"
+        case .recordingStartSound: return "recording-start-sound"
+        case .recordingStopSound: return "recording-stop-sound"
+        }
+    }
+
+    static func fromShortcutKey(_ key: String) -> QuickParameter? {
+        allCases.first { $0.shortcutKey == key }
+    }
+
     var icon: String {
         switch self {
         case .exposure: return "sun.max"
         case .iso: return "camera.aperture"
         case .shutter: return "timer"
-        case .focus: return "scope"
-        case .whiteBalance: return "thermometer.medium"
+        case .manualExposure: return "camera.metering.center.weighted"
+        case .focus, .manualFocus, .focusDistance: return "scope"
+        case .focusExposureLock: return "lock.fill"
+        case .whiteBalance, .manualWhiteBalance: return "thermometer.medium"
+        case .temperature: return "thermometer"
+        case .tint: return "circle.lefthalf.filled"
         case .zoom: return "plus.magnifyingglass"
+        case .pipWidth: return "arrow.up.left.and.arrow.down.right"
+        case .pipShape: return "square.on.circle"
+        case .pipRatio: return "aspectratio"
+        case .pipCorner: return "rectangle.roundedtop"
+        case .pipBorder: return "square.dashed"
+        case .pipOpacity: return "circle.lefthalf.filled"
+        case .pipSnap: return "dot.scope"
+        case .splitRatio: return "rectangle.split.2x1"
+        case .aspect: return "viewfinder"
+        case .filter: return "camera.filters"
+        case .filterIntensity: return "slider.horizontal.3"
         case .resolution: return "viewfinder"
         case .frameRate: return "speedometer"
+        case .outputMode: return "square.stack.3d.up"
+        case .livePhoto: return "livephoto"
+        case .liveMotion: return "waveform"
         case .timer: return "hourglass"
+        case .lowLight: return "moon.stars"
         case .stabilization: return "viewfinder.circle"
+        case .mirrorFront: return "arrow.left.and.right.righttriangle.left.righttriangle.right"
+        case .showGrid: return "grid"
+        case .lensCombo: return "camera.macro"
+        case .haptics: return "hand.tap"
+        case .cueSounds, .shutterSound, .recordingStartSound, .recordingStopSound: return "speaker.wave.2"
         }
     }
 }
@@ -806,10 +910,19 @@ struct QuickParamsTab: View {
     @EnvironmentObject private var cam: CameraManager
     var isLandscape: Bool = false
     var rotationDegrees: CGFloat = 90
-    @State private var selected: QuickParameter = .exposure
-    @AppStorage("dualcam.quickParameterOrder") private var parameterOrder = "曝光,ISO,快门,对焦,白平衡,变焦,分辨率,帧率,定时器,防抖"
-    @AppStorage("dualcam.quickParameterVisible") private var visibleParameters = "曝光,ISO,快门,对焦,白平衡,变焦,分辨率,帧率,定时器,防抖"
+    @AppStorage("dualcam.quickParameterSelected") private var selectedParameterName = "曝光补偿"
+    @AppStorage("dualcam.quickParameterOrder") private var parameterOrder = QuickParameter.allCases.map(\.rawValue).joined(separator: ",")
+    @AppStorage("dualcam.quickParameterVisible") private var visibleParameters = QuickParameter.allCases.map(\.rawValue).joined(separator: ",")
     @AppStorage("dualcam.quickParameterControlsLocked") private var controlsLocked = false
+    @AppStorage("dualcam.sound.enabled") private var cueSoundsEnabled = true
+    @AppStorage("dualcam.sound.shutter") private var shutterSoundEnabled = true
+    @AppStorage("dualcam.sound.recordingStart") private var recordingStartSoundEnabled = true
+    @AppStorage("dualcam.sound.recordingStop") private var recordingStopSoundEnabled = true
+    @AppStorage("dualcam.haptics.enabled") private var hapticsEnabled = true
+    @State private var pendingFilter: FilterKind = .original
+    @State private var pendingFilterIntensity: Double = 1
+
+    private var selected: QuickParameter { QuickParameter(rawValue: selectedParameterName) ?? .exposure }
 
     private var orderedParameters: [QuickParameter] {
         let stored = parameterOrder.split(separator: ",").compactMap { QuickParameter(rawValue: String($0)) }
@@ -818,16 +931,36 @@ struct QuickParamsTab: View {
 
     private var visibleItems: [QuickParameter] {
         let visible = Set(visibleParameters.split(separator: ",").map(String.init))
-        return orderedParameters.filter { visible.contains($0.rawValue) }
+        // A custom camera-bar shortcut must still open its parameter even if the user hid it
+        // from the scrollable in-panel row. In that case, show only the currently selected item.
+        return orderedParameters.filter { visible.contains($0.rawValue) || $0.rawValue == selectedParameterName }
     }
 
     var body: some View {
-        let i = min(max(cam.paramTarget, 0), 1)
+        let slot = min(max(cam.paramTarget, 0), 1)
         let activeSelection = visibleItems.contains(selected) ? selected : (visibleItems.first ?? .exposure)
 
         Group {
             if isLandscape {
-                // Landscape-first parameter UI: all parameter choices run horizontally,
+                landscapeContent(slot: slot, parameter: activeSelection)
+            } else {
+                portraitContent(slot: slot, parameter: activeSelection)
+            }
+        }
+        .onAppear {
+            pendingFilter = cam.cfg.filter
+            pendingFilterIntensity = Double(cam.cfg.filterIntensity)
+        }
+        .onChange(of: selectedParameterName) { _, newValue in
+            if newValue == QuickParameter.filter.rawValue || newValue == QuickParameter.filterIntensity.rawValue {
+                pendingFilter = cam.cfg.filter
+                pendingFilterIntensity = Double(cam.cfg.filterIntensity)
+            }
+        }
+    }
+
+    private func landscapeContent(slot: Int, parameter: QuickParameter) -> some View {
+// Landscape-first parameter UI: all parameter choices run horizontally,
                 // with the matching controls laid out across the wide canvas beneath them.
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 6) {
@@ -844,13 +977,14 @@ struct QuickParamsTab: View {
                         .frame(maxWidth: 170)
                     }
 
-                    parameterActionBar(slot: i)
+                    parameterActionBar(slot: slot)
 
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
                             ForEach(visibleItems) { item in
                                 Button {
-                                    withAnimation(.easeOut(duration: 0.18)) { selected = item }
+                                    HapticFeedback.play(.selection)
+                                    withAnimation(.easeOut(duration: 0.18)) { selectedParameterName = item.rawValue }
                                 } label: {
                                     HStack(spacing: 7) {
                                         Image(systemName: item.icon)
@@ -859,13 +993,13 @@ struct QuickParamsTab: View {
                                             .font(.system(size: 12, weight: .medium))
                                             .lineLimit(1)
                                     }
-                                    .foregroundStyle(activeSelection == item ? Color.yellow : Color.white.opacity(0.82))
+                                    .foregroundStyle(parameter == item ? Color.yellow : Color.white.opacity(0.82))
                                     .padding(.horizontal, 13)
                                     .frame(height: 42)
                                     .background(RoundedRectangle(cornerRadius: 12)
-                                        .fill(activeSelection == item ? Color.yellow.opacity(0.14) : Color.white.opacity(0.06)))
+                                        .fill(parameter == item ? Color.yellow.opacity(0.14) : Color.white.opacity(0.06)))
                                     .overlay(RoundedRectangle(cornerRadius: 12)
-                                        .stroke(activeSelection == item ? Color.yellow.opacity(0.7) : Color.clear, lineWidth: 1))
+                                        .stroke(parameter == item ? Color.yellow.opacity(0.7) : Color.clear, lineWidth: 1))
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -879,7 +1013,7 @@ struct QuickParamsTab: View {
                             .foregroundStyle(Color.white.opacity(0.65))
                     } else {
                         ScrollView(.vertical, showsIndicators: false) {
-                            controlBody(slot: i, parameter: activeSelection)
+                            controlBody(slot: slot, parameter: parameter)
                                 .disabled(controlsLocked)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.vertical, 2)
@@ -887,8 +1021,10 @@ struct QuickParamsTab: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
-            } else {
-                VStack(alignment: .leading, spacing: 9) {
+    }
+
+    private func portraitContent(slot: Int, parameter: QuickParameter) -> some View {
+VStack(alignment: .leading, spacing: 9) {
                     HStack(spacing: 6) {
                         Text("快捷控制").font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(Color.white.opacity(0.65))
@@ -902,13 +1038,14 @@ struct QuickParamsTab: View {
                         .frame(maxWidth: 150)
                     }
 
-                    parameterActionBar(slot: i)
+                    parameterActionBar(slot: slot)
 
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 7) {
                             ForEach(visibleItems) { item in
                                 Button {
-                                    withAnimation(.easeOut(duration: 0.15)) { selected = item }
+                                    HapticFeedback.play(.selection)
+                                    withAnimation(.easeOut(duration: 0.15)) { selectedParameterName = item.rawValue }
                                 } label: {
                                     VStack(spacing: 4) {
                                         Image(systemName: item.icon)
@@ -917,12 +1054,12 @@ struct QuickParamsTab: View {
                                             .font(.system(size: 16, weight: .semibold))
                                         Text(item.rawValue).font(.system(size: 10, weight: .medium))
                                     }
-                                    .foregroundStyle(activeSelection == item ? Color.yellow : Color.white.opacity(0.8))
+                                    .foregroundStyle(parameter == item ? Color.yellow : Color.white.opacity(0.8))
                                     .frame(width: 59, height: 49)
                                     .background(RoundedRectangle(cornerRadius: 10)
-                                        .fill(activeSelection == item ? Color.yellow.opacity(0.14) : Color.white.opacity(0.065)))
+                                        .fill(parameter == item ? Color.yellow.opacity(0.14) : Color.white.opacity(0.065)))
                                     .overlay(RoundedRectangle(cornerRadius: 10)
-                                        .stroke(activeSelection == item ? Color.yellow.opacity(0.75) : Color.clear, lineWidth: 1))
+                                        .stroke(parameter == item ? Color.yellow.opacity(0.75) : Color.clear, lineWidth: 1))
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -935,22 +1072,10 @@ struct QuickParamsTab: View {
                             .font(.system(size: 11))
                             .foregroundStyle(Color.white.opacity(0.65))
                     } else {
-                        controlBody(slot: i, parameter: activeSelection)
+                        controlBody(slot: slot, parameter: parameter)
                             .disabled(controlsLocked)
                     }
                 }
-            }
-        }
-        .onChange(of: selected) { _, _ in HapticFeedback.play(.selection) }
-        .onChange(of: cam.paramTarget) { _, _ in HapticFeedback.play(.selection) }
-        .onChange(of: cam.slotStates[i].manualExposure) { _, _ in HapticFeedback.play(.selection) }
-        .onChange(of: cam.slotStates[i].manualFocus) { _, _ in HapticFeedback.play(.selection) }
-        .onChange(of: cam.slotStates[i].locked) { _, _ in HapticFeedback.play(.selection) }
-        .onChange(of: cam.slotStates[i].manualWB) { _, _ in HapticFeedback.play(.selection) }
-        .onChange(of: cam.cfg.resolution) { _, _ in HapticFeedback.play(.selection) }
-        .onChange(of: cam.cfg.fps) { _, _ in HapticFeedback.play(.selection) }
-        .onChange(of: cam.timerSeconds) { _, _ in HapticFeedback.play(.selection) }
-        .onChange(of: cam.cfg.stabilization) { _, _ in HapticFeedback.play(.selection) }
     }
 
     private func parameterActionBar(slot: Int) -> some View {
@@ -1125,7 +1250,202 @@ struct QuickParamsTab: View {
                 .font(.system(size: 12)).disabled(cam.isRecording)
             Text("只在设备和当前双摄连接支持时生效。")
                 .font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.6))
+        case .manualExposure:
+            Toggle("手动 ISO / 快门", isOn: boolBinding(i, \.manualExposure) { cam.applyExposure($0) })
+                .font(.system(size: 12))
+            Text("启用后可分别设置 ISO 与快门速度。").font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.6))
+        case .manualFocus:
+            Toggle("手动对焦", isOn: boolBinding(i, \.manualFocus) { cam.applyFocus($0) })
+                .font(.system(size: 12)).disabled(!info.supportsManualFocus)
+            if !info.supportsManualFocus {
+                Text("当前镜头不支持手动对焦。").font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.6))
+            }
+        case .focusDistance:
+            if !st.manualFocus {
+                Button {
+                    cam.slotStates[i].manualFocus = true
+                    cam.applyFocus(i)
+                } label: {
+                    Label("启用手动对焦", systemImage: "scope")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(maxWidth: .infinity).frame(height: 34)
+                        .background(Capsule().fill(Color.yellow.opacity(0.16)))
+                }.buttonStyle(.plain).disabled(!info.supportsManualFocus)
+            } else {
+                LabeledSlider(icon: "scope", title: "对焦距离",
+                              value: numberBinding(i, \.lensPosition) { cam.applyFocus($0) },
+                              range: 0...1, valueText: String(format: "%.2f", Double(st.lensPosition)),
+                              disabled: !info.supportsManualFocus)
+            }
+        case .focusExposureLock:
+            Toggle("锁定对焦 / 曝光", isOn: Binding(
+                get: { cam.slotStates[i].locked },
+                set: { newValue in if cam.slotStates[i].locked != newValue { cam.toggleLock(i) } }
+            )).font(.system(size: 12))
+        case .manualWhiteBalance:
+            Toggle("手动白平衡", isOn: boolBinding(i, \.manualWB) { cam.applyWhiteBalance($0) })
+                .font(.system(size: 12))
+        case .temperature:
+            if !st.manualWB {
+                Button {
+                    cam.slotStates[i].manualWB = true
+                    cam.applyWhiteBalance(i)
+                } label: {
+                    Label("启用手动白平衡以调节色温", systemImage: "thermometer")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(maxWidth: .infinity).frame(height: 34)
+                        .background(Capsule().fill(Color.yellow.opacity(0.16)))
+                }.buttonStyle(.plain)
+            } else {
+                LabeledSlider(icon: "thermometer", title: "色温",
+                              value: numberBinding(i, \.temperature) { cam.applyWhiteBalance($0) },
+                              range: 2500...9000, valueText: "\(Int(st.temperature))K")
+            }
+        case .tint:
+            if !st.manualWB {
+                Button {
+                    cam.slotStates[i].manualWB = true
+                    cam.applyWhiteBalance(i)
+                } label: {
+                    Label("启用手动白平衡以调节色调", systemImage: "circle.lefthalf.filled")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(maxWidth: .infinity).frame(height: 34)
+                        .background(Capsule().fill(Color.yellow.opacity(0.16)))
+                }.buttonStyle(.plain)
+            } else {
+                LabeledSlider(icon: "circle.lefthalf.filled", title: "色调",
+                              value: numberBinding(i, \.tint) { cam.applyWhiteBalance($0) },
+                              range: -150...150, valueText: "\(Int(st.tint))")
+            }
+        case .pipWidth:
+            LabeledSlider(title: "小窗大小",
+                          value: configNumber(\.pipWidth, range: 0.16...0.9),
+                          range: 0.16...0.9, valueText: "\(Int(cam.cfg.pipWidth * 100))%")
+        case .pipShape:
+            HStack {
+                Text("小窗形状").font(.system(size: 12, weight: .semibold))
+                Picker("小窗形状", selection: $cam.cfg.pipShape) {
+                    ForEach(PiPShape.allCases) { Text($0.rawValue).tag($0) }
+                }.pickerStyle(.segmented)
+            }
+        case .pipRatio:
+            HStack {
+                Text("小窗比例").font(.system(size: 12, weight: .semibold))
+                Picker("小窗比例", selection: $cam.cfg.pipRatio) {
+                    ForEach(PiPRatio.allCases) { Text($0.rawValue).tag($0) }
+                }.pickerStyle(.segmented).disabled(cam.cfg.pipShape == .circle)
+            }
+        case .pipCorner:
+            LabeledSlider(title: "小窗圆角", value: configNumber(\.pipCorner, range: 0...0.5),
+                          range: 0...0.5, valueText: "\(Int(cam.cfg.pipCorner * 100))%",
+                          disabled: cam.cfg.pipShape == .circle)
+        case .pipBorder:
+            LabeledSlider(title: "小窗边框", value: configNumber(\.pipBorder, range: 0...8),
+                          range: 0...8, valueText: String(format: "%.1f", Double(cam.cfg.pipBorder)))
+        case .pipOpacity:
+            LabeledSlider(title: "小窗透明度", value: configNumber(\.pipOpacity, range: 0.3...1),
+                          range: 0.3...1, valueText: "\(Int(cam.cfg.pipOpacity * 100))%")
+        case .pipSnap:
+            Toggle("松手自动吸附边缘 / 中线", isOn: $cam.cfg.pipSnap).font(.system(size: 12))
+        case .splitRatio:
+            LabeledSlider(title: Compositor.splitIsSideBySide(cfg: cam.cfg) ? "左右比例" : "上下比例",
+                          value: configNumber(\.splitRatio, range: 0.25...0.75),
+                          range: 0.25...0.75, valueText: "\(Int(cam.cfg.splitRatio * 100))%",
+                          disabled: cam.cfg.layout == .pip)
+        case .aspect:
+            HStack {
+                Text("画幅").font(.system(size: 12, weight: .semibold))
+                Picker("画幅", selection: $cam.cfg.aspect) {
+                    ForEach(CanvasAspect.allCases) { Text($0.rawValue).tag($0) }
+                }.pickerStyle(.menu)
+            }
+        case .filter:
+            VStack(alignment: .leading, spacing: 8) {
+                Picker("滤镜", selection: $pendingFilter) {
+                    ForEach(FilterKind.allCases) { Text($0.rawValue).tag($0) }
+                }.pickerStyle(.menu)
+                LabeledSlider(title: "强度", value: $pendingFilterIntensity, range: 0...1,
+                              valueText: "\(Int(pendingFilterIntensity * 100))%",
+                              disabled: pendingFilter == .original)
+                Button {
+                    HapticFeedback.play(.success)
+                    cam.applyFilter(pendingFilter, intensity: CGFloat(pendingFilterIntensity))
+                } label: {
+                    Label("应用滤镜", systemImage: "checkmark")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(maxWidth: .infinity).frame(height: 34)
+                        .background(Capsule().fill(Color.yellow))
+                        .foregroundStyle(.black)
+                }.buttonStyle(.plain)
+            }
+        case .filterIntensity:
+            VStack(alignment: .leading, spacing: 8) {
+                Text("当前滤镜：\(pendingFilter.rawValue)").font(.system(size: 12, weight: .semibold))
+                LabeledSlider(title: "滤镜强度", value: $pendingFilterIntensity, range: 0...1,
+                              valueText: "\(Int(pendingFilterIntensity * 100))%",
+                              disabled: pendingFilter == .original)
+                Button {
+                    HapticFeedback.play(.success)
+                    cam.applyFilter(pendingFilter, intensity: CGFloat(pendingFilterIntensity))
+                } label: {
+                    Label("应用强度", systemImage: "checkmark")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(maxWidth: .infinity).frame(height: 34)
+                        .background(Capsule().fill(Color.yellow))
+                        .foregroundStyle(.black)
+                }.buttonStyle(.plain)
+            }
+        case .outputMode:
+            HStack {
+                Text("保存模式").font(.system(size: 12, weight: .semibold))
+                Picker("保存模式", selection: $cam.cfg.outputMode) {
+                    ForEach(OutputMode.allCases) { Text($0.rawValue).tag($0) }
+                }.pickerStyle(.segmented).disabled(cam.isRecording)
+            }
+        case .livePhoto:
+            Toggle("实况照片", isOn: $cam.cfg.livePhoto).font(.system(size: 12))
+        case .liveMotion:
+            Picker("实况动态来源", selection: $cam.cfg.liveMotion) {
+                ForEach(LiveMotionSource.allCases) { Text($0.rawValue).tag($0) }
+            }.pickerStyle(.segmented).disabled(cam.cfg.outputMode == .original)
+        case .lowLight:
+            Toggle("弱光增亮", isOn: $cam.cfg.lowLight).font(.system(size: 12))
+        case .mirrorFront:
+            Toggle("前置镜像（左右翻转）", isOn: $cam.cfg.mirrorFront).font(.system(size: 12))
+        case .showGrid:
+            Toggle("三分参考线", isOn: $cam.cfg.showGrid).font(.system(size: 12))
+        case .lensCombo:
+            if cam.combos.isEmpty {
+                Text("当前没有可切换的镜头组合。").font(.system(size: 11)).foregroundStyle(Color.white.opacity(0.6))
+            } else {
+                Picker("镜头组合", selection: Binding(get: { cam.comboIndex }, set: { cam.selectCombo($0) })) {
+                    ForEach(cam.combos.indices, id: \.self) { index in Text(cam.combos[index].title).tag(index) }
+                }.pickerStyle(.menu).disabled(cam.isRecording)
+            }
+        case .haptics:
+            Toggle("启用按钮与相机触感", isOn: $hapticsEnabled).font(.system(size: 12)).tint(.yellow)
+        case .cueSounds:
+            Toggle("启用全部提示音", isOn: $cueSoundsEnabled).font(.system(size: 12)).tint(.yellow)
+        case .shutterSound:
+            Toggle("拍照快门提示音", isOn: $shutterSoundEnabled).font(.system(size: 12))
+                .tint(.yellow).disabled(!cueSoundsEnabled)
+        case .recordingStartSound:
+            Toggle("开始录像提示音", isOn: $recordingStartSoundEnabled).font(.system(size: 12))
+                .tint(.yellow).disabled(!cueSoundsEnabled)
+        case .recordingStopSound:
+            Toggle("结束录像提示音", isOn: $recordingStopSoundEnabled).font(.system(size: 12))
+                .tint(.yellow).disabled(!cueSoundsEnabled)
         }
+    }
+
+    private func configNumber(
+        _ keyPath: WritableKeyPath<Config, CGFloat>,
+        range: ClosedRange<Double>
+    ) -> Binding<Double> {
+        Binding(
+            get: { Double(cam.cfg[keyPath: keyPath]) },
+            set: { cam.cfg[keyPath: keyPath] = CGFloat(min(max($0, range.lowerBound), range.upperBound)) }
+        )
     }
 
     private func numberBinding<T: BinaryFloatingPoint>(
@@ -1167,8 +1487,8 @@ struct QuickParamsTab: View {
 
 private struct QuickParameterPreferencesSection: View {
     @Environment(\.toolPanelIconRotationDegrees) private var iconRotationDegrees
-    @AppStorage("dualcam.quickParameterOrder") private var parameterOrder = "曝光,ISO,快门,对焦,白平衡,变焦,分辨率,帧率,定时器,防抖"
-    @AppStorage("dualcam.quickParameterVisible") private var visibleParameters = "曝光,ISO,快门,对焦,白平衡,变焦,分辨率,帧率,定时器,防抖"
+    @AppStorage("dualcam.quickParameterOrder") private var parameterOrder = "曝光补偿,ISO,快门,手动曝光,对焦,手动对焦,对焦距离,锁定对焦/曝光,白平衡,手动白平衡,色温,色调,变焦,小窗大小,小窗形状,小窗比例,小窗圆角,小窗边框,小窗透明度,小窗吸附,分屏比例,画幅,滤镜,滤镜强度,分辨率,帧率,保存模式,实况照片,实况动态来源,定时器,弱光增亮,防抖,前置镜像,参考线,镜头组合,触觉反馈,提示音总开关,拍照提示音,开始录像提示音,结束录像提示音"
+    @AppStorage("dualcam.quickParameterVisible") private var visibleParameters = "曝光补偿,ISO,快门,手动曝光,对焦,手动对焦,对焦距离,锁定对焦/曝光,白平衡,手动白平衡,色温,色调,变焦,小窗大小,小窗形状,小窗比例,小窗圆角,小窗边框,小窗透明度,小窗吸附,分屏比例,画幅,滤镜,滤镜强度,分辨率,帧率,保存模式,实况照片,实况动态来源,定时器,弱光增亮,防抖,前置镜像,参考线,镜头组合,触觉反馈,提示音总开关,拍照提示音,开始录像提示音,结束录像提示音"
 
     private var orderedItems: [QuickParameter] {
         let stored = parameterOrder.split(separator: ",").compactMap { QuickParameter(rawValue: String($0)) }
