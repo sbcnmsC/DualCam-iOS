@@ -265,32 +265,34 @@ struct CameraScreen: View {
                     .ignoresSafeArea()
                     .zIndex(80)
                 } else if wirelessSession.mode == .sending {
+                    // Keep sharing controls out of the camera's top control row.
                     VStack {
                         HStack {
-                            Label("正在共享本机合成画面", systemImage: "dot.radiowaves.left.and.right")
+                            Label("共享中", systemImage: "dot.radiowaves.left.and.right")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.white)
-                            Spacer()
                             Button {
                                 HapticFeedback.play(.button)
                                 wirelessSession.stopVideo()
                             } label: {
-                                Label("停止共享", systemImage: "stop.fill")
-                                    .font(.subheadline.weight(.semibold))
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 9)
-                                    .background(.ultraThinMaterial, in: Capsule())
+                                Image(systemName: "stop.fill")
+                                    .font(.caption.weight(.bold))
+                                    .frame(width: 30, height: 30)
+                                    .background(.white.opacity(0.18), in: Circle())
                             }
                             .tint(.white)
+                            .accessibilityLabel("停止共享")
                         }
-                        .padding(.horizontal, 18)
-                        .padding(.top, max(insets.top + 12, 28))
+                        .padding(.leading, 12)
+                        .padding(.trailing, 6)
+                        .padding(.vertical, 5)
+                        .background(.black.opacity(0.52), in: Capsule())
+                        .padding(.top, max(insets.top + 92, 132))
                         Spacer()
                     }
                     .frame(width: canvasSize.width, height: canvasSize.height)
                     .offset(x: canvasOffset.width, y: canvasOffset.height)
                     .zIndex(40)
-                }
             }
             .animation(.spring(response: 0.36, dampingFraction: 0.88), value: isParameterPanelLandscape)
             .onAppear {
