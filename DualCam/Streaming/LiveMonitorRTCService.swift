@@ -5,7 +5,7 @@ import Foundation
 import WebRTC
 
 /// WebRTC media plane. Only the already-composited DualCam preview is sent.
-/// ICE servers intentionally remain empty: this version attempts direct host-candidate LAN paths only.
+/// Uses direct LAN candidates plus public STUN discovery; no TURN relay or cloud media server is used.
 final class LiveMonitorRTCService: NSObject, ObservableObject {
     @Published private(set) var remoteVideoTrack: RTCVideoTrack?
     @Published private(set) var statusText = "等待安全配对"
