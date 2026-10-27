@@ -564,6 +564,14 @@ struct CameraScreen: View {
                     .offset(x: canvasOffset.width, y: canvasOffset.height)
                     .ignoresSafeArea()
                     .tint(Color(uiColor: .systemBlue))
+                    // Explicitly paint the home-indicator safe area so the iPhone screen
+                    // cannot reveal the camera layer/background beneath this full-screen hub.
+                    .overlay(alignment: .bottom) {
+                        Color(uiColor: .systemGroupedBackground)
+                            .frame(height: max(insets.bottom + 4, 28))
+                            .frame(maxWidth: .infinity)
+                            .allowsHitTesting(false)
+                    }
                     .zIndex(80)
                 }
             }
