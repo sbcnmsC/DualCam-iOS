@@ -1,14 +1,21 @@
 import SwiftUI
 import UIKit
 
+private enum WirelessSetupSheetRoute: String, Identifiable {
+    case deviceSearch
+    case rolePicker
+
+    var id: String { rawValue }
+}
+
 struct CameraScreen: View {
     @EnvironmentObject private var cam: CameraManager
     @State private var showPanel = false
     @State private var panelTab: PanelTab = .pip
     @AppStorage("dualcam.quickParameterSelected") private var selectedQuickParameterName = "曝光补偿"
     @State private var showTimerSettings = false
-    @State private var showWirelessMonitor = false
-    @State private var showWirelessRolePicker = false
+    @State private var wirelessSheetRoute: WirelessSetupSheetRoute?
+    @State private var shouldShowRolePickerAfterPairing = false
     @State private var wirelessRolePickerDetent: PresentationDetent = .large
     @StateObject private var wirelessSession = WirelessMonitorSession.shared
     @State private var showCreativeGallery = false
@@ -89,9 +96,9 @@ struct CameraScreen: View {
                             onWirelessMonitorTap: {
                                 if wirelessSession.isSecurelyPaired && wirelessSession.mode == .idle {
                                     wirelessRolePickerDetent = .large
-                                    showWirelessRolePicker = true
+                                    wirelessSheetRoute = .rolePicker
                                 } else {
-                                    showWirelessMonitor = true
+                                    wirelessSheetRoute = .deviceSearch
                                 }
                             },
                             onParameterTap: { parameterName in
@@ -377,47 +384,62 @@ struct CameraScreen: View {
         .background(Color.black.ignoresSafeArea())
         .statusBarHidden(true)
         .animation(.easeInOut(duration: 0.22), value: showPanel)
-        .sheet(isPresented: $showWirelessMonitor, onDismiss: {
-            // A successful safety-code match dismisses discovery first. Present the role
-            // picker only after that sheet has fully gone away, never behind the search UI.
+        .sheet(item: $wirelessSheetRoute, onDismiss: {
+            // The search sheet is dismissed only after the safety code succeeds. Re-present
+            // the same sheet host as the role picker after the dismissal animation has ended.
+            guard shouldShowRolePickerAfterPairing else { return }
+            shouldShowRolePickerAfterPairing = false
             guard wirelessSession.isSecurelyPaired, wirelessSession.mode == .idle else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
-                guard wirelessSession.isSecurelyPaired, wirelessSession.mode == .idle else { return }
+                guard wirelessSheetRoute == nil,
+                      wirelessSession.isSecurelyPaired,
+                      wirelessSession.mode == .idle else { return }
                 wirelessRolePickerDetent = .large
-                showWirelessRolePicker = true
+                wirelessSheetRoute = .rolePicker
             }
-        }) {
-            WirelessMonitorSheet(session: wirelessSession)
+        }) { route in
+            switch route {
+            case .deviceSearch:
+                WirelessMonitorSheet(
+                    session: wirelessSession,
+                    onPairingSucceeded: {
+                        shouldShowRolePickerAfterPairing = true
+                    }
+                )
                 .environmentObject(cam)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
                 .presentationCornerRadius(28)
-        }
-        .sheet(isPresented: $showWirelessRolePicker) {
-            WirelessMonitorRolePickerSheet(
-                session: wirelessSession,
-                onReceive: {
-                    showWirelessRolePicker = false
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                        wirelessSession.startReceiving()
+
+            case .rolePicker:
+                WirelessMonitorRolePickerSheet(
+                    session: wirelessSession,
+                    onReceive: {
+                        shouldShowRolePickerAfterPairing = false
+                        wirelessSheetRoute = nil
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                            wirelessSession.startReceiving()
+                        }
+                    },
+                    onShare: {
+                        shouldShowRolePickerAfterPairing = false
+                        wirelessSheetRoute = nil
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                            wirelessSession.startSending()
+                        }
+                    },
+                    onDisconnect: {
+                        shouldShowRolePickerAfterPairing = false
+                        wirelessSheetRoute = nil
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                            wirelessSession.disconnectPairing()
+                        }
                     }
-                },
-                onShare: {
-                    showWirelessRolePicker = false
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                        wirelessSession.startSending()
-                    }
-                },
-                onDisconnect: {
-                    showWirelessRolePicker = false
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                        wirelessSession.disconnectPairing()
-                    }
-                }
-            )
-            .presentationDetents([.medium, .large], selection: $wirelessRolePickerDetent)
-            .presentationDragIndicator(.visible)
-            .presentationCornerRadius(28)
+                )
+                .presentationDetents([.medium, .large], selection: $wirelessRolePickerDetent)
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(28)
+            }
         }
         .fullScreenCover(isPresented: $showCreativeGallery) {
             CreativeGalleryView()
