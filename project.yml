@@ -1,5 +1,5 @@
 name: DualCam
-# Build 14: Front camera mirroring is opt-in (off by default); top shortcut groups center when they fit. Settings/Parameters controls are individually addable camera shortcuts; the top row scrolls when customized.
+# Build 15: Refresh wireless pairing and connected-role screens with native Apple-style adaptive colors and cards. Front-camera mirroring remains opt-in.
 
 options:
   bundleIdPrefix: com.dualcam
@@ -48,15 +48,15 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.dualcam.app.LiveActivity
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: YES
-        CURRENT_PROJECT_VERSION: "14"
-        MARKETING_VERSION: "0.4.1"
-        INFOPLIST_KEY_CFBundleVersion: "14"
-        INFOPLIST_KEY_CFBundleShortVersionString: "0.4.1"
+        CURRENT_PROJECT_VERSION: "15"
+        MARKETING_VERSION: "0.4.2"
+        INFOPLIST_KEY_CFBundleVersion: "15"
+        INFOPLIST_KEY_CFBundleShortVersionString: "0.4.2"
         SKIP_INSTALL: YES
     info:
       path: DualCamLiveActivity/Info.plist
       properties:
-        CFBundleShortVersionString: "0.4.1"
-        CFBundleVersion: "14"
+        CFBundleShortVersionString: "0.4.2"
+        CFBundleVersion: "15"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
