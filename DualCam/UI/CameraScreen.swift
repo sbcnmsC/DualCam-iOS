@@ -265,29 +265,23 @@ struct CameraScreen: View {
                     .ignoresSafeArea()
                     .zIndex(80)
                 } else if wirelessSession.mode == .sending {
-                    // Keep sharing controls out of the camera's top control row.
+                    // Do not imitate the Dynamic Island in app UI. ActivityKit owns the system
+                    // Live Activity; this is only the explicit stop control.
                     VStack {
                         HStack {
-                            Label("共享中", systemImage: "dot.radiowaves.left.and.right")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.white)
                             Button {
                                 HapticFeedback.play(.button)
                                 wirelessSession.stopVideo()
                             } label: {
-                                Image(systemName: "stop.fill")
-                                    .font(.caption.weight(.bold))
-                                    .frame(width: 30, height: 30)
-                                    .background(.white.opacity(0.18), in: Circle())
+                                Label("结束共享", systemImage: "stop.fill")
+                                    .font(.caption.weight(.semibold))
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(.black.opacity(0.62), in: Capsule())
                             }
                             .tint(.white)
                             .accessibilityLabel("停止共享")
                         }
-                        .padding(.leading, 12)
-                        .padding(.trailing, 6)
-                        .padding(.vertical, 5)
-                        .background(.black.opacity(0.52), in: Capsule())
-                        // Pin the compact sharing indicator to the top safe area.
                         .padding(.top, max(insets.top + 6, 10))
                         Spacer()
                     }

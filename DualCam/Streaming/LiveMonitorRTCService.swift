@@ -33,6 +33,11 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
     private var videoSource: RTCVideoSource?
     private var frameCapturer: CompositedVideoCapturer?
     private var lastAdaptedSize = CGSize.zero
+    /// Live monitoring prioritizes motion clarity over pushing full-res preview frames through
+    /// the real-time encoder.
+    private let maximumStreamingLongEdge = 1920
+    private let streamingFrameRate = 60
+    private let streamingMaximumBitrateBps = 12_000_000
 
     // Everything below is main-thread only. WebRTC completion handlers hop back to main first.
     private var peerConnection: RTCPeerConnection?
@@ -64,6 +69,7 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
         let capturer = CompositedVideoCapturer(delegate: source)
         let track = Self.factory.videoTrack(with: source, trackId: "dualcam-composite")
         pc.add(track, streamIds: ["dualcam-stream"])
+        configureVideoSender(for: track, on: pc)
         frameLock.lock()
         videoSource = source
         frameCapturer = capturer
@@ -85,6 +91,26 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
                 }
                 self.send(Signal(type: "offer", sdp: description.sdp, sdpType: "offer"))
             }
+        }
+    }
+
+    /// Requests a useful LAN bitrate while keeping output at 1080p-class dimensions.
+    /// WebRTC congestion control can still lower the actual rate when the network requires it.
+    private func configureVideoSender(for track: RTCVideoTrack, on connection: RTCPeerConnection) {
+        guard let sender = connection.senders.first(where: { $0.track?.trackId == track.trackId }) else {
+            updateStatus("视频轨道已启动，编码参数由 WebRTC 自动控制")
+            return
+        }
+
+        let parameters = sender.parameters
+        guard let encoding = parameters.encodings.first else {
+            updateStatus("视频轨道已启动，编码器未提供可调参数")
+            return
+        }
+        encoding.maxBitrateBps = NSNumber(value: streamingMaximumBitrateBps)
+        encoding.maxFramerate = NSNumber(value: streamingFrameRate)
+        if !sender.setParameters(parameters) {
+            updateStatus("视频已连接；编码码率由 WebRTC 自动控制")
         }
     }
 
@@ -134,10 +160,15 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
         let source = videoSource
         let capturer = frameCapturer
         var needsAdapt = false
+        var targetSize = CGSize.zero
         if let frame {
-            let size = CGSize(width: frame.width, height: frame.height)
-            if size != lastAdaptedSize {
-                lastAdaptedSize = size
+            let inputSize = CGSize(width: frame.width, height: frame.height)
+            let scale = min(1.0, CGFloat(maximumStreamingLongEdge) / max(inputSize.width, inputSize.height))
+            let targetWidth = max(2, Int((inputSize.width * scale / 2).rounded() * 2))
+            let targetHeight = max(2, Int((inputSize.height * scale / 2).rounded() * 2))
+            targetSize = CGSize(width: targetWidth, height: targetHeight)
+            if targetSize != lastAdaptedSize {
+                lastAdaptedSize = targetSize
                 needsAdapt = true
             }
         }
@@ -145,7 +176,11 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
 
         if let frame, sending, let source, let capturer {
             if needsAdapt {
-                source.adaptOutputFormat(toWidth: Int32(frame.width), height: Int32(frame.height), fps: 60)
+                source.adaptOutputFormat(
+                    toWidth: Int32(targetSize.width),
+                    height: Int32(targetSize.height),
+                    fps: Int32(streamingFrameRate)
+                )
             }
             capturer.capture(pixelBuffer: frame.pixelBuffer, presentationTime: frame.presentationTime)
         }

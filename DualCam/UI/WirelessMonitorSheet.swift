@@ -108,7 +108,12 @@ final class WirelessMonitorSession: ObservableObject {
             transport?.push(frame)
         }
         rtc.startSending()
-        Task { @MainActor in await MonitorLiveActivityManager.shared.start() }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if let failure = await MonitorLiveActivityManager.shared.start() {
+                self.cameraManager?.showToast("灵动岛未启动：\(failure)")
+            }
+        }
     }
 
     func startReceiving() {
