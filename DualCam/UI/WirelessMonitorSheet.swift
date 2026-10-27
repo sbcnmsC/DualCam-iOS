@@ -108,7 +108,7 @@ final class WirelessMonitorSession: ObservableObject {
             transport?.push(frame)
         }
         rtc.startSending()
-        Task { @MainActor in MonitorLiveActivityManager.shared.start() }
+        Task { @MainActor in await MonitorLiveActivityManager.shared.start() }
     }
 
     func startReceiving() {
@@ -123,7 +123,7 @@ final class WirelessMonitorSession: ObservableObject {
     func stopVideo(notifyPeer: Bool = true) {
         // Always end any local Live Activity, even if the camera mode already
         // returned to idle after an interrupted/disconnected share.
-        Task { @MainActor in MonitorLiveActivityManager.shared.stop() }
+        Task { @MainActor in await MonitorLiveActivityManager.shared.stop() }
         guard mode != .idle || rtc.remoteVideoTrack != nil else { return }
         let wasReceiving = mode == .receiving
         let wasSending = mode == .sending
@@ -153,7 +153,7 @@ final class WirelessMonitorSession: ObservableObject {
 
     private func peerStopped() {
         // A peer stop is a terminal share-state transition as well.
-        Task { @MainActor in MonitorLiveActivityManager.shared.stop() }
+        Task { @MainActor in await MonitorLiveActivityManager.shared.stop() }
         cameraManager?.compositedFrameSource.setSink(nil)
         if mode == .receiving {
             cameraManager?.setLocalCameraCaptureSuspended(false)
