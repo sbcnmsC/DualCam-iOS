@@ -45,15 +45,15 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.dualcam.app.LiveActivity
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: YES
-        CURRENT_PROJECT_VERSION: "9"
-        MARKETING_VERSION: "0.3.6"
-        INFOPLIST_KEY_CFBundleVersion: "9"
-        INFOPLIST_KEY_CFBundleShortVersionString: "0.3.6"
+        CURRENT_PROJECT_VERSION: "10"
+        MARKETING_VERSION: "0.3.7"
+        INFOPLIST_KEY_CFBundleVersion: "10"
+        INFOPLIST_KEY_CFBundleShortVersionString: "0.3.7"
         SKIP_INSTALL: YES
     info:
       path: DualCamLiveActivity/Info.plist
       properties:
-        CFBundleShortVersionString: "0.3.6"
-        CFBundleVersion: "9"
+        CFBundleShortVersionString: "0.3.7"
+        CFBundleVersion: "10"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension

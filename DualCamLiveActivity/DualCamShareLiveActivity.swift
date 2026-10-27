@@ -10,11 +10,10 @@ struct DualCamLiveActivityBundle: WidgetBundle {
     }
 }
 
-/// Persistent, non-recording-style activity shown after the user leaves DualCam.
-/// This retains the older presentation rather than reusing the foreground REC design.
 struct DualCamShareLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: MonitorShareAttributes.self) { context in
+            // Lock Screen / banner presentation.
             HStack(spacing: 12) {
                 Image(systemName: "dot.radiowaves.left.and.right")
                     .font(.title2.weight(.semibold))
@@ -43,6 +42,7 @@ struct DualCamShareLiveActivity: Widget {
                     Image(systemName: "dot.radiowaves.left.and.right")
                         .foregroundStyle(.green)
                 }
+
                 DynamicIslandExpandedRegion(.center) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("DualCam \(context.state.status)")
@@ -52,11 +52,13 @@ struct DualCamShareLiveActivity: Widget {
                             .foregroundStyle(.secondary)
                     }
                 }
+
                 DynamicIslandExpandedRegion(.trailing) {
                     Text(context.attributes.startedAt, style: .timer)
                         .font(.system(.caption, design: .monospaced))
                         .monospacedDigit()
                 }
+
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(alignment: .leading, spacing: 4) {
                         Label(
@@ -64,6 +66,7 @@ struct DualCamShareLiveActivity: Widget {
                             systemImage: "video.fill"
                         )
                         .font(.caption)
+
                         Text("实际帧率取决于摄像头、网络和设备负载")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
