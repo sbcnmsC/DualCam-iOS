@@ -1023,6 +1023,9 @@ struct TopBar: View {
     let onWirelessMonitorTap: () -> Void
     var iconRotationDegrees: CGFloat = 90
 
+    /// 实况开启时，多出一颗按钮用来选动态片段取自哪颗镜头。
+    private var showLiveSource: Bool { cam.cfg.livePhoto && cam.captureMode == .photo }
+
     var body: some View {
         ZStack {
             if cam.isRecording {
@@ -1036,7 +1039,7 @@ struct TopBar: View {
                 .frame(height: 30)
                 .background(Capsule().fill(Color.red.opacity(0.85)))
             } else {
-                HStack(spacing: 22) {
+                HStack(spacing: showLiveSource ? 14 : 22) {
                     iconButton(cam.flashEnabled ? "bolt.fill" : "bolt.slash",
                                active: cam.flashEnabled,
                                label: cam.flashEnabled ? "关闭闪光灯" : "开启闪光灯") {
@@ -1049,6 +1052,23 @@ struct TopBar: View {
                                label: "实况照片") {
                         HapticFeedback.play(.selection)
                         cam.cfg.livePhoto.toggle()
+                    }
+                    if showLiveSource {
+                        iconButton(cam.cfg.liveMotion.icon,
+                                   active: cam.cfg.liveMotion != .composite,
+                                   dimmed: cam.cfg.outputMode == .original,
+                                   label: "实况动态片段：\(cam.cfg.liveMotion.rawValue)",
+                                   badge: cam.cfg.liveMotion.badge) {
+                            if cam.cfg.outputMode == .original {
+                                // 原图直出没有合成图，每张原片的动态片段本来就取自各自的镜头。
+                                HapticFeedback.play(.button)
+                                cam.showToast("「原图直出」没有合成图，动态片段取自各自镜头")
+                                return
+                            }
+                            HapticFeedback.play(.selection)
+                            cam.cfg.liveMotion = cam.cfg.liveMotion.next
+                            cam.showToast("实况动态：\(cam.cfg.liveMotion.rawValue)")
+                        }
                     }
                     iconButton(cam.timerSeconds == 0 ? "timer" : "timer.circle.fill",
                                active: cam.timerSeconds > 0,

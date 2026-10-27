@@ -76,6 +76,41 @@ enum OutputMode: String, CaseIterable, Identifiable {
     var savesComposite: Bool { self != .original }
 }
 
+/// 实况照片的动态片段（长按播放的那 1.6 秒）取自哪里。静态图始终是合成图。
+/// - composite：合成画面（画中画 / 分屏 + 滤镜），和静态图一样
+/// - main：只取主画面那颗镜头
+/// - secondary：只取副画面（小窗）那颗镜头，用于在系统相册里长按查看小窗
+enum LiveMotionSource: String, CaseIterable, Identifiable {
+    case composite = "合成画面"
+    case main = "主摄"
+    case secondary = "副摄（小窗）"
+    var id: String { rawValue }
+
+    /// 顶栏按钮角标；合成画面不显示。
+    var badge: String? {
+        switch self {
+        case .composite: return nil
+        case .main: return "主"
+        case .secondary: return "副"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .composite: return "rectangle.on.rectangle"
+        case .main: return "camera.viewfinder"
+        case .secondary: return "rectangle.inset.topright.filled"
+        }
+    }
+
+    /// 下一个选项（顶栏按钮循环切换）。
+    var next: LiveMotionSource {
+        let all = LiveMotionSource.allCases
+        let i = all.firstIndex(of: self) ?? 0
+        return all[(i + 1) % all.count]
+    }
+}
+
 enum PanelTab: String, CaseIterable, Identifiable {
     case pip = "小窗"
     case filter = "滤镜"
@@ -122,6 +157,7 @@ struct Config: Equatable {
     var fps = 30
     var outputMode: OutputMode = .composite
     var livePhoto = false
+    var liveMotion: LiveMotionSource = .composite
     var lowLight = true
     var stabilization = false   // 默认关闭：防抖会让预览多延迟几帧
     var showGrid = true

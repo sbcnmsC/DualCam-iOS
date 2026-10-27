@@ -663,6 +663,28 @@ struct SettingsTab: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             Toggle("实况照片（开启时使用兼容分辨率）", isOn: $cam.cfg.livePhoto).font(.system(size: 13))
+            if cam.cfg.livePhoto {
+                HStack {
+                    Text("动态").font(.system(size: 13)).frame(width: 64, alignment: .leading)
+                    Picker("", selection: Binding(
+                        get: { cam.cfg.liveMotion },
+                        set: { newValue in
+                            if newValue != cam.cfg.liveMotion { HapticFeedback.play(.selection) }
+                            cam.cfg.liveMotion = newValue
+                        }
+                    )) {
+                        ForEach(LiveMotionSource.allCases) { source in Text(source.rawValue).tag(source) }
+                    }
+                    .pickerStyle(.segmented)
+                    .disabled(cam.cfg.outputMode == .original)
+                }
+                Text(cam.cfg.outputMode == .original
+                     ? "「原图直出」没有合成图，每张原片的动态片段取自各自的镜头，这里的选择不生效。"
+                     : "静态图始终是合成图；在系统相册里长按播放的 1.6 秒取自这里选的画面。选「副摄」就能在系统相册里长按看到小窗那颗镜头，画面是视频规格，不是高清照片。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.white.opacity(0.66))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             HStack {
                 Text("定时器").font(.system(size: 13)).frame(width: 64, alignment: .leading)
                 Picker("", selection: $cam.timerSeconds) {

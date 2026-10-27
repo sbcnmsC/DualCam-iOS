@@ -294,6 +294,9 @@ final class CameraManager: NSObject, ObservableObject {
     // 实况照片的配套短视频（同样用 recLock 保护）
     private var liveComposite: VideoRecorder?
     private var liveRaw: [VideoRecorder?] = [nil, nil]
+    /// 动态片段取自单颗镜头的合成图实况：按镜头槽位登记。和 liveRaw 分开存放，
+    /// 因为「两者都存」时同一颗镜头既要给原片实况录原始帧，又要给合成图实况录处理后的帧。
+    private var liveLensClips: [[LiveLensClip]] = [[], []]
     private let liveSeconds = 1.6
 
     private var recTimer: Timer?
@@ -933,6 +936,36 @@ final class CameraManager: NSObject, ObservableObject {
                 self.endThumbs()
             }
         }
+    }
+
+    /// 实况动态片段取自单颗镜头时的逐帧处理：方向、前置镜像、滤镜都和预览一致，
+    /// 再按「填满」方式裁成静态图的画幅 —— 动态片段和静态图画幅不同，系统相册播放时会变形或跳变。
+    private func appendLiveLensFrames(_ clips: [LiveLensClip], pixel: CVPixelBuffer, slot: Int, time: CMTime) {
+        lock.lock()
+        let front = slotFront
+        lock.unlock()
+        let oriented = orient(CIImage(cvPixelBuffer: pixel))
+        let isFront = front.indices.contains(slot) && front[slot]
+        for clip in clips {
+            var image = oriented
+            if isFront && clip.config.mirrorFront { image = image.oriented(.upMirrored) }
+            let bounds = image.extent
+            image = clip.config.filter.apply(to: image, intensity: clip.config.filterIntensity).cropped(to: bounds)
+            enqueueCompositeFrame(Self.aspectFill(image, into: clip.size), recorder: clip.recorder, time: time)
+        }
+    }
+
+    /// 等比放大到完全盖住目标尺寸，居中裁切，结果的范围正好是 (0, 0, size)。
+    private static func aspectFill(_ image: CIImage, into size: CGSize) -> CIImage {
+        let extent = image.extent
+        guard extent.width > 0, extent.height > 0, size.width > 0, size.height > 0 else { return image }
+        let scale = max(size.width / extent.width, size.height / extent.height)
+        let scaled = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let offsetX = scaled.extent.minX + (scaled.extent.width - size.width) / 2
+        let offsetY = scaled.extent.minY + (scaled.extent.height - size.height) / 2
+        return scaled
+            .transformed(by: CGAffineTransform(translationX: -offsetX, y: -offsetY))
+            .cropped(to: CGRect(origin: .zero, size: size))
     }
 
     /// Enqueue in capture timestamp order. A two-frame limit keeps this queue from retaining
@@ -2184,15 +2217,29 @@ final class CameraManager: NSObject, ObservableObject {
 
         // 实况：每张照片配一段 1.6 秒的短视频，写入前先准备好录制器
         if c.livePhoto {
+            // 主 / 副镜头槽位，和上面合成时的取法一致；B 路还没出画面时，就只有 A 路可选。
+            let mainLens = (c.swapped && b != nil) ? 1 : 0
+            let lensAvailable = [true, b != nil]
             for i in shots.indices {
                 let size = shots[i].slot.map { sizes[$0] } ?? videoCanvas
                 guard size.width > 0 else { continue }
+                // 合成图的动态片段可以改取单颗镜头（静态图仍是合成图）；那颗镜头没有画面就退回合成画面。
+                var motionLens: Int? = nil
+                if shots[i].slot == nil {
+                    switch c.liveMotion {
+                    case .composite: motionLens = nil
+                    case .main: motionLens = mainLens
+                    case .secondary: motionLens = 1 - mainLens
+                    }
+                    if let lens = motionLens, !lensAvailable[lens] { motionLens = nil }
+                }
                 let id = UUID().uuidString
                 if let rec = try? VideoRecorder(width: Int(size.width), height: Int(size.height), fps: fps,
                                                 audioSettings: nil, liveID: id),
                    rec.start() {
                     shots[i].liveID = id
                     shots[i].recorder = rec
+                    shots[i].motionLens = motionLens
                 }
             }
         }
@@ -2233,7 +2280,13 @@ final class CameraManager: NSObject, ObservableObject {
         recLock.lock()
         for s in shots {
             guard let rec = s.recorder else { continue }
-            if let slot = s.slot { liveRaw[slot] = rec } else { liveComposite = rec }
+            if let lens = s.motionLens {
+                liveLensClips[lens].append(LiveLensClip(recorder: rec, config: c, size: videoCanvas))
+            } else if let slot = s.slot {
+                liveRaw[slot] = rec
+            } else {
+                liveComposite = rec
+            }
         }
         recLock.unlock()
 
@@ -2248,6 +2301,7 @@ final class CameraManager: NSObject, ObservableObject {
         recLock.lock()
         liveComposite = nil
         liveRaw = [nil, nil]
+        liveLensClips = [[], []]
         recLock.unlock()
 
         let box = MovieSlots(count: shots.count)
@@ -2718,9 +2772,13 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate, AVCapture
         recLock.lock()
         let raw = rawRecorders[slot]
         let liveRawRec = liveRaw[slot]
+        let lensClips = liveLensClips[slot]
         recLock.unlock()
         raw?.appendRaw(pixel, time: pts)
         liveRawRec?.appendRaw(pixel, time: pts)
+        if !lensClips.isEmpty {
+            appendLiveLensFrames(lensClips, pixel: pixel, slot: slot, time: pts)
+        }
 
         if slot == 0 { processFrame(pts) }
     }
@@ -2767,6 +2825,15 @@ private struct StillShot {
     var data: Data? = nil
     var captureConfig: Config? = nil
     var secondaryPreviewData: Data? = nil
+    /// 合成图实况的动态片段取自哪颗镜头槽位；nil = 取合成画面。
+    var motionLens: Int? = nil
+}
+
+/// 一段由单颗镜头逐帧喂出来的实况动态片段：录制器、拍摄时的设置快照、以及要裁成的画幅。
+private struct LiveLensClip {
+    let recorder: VideoRecorder
+    let config: Config
+    let size: CGSize
 }
 
 private struct SavedItem {
