@@ -507,7 +507,4 @@ private struct CameraAlbumPhotoDetail: View {
     }
 }
 
-private struct SwipeUpCameraAlbumEntry20261027: Identifiable {
-    let url: URL
-    var id: String { url.path }
-}
+
