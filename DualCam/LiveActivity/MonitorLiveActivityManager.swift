@@ -69,7 +69,7 @@ final class MonitorLiveActivityManager {
             }
 
             currentActivity = activity
-            logger.info("Foreground Live Activity request accepted. id=\\(activity.id, privacy: .public)")
+            logger.info("Foreground Live Activity request accepted. id=\(activity.id, privacy: .public)")
 
             // Remove stale activities only after the foreground transient request has been accepted.
             Task { @MainActor in
@@ -80,7 +80,7 @@ final class MonitorLiveActivityManager {
             return nil
         } catch {
             let message = error.localizedDescription
-            logger.error("Live Activity request failed: \\(message, privacy: .public)")
+            logger.error("Live Activity request failed: \(message, privacy: .public)")
             return message
         }
     }

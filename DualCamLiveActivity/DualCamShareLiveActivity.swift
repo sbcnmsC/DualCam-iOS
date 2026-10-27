@@ -66,7 +66,7 @@ struct DualCamShareLiveActivity: Widget {
 
                 DynamicIslandExpandedRegion(.bottom) {
                     Label(
-                        "双摄合成 · \\(context.state.resolution) · \\(context.state.targetFPS) fps",
+                        "双摄合成 · \(context.state.resolution) · \(context.state.targetFPS) fps",
                         systemImage: "video.fill"
                     )
                     .font(.caption)
