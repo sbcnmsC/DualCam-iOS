@@ -8,6 +8,8 @@ struct CameraScreen: View {
     @AppStorage("dualcam.quickParameterSelected") private var selectedQuickParameterName = "曝光补偿"
     @State private var showTimerSettings = false
     @State private var showWirelessMonitor = false
+    @State private var showWirelessRolePicker = false
+    @State private var wirelessRolePickerDetent: PresentationDetent = .large
     @StateObject private var wirelessSession = WirelessMonitorSession.shared
     @State private var showCreativeGallery = false
     @State private var timerDraft = 5
@@ -43,7 +45,6 @@ struct CameraScreen: View {
             let topControlsBottom = insets.top + topBarHeight
             let dockTop = canvasSize.height - insets.bottom - bottomBarHeight
             let hasSharingStopControl = wirelessSession.mode == .sending
-            let isWirelessRolePickerVisible = wirelessSession.isSecurelyPaired && wirelessSession.mode == .idle
 
             // Fit the selected output ratio against the whole device canvas.
             // In free mode this exactly matches the iPhone screen; fixed ratios use the largest
@@ -68,8 +69,7 @@ struct CameraScreen: View {
             )
 
             ZStack(alignment: .topLeading) {
-                Color(uiColor: isWirelessRolePickerVisible ? .systemGroupedBackground : .black)
-                    .ignoresSafeArea()
+                Color.black.ignoresSafeArea()
 
                 PreviewStage(size: previewSize, iconRotationDegrees: iconRotationDegrees)
                     .frame(width: previewSize.width, height: previewSize.height)
@@ -77,10 +77,6 @@ struct CameraScreen: View {
                     .offset(x: canvasOffset.width, y: canvasOffset.height + previewTop)
                     // 切换画幅时取景框平滑伸缩 / 移动，而不是瞬间跳变
                     .animation(.smooth(duration: 0.3), value: cam.cfg.aspect)
-                    // Do not leave the camera preview underneath the connected-device hub.
-                    .opacity(isWirelessRolePickerVisible ? 0 : 1)
-                    .allowsHitTesting(!isWirelessRolePickerVisible)
-                    .accessibilityHidden(isWirelessRolePickerVisible)
 
                 // Top and bottom controls float above the preview and keep their own hit targets.
                 VStack(spacing: 0) {
@@ -91,7 +87,12 @@ struct CameraScreen: View {
                                 showTimerSettings = true
                             },
                             onWirelessMonitorTap: {
-                                showWirelessMonitor = true
+                                if wirelessSession.isSecurelyPaired && wirelessSession.mode == .idle {
+                                    wirelessRolePickerDetent = .large
+                                    showWirelessRolePicker = true
+                                } else {
+                                    showWirelessMonitor = true
+                                }
                             },
                             onParameterTap: { parameterName in
                                 selectedQuickParameterName = parameterName
@@ -159,10 +160,6 @@ struct CameraScreen: View {
                 .frame(width: controlCanvasWidth)
                 .frame(maxHeight: .infinity, alignment: .top)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                // Hide and disable the entire camera dock while the paired-device role picker is visible.
-                .opacity(isWirelessRolePickerVisible ? 0 : 1)
-                .allowsHitTesting(!isWirelessRolePickerVisible)
-                .accessibilityHidden(isWirelessRolePickerVisible)
                 .zIndex(5)
 
                 // When the device is physically landscape, render a real landscape-sized
@@ -334,255 +331,6 @@ struct CameraScreen: View {
                     .offset(x: canvasOffset.width, y: canvasOffset.height)
                     .ignoresSafeArea()
                     .zIndex(100)
-                } else if wirelessSession.isSecurelyPaired && wirelessSession.mode == .idle {
-                    ZStack(alignment: .top) {
-                        Color(uiColor: .systemGroupedBackground).ignoresSafeArea()
-                        LinearGradient(
-                            colors: [
-                                Color(uiColor: .systemBlue).opacity(0.12),
-                                Color(uiColor: .systemIndigo).opacity(0.045),
-                                .clear
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                        .frame(height: 360)
-                        .frame(maxHeight: .infinity, alignment: .top)
-                        .ignoresSafeArea()
-                        .allowsHitTesting(false)
-
-                        ScrollView(showsIndicators: false) {
-                            VStack(spacing: 16) {
-                                VStack(alignment: .leading, spacing: 18) {
-                                    HStack(alignment: .top) {
-                                        ZStack {
-                                            RoundedRectangle(cornerRadius: 21, style: .continuous)
-                                                .fill(
-                                                    LinearGradient(
-                                                        colors: [
-                                                            Color(uiColor: .systemBlue),
-                                                            Color(uiColor: .systemIndigo)
-                                                        ],
-                                                        startPoint: .topLeading,
-                                                        endPoint: .bottomTrailing
-                                                    )
-                                                )
-                                            Image(systemName: "checkmark.shield.fill")
-                                                .font(.system(size: 28, weight: .semibold))
-                                                .foregroundStyle(.white)
-                                        }
-                                        .frame(width: 68, height: 68)
-                                        .shadow(color: Color(uiColor: .systemBlue).opacity(0.22), radius: 18, y: 8)
-
-                                        Spacer()
-
-                                        HStack(spacing: 6) {
-                                            Circle()
-                                                .fill(Color(uiColor: .systemGreen))
-                                                .frame(width: 7, height: 7)
-                                            Text("已加密配对")
-                                                .font(.caption.weight(.semibold))
-                                                .foregroundStyle(Color(uiColor: .systemGreen))
-                                        }
-                                        .padding(.horizontal, 11)
-                                        .padding(.vertical, 8)
-                                        .background(Color(uiColor: .secondarySystemGroupedBackground), in: Capsule())
-                                    }
-
-                                    VStack(alignment: .leading, spacing: 7) {
-                                        Text("设备已安全连接")
-                                            .font(.system(size: 30, weight: .bold, design: .rounded))
-                                            .tracking(-0.55)
-                                            .foregroundStyle(.primary)
-                                        Text("选择这台设备的用途")
-                                            .font(.title3.weight(.medium))
-                                            .foregroundStyle(.secondary)
-                                        Text("已准备好与 \(wirelessSession.localDeviceName) 进行无线画面同步。")
-                                            .font(.subheadline)
-                                            .foregroundStyle(.secondary)
-                                            .fixedSize(horizontal: false, vertical: true)
-                                            .lineSpacing(2)
-                                    }
-                                }
-                                .padding(21)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(
-                                    LinearGradient(
-                                        colors: [
-                                            Color(uiColor: .secondarySystemGroupedBackground),
-                                            Color(uiColor: .systemBlue).opacity(0.055)
-                                        ],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    ),
-                                    in: RoundedRectangle(cornerRadius: 28, style: .continuous)
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 28, style: .continuous)
-                                        .stroke(Color(uiColor: .systemBlue).opacity(0.10), lineWidth: 1)
-                                )
-
-                                VStack(alignment: .leading, spacing: 11) {
-                                    Text("开始使用")
-                                        .font(.headline)
-                                        .foregroundStyle(.primary)
-                                        .padding(.horizontal, 3)
-
-                                    Button {
-                                        HapticFeedback.play(.button)
-                                        wirelessSession.startReceiving()
-                                    } label: {
-                                        HStack(spacing: 14) {
-                                            ZStack {
-                                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                                    .fill(Color.white.opacity(0.16))
-                                                Image(systemName: "play.rectangle.on.rectangle.fill")
-                                                    .font(.system(size: 23, weight: .semibold))
-                                                    .foregroundStyle(.white)
-                                            }
-                                            .frame(width: 53, height: 53)
-
-                                            VStack(alignment: .leading, spacing: 5) {
-                                                Text("全屏接收画面")
-                                                    .font(.headline)
-                                                    .foregroundStyle(.white)
-                                                Text("在这台设备上观看另一台设备的实时画面")
-                                                    .font(.caption)
-                                                    .foregroundStyle(.white.opacity(0.82))
-                                                    .multilineTextAlignment(.leading)
-                                                    .fixedSize(horizontal: false, vertical: true)
-                                            }
-
-                                            Spacer(minLength: 0)
-
-                                            Image(systemName: "arrow.up.right")
-                                                .font(.system(size: 13, weight: .bold))
-                                                .foregroundStyle(.white.opacity(0.85))
-                                        }
-                                        .padding(16)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .background(
-                                            LinearGradient(
-                                                colors: [
-                                                    Color(uiColor: .systemBlue),
-                                                    Color(uiColor: .systemIndigo)
-                                                ],
-                                                startPoint: .leading,
-                                                endPoint: .trailing
-                                            ),
-                                            in: RoundedRectangle(cornerRadius: 23, style: .continuous)
-                                        )
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 23, style: .continuous)
-                                                .stroke(Color.white.opacity(0.17), lineWidth: 1)
-                                        )
-                                        .shadow(color: Color(uiColor: .systemBlue).opacity(0.18), radius: 15, y: 7)
-                                    }
-                                    .buttonStyle(.plain)
-
-                                    Button {
-                                        HapticFeedback.play(.button)
-                                        wirelessSession.startSending()
-                                    } label: {
-                                        HStack(spacing: 14) {
-                                            ZStack {
-                                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                                    .fill(Color(uiColor: .systemTeal).opacity(0.11))
-                                                Image(systemName: "dot.radiowaves.left.and.right")
-                                                    .font(.system(size: 23, weight: .semibold))
-                                                    .foregroundStyle(Color(uiColor: .systemTeal))
-                                            }
-                                            .frame(width: 53, height: 53)
-
-                                            VStack(alignment: .leading, spacing: 5) {
-                                                Text("共享本机合成画面")
-                                                    .font(.headline)
-                                                    .foregroundStyle(.primary)
-                                                Text("发送双摄、画中画 / 分屏与滤镜后的最终画面")
-                                                    .font(.caption)
-                                                    .foregroundStyle(.secondary)
-                                                    .multilineTextAlignment(.leading)
-                                                    .fixedSize(horizontal: false, vertical: true)
-                                            }
-
-                                            Spacer(minLength: 0)
-
-                                            Image(systemName: "arrow.up.right")
-                                                .font(.system(size: 13, weight: .bold))
-                                                .foregroundStyle(.tertiary)
-                                        }
-                                        .padding(16)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .background(
-                                            Color(uiColor: .secondarySystemGroupedBackground),
-                                            in: RoundedRectangle(cornerRadius: 23, style: .continuous)
-                                        )
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 23, style: .continuous)
-                                                .stroke(Color(uiColor: .systemTeal).opacity(0.20), lineWidth: 1)
-                                        )
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-
-                                HStack(alignment: .top, spacing: 11) {
-                                    Image(systemName: "lock.shield.fill")
-                                        .font(.system(size: 15, weight: .semibold))
-                                        .foregroundStyle(Color(uiColor: .systemGreen))
-                                        .frame(width: 30, height: 30)
-                                        .background(Color(uiColor: .systemGreen).opacity(0.10), in: Circle())
-
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("连接由你控制")
-                                            .font(.subheadline.weight(.semibold))
-                                            .foregroundStyle(.primary)
-                                        Text("视频使用加密传输，不启用麦克风音频。结束共享或退出监看后，可以随时断开配对。")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                            .fixedSize(horizontal: false, vertical: true)
-                                            .lineSpacing(2)
-                                    }
-                                    Spacer(minLength: 0)
-                                }
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 4)
-
-                                Button(role: .destructive) {
-                                    HapticFeedback.play(.button)
-                                    wirelessSession.disconnectPairing()
-                                } label: {
-                                    Label("断开安全配对", systemImage: "lock.slash")
-                                        .font(.subheadline.weight(.semibold))
-                                        .foregroundStyle(Color(uiColor: .systemRed))
-                                        .frame(maxWidth: .infinity)
-                                        .padding(.vertical, 14)
-                                        .background(
-                                            Color(uiColor: .secondarySystemGroupedBackground),
-                                            in: RoundedRectangle(cornerRadius: 17, style: .continuous)
-                                        )
-                                }
-                                .buttonStyle(.plain)
-                            }
-                            .padding(.horizontal, 20)
-                            .padding(.top, max(insets.top + 22, 40))
-                            .padding(.bottom, max(insets.bottom + 26, 40))
-                            .frame(maxWidth: 640)
-                            .frame(maxWidth: .infinity)
-                        }
-                    }
-                    .frame(width: canvasSize.width, height: canvasSize.height)
-                    .offset(x: canvasOffset.width, y: canvasOffset.height)
-                    .ignoresSafeArea()
-                    .tint(Color(uiColor: .systemBlue))
-                    // Explicitly paint the home-indicator safe area so the iPhone screen
-                    // cannot reveal the camera layer/background beneath this full-screen hub.
-                    .overlay(alignment: .bottom) {
-                        Color(uiColor: .systemGroupedBackground)
-                            .frame(height: max(insets.bottom + 4, 28))
-                            .frame(maxWidth: .infinity)
-                            .allowsHitTesting(false)
-                    }
-                    .zIndex(80)
                 }
             }
             .animation(.spring(response: 0.36, dampingFraction: 0.88), value: isParameterPanelLandscape)
@@ -629,9 +377,47 @@ struct CameraScreen: View {
         .background(Color.black.ignoresSafeArea())
         .statusBarHidden(true)
         .animation(.easeInOut(duration: 0.22), value: showPanel)
-        .sheet(isPresented: $showWirelessMonitor) {
+        .sheet(isPresented: $showWirelessMonitor, onDismiss: {
+            // A successful safety-code match dismisses discovery first. Present the role
+            // picker only after that sheet has fully gone away, never behind the search UI.
+            guard wirelessSession.isSecurelyPaired, wirelessSession.mode == .idle else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
+                guard wirelessSession.isSecurelyPaired, wirelessSession.mode == .idle else { return }
+                wirelessRolePickerDetent = .large
+                showWirelessRolePicker = true
+            }
+        }) {
             WirelessMonitorSheet(session: wirelessSession)
                 .environmentObject(cam)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(28)
+        }
+        .sheet(isPresented: $showWirelessRolePicker) {
+            WirelessMonitorRolePickerSheet(
+                session: wirelessSession,
+                onReceive: {
+                    showWirelessRolePicker = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        wirelessSession.startReceiving()
+                    }
+                },
+                onShare: {
+                    showWirelessRolePicker = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        wirelessSession.startSending()
+                    }
+                },
+                onDisconnect: {
+                    showWirelessRolePicker = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        wirelessSession.disconnectPairing()
+                    }
+                }
+            )
+            .presentationDetents([.medium, .large], selection: $wirelessRolePickerDetent)
+            .presentationDragIndicator(.visible)
+            .presentationCornerRadius(28)
         }
         .fullScreenCover(isPresented: $showCreativeGallery) {
             CreativeGalleryView()
