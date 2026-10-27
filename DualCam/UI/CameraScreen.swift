@@ -236,45 +236,46 @@ struct CameraScreen: View {
                     .zIndex(100)
                 }
 
-                // Keep the stop target inside the full-device canvas so it is actually tappable
-                // near the Dynamic Island (an offset-only overlay can render outside hit bounds).
+                // A full-screen GeometryReader keeps the Dynamic Island-area button inside
+                // a hit-testable view even though it sits above the normal safe-area content.
                 if wirelessSession.mode == .sending {
-                    VStack(spacing: 0) {
-                        HStack(spacing: 8) {
-                            Spacer(minLength: 0)
-                            Button {
-                                HapticFeedback.play(.button)
-                                Task { @MainActor in
-                                    await wirelessSession.stopFromLiveActivity()
+                    GeometryReader { _ in
+                        VStack(spacing: 0) {
+                            HStack(spacing: 8) {
+                                Spacer(minLength: 0)
+                                Button {
+                                    HapticFeedback.play(.button)
+                                    Task { @MainActor in
+                                        await wirelessSession.stopFromLiveActivity()
+                                    }
+                                } label: {
+                                    HStack(spacing: 6) {
+                                        Circle()
+                                            .fill(Color.white)
+                                            .frame(width: 6, height: 6)
+                                        Text("结束共享")
+                                            .font(.system(size: 11, weight: .semibold))
+                                            .lineLimit(1)
+                                            .minimumScaleFactor(0.8)
+                                        Image(systemName: "stop.fill")
+                                            .font(.system(size: 9, weight: .bold))
+                                    }
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 11)
+                                    .frame(height: 34)
+                                    .background(Color.red, in: Capsule())
+                                    .overlay(Capsule().stroke(Color.white.opacity(0.22), lineWidth: 0.7))
+                                    .contentShape(Capsule())
                                 }
-                            } label: {
-                                HStack(spacing: 6) {
-                                    Circle()
-                                        .fill(Color.white)
-                                        .frame(width: 6, height: 6)
-                                    Text("结束共享")
-                                        .font(.system(size: 11, weight: .semibold))
-                                        .lineLimit(1)
-                                        .minimumScaleFactor(0.8)
-                                    Image(systemName: "stop.fill")
-                                        .font(.system(size: 9, weight: .bold))
-                                }
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 11)
-                                .frame(height: 34)
-                                .background(Color.red, in: Capsule())
-                                .overlay(Capsule().stroke(Color.white.opacity(0.22), lineWidth: 0.7))
-                                .contentShape(Capsule())
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("结束无线共享")
                             }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("结束无线共享")
+                            .padding(.top, 10)
                             .padding(.trailing, 8)
+                            Spacer(minLength: 0)
                         }
-                        .padding(.top, insets.top + 8)
-                        Spacer(minLength: 0)
                     }
-                    .frame(width: canvasSize.width, height: canvasSize.height)
-                    .offset(x: canvasOffset.width, y: canvasOffset.height)
+                    .ignoresSafeArea()
                     .zIndex(250)
                 }
             }
