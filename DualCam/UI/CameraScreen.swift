@@ -614,6 +614,19 @@ struct CameraScreen: View {
                 guard top > 0, abs(shutterButtonTop - top) > 0.5 else { return }
                 shutterButtonTop = top
             }
+            // The connected-device chooser is layered over the camera UI. Paint a final
+            // full-width footer at the GeometryReader root (not inside the chooser's scroll
+            // content) so camera controls cannot peek through the iPhone home-indicator area.
+            .overlay(alignment: .bottom) {
+                if wirelessSession.isSecurelyPaired && wirelessSession.mode == .idle {
+                    Color(uiColor: .systemGroupedBackground)
+                        .frame(height: max(insets.bottom + 112, 124))
+                        .frame(maxWidth: .infinity)
+                        .offset(y: insets.bottom + 1)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
         }
         // Preserve Build 94's safe-area measurement and expand the preview canvas explicitly.
         .background(Color.black.ignoresSafeArea())
