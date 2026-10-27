@@ -106,9 +106,8 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
             frameLock.unlock()
             return
         }
-        // Cap at ~30 fps for a 60 fps source. The threshold sits below 1/30 s on purpose: camera
-        // timestamps jitter by a few ms, and an exact 1/30 s cut-off would also drop roughly every
-        // other frame of a plain 30 fps feed.
+        // Allow up to 60 fps when the source supplies it. The threshold is slightly below 1/60 s
+        // to tolerate timestamp jitter; the latest-frame drain still drops stale work under load.
         if frame.presentationTime.isValid, lastQueuedPTS.isValid {
             let delta = CMTimeGetSeconds(CMTimeSubtract(frame.presentationTime, lastQueuedPTS))
             if delta >= 0, delta < (0.8 / 60.0) {
