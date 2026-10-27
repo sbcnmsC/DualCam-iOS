@@ -7,7 +7,7 @@ import Photos
 struct CreativeGalleryView: View {
     @EnvironmentObject private var cam: CameraManager
     @Environment(\.dismiss) private var dismiss
-    @State private var detailItem: CameraAlbumPhoto?
+    @State private var detailItem: InternalAlbumPhotoItem?
     @State private var selectionMode = false
     @State private var selectedForExport: Set<String> = []
     @State private var exportAlert = false
@@ -125,7 +125,7 @@ struct CreativeGalleryView: View {
                                 selectedForExport.insert(url.path)
                             }
                         } else {
-                            detailItem = CameraAlbumPhoto(url: url)
+                            detailItem = InternalAlbumPhotoItem(url: url)
                         }
                     } label: {
                         ZStack(alignment: .topTrailing) {
@@ -217,7 +217,7 @@ struct CreativeGalleryView: View {
     }
 }
 
-private struct CameraAlbumPhoto: Identifiable {
+private struct InternalAlbumPhotoItem: Identifiable {
     let url: URL
     var id: String { url.path }
 }
@@ -507,7 +507,7 @@ private struct CameraAlbumPhotoDetail: View {
     }
 }
 
-private struct CameraAlbumPhoto: Identifiable {
+private struct InternalAlbumPhotoItem: Identifiable {
     let url: URL
     var id: String { url.path }
 }
