@@ -931,47 +931,33 @@ struct QuickParamsTab: View {
 
     private var visibleItems: [QuickParameter] {
         let visible = Set(visibleParameters.split(separator: ",").map(String.init))
-        return orderedParameters.filter { visible.contains($0.rawValue) }
+        // A custom camera-bar shortcut must still open its parameter even if the user hid it
+        // from the scrollable in-panel row. In that case, show only the currently selected item.
+        return orderedParameters.filter { visible.contains($0.rawValue) || $0.rawValue == selectedParameterName }
     }
 
     var body: some View {
-        let i = min(max(cam.paramTarget, 0), 1)
+        let slot = min(max(cam.paramTarget, 0), 1)
         let activeSelection = visibleItems.contains(selected) ? selected : (visibleItems.first ?? .exposure)
 
         Group {
             if isLandscape {
-                landscapeContent(slot: i, parameter: activeSelection)
+                landscapeContent(slot: slot, parameter: activeSelection)
             } else {
-                portraitContent(slot: i, parameter: activeSelection)
+                portraitContent(slot: slot, parameter: activeSelection)
             }
         }
+        .onAppear {
+            pendingFilter = cam.cfg.filter
+            pendingFilterIntensity = Double(cam.cfg.filterIntensity)
+        }
         .onChange(of: selectedParameterName) { _, newValue in
-            HapticFeedback.play(.selection)
-            let visible = Set(visibleParameters.split(separator: ",").map(String.init))
-            if !visible.contains(newValue) {
-                visibleParameters = orderedParameters
-                    .filter { visible.contains($0.rawValue) || $0.rawValue == newValue }
-                    .map(\.rawValue)
-                    .joined(separator: ",")
-            }
-            if QuickParameter(rawValue: newValue) == .filter || QuickParameter(rawValue: newValue) == .filterIntensity {
+            if newValue == QuickParameter.filter.rawValue || newValue == QuickParameter.filterIntensity.rawValue {
                 pendingFilter = cam.cfg.filter
                 pendingFilterIntensity = Double(cam.cfg.filterIntensity)
             }
         }
-        .onChange(of: cam.cfg.filter) { _, newValue in pendingFilter = newValue }
-        .onChange(of: cam.cfg.filterIntensity) { _, newValue in pendingFilterIntensity = Double(newValue) }
-        .onChange(of: cam.paramTarget) { _, _ in HapticFeedback.play(.selection) }
-        .onChange(of: cam.slotStates[i].manualExposure) { _, _ in HapticFeedback.play(.selection) }
-        .onChange(of: cam.slotStates[i].manualFocus) { _, _ in HapticFeedback.play(.selection) }
-        .onChange(of: cam.slotStates[i].locked) { _, _ in HapticFeedback.play(.selection) }
-        .onChange(of: cam.slotStates[i].manualWB) { _, _ in HapticFeedback.play(.selection) }
-        .onChange(of: cam.cfg.resolution) { _, _ in HapticFeedback.play(.selection) }
-        .onChange(of: cam.cfg.fps) { _, _ in HapticFeedback.play(.selection) }
-        .onChange(of: cam.timerSeconds) { _, _ in HapticFeedback.play(.selection) }
-        .onChange(of: cam.cfg.stabilization) { _, _ in HapticFeedback.play(.selection) }
     }
-
 
     private func landscapeContent(slot: Int, parameter: QuickParameter) -> some View {
 // Landscape-first parameter UI: all parameter choices run horizontally,
@@ -997,6 +983,7 @@ struct QuickParamsTab: View {
                         HStack(spacing: 8) {
                             ForEach(visibleItems) { item in
                                 Button {
+                                    HapticFeedback.play(.selection)
                                     withAnimation(.easeOut(duration: 0.18)) { selectedParameterName = item.rawValue }
                                 } label: {
                                     HStack(spacing: 7) {
@@ -1057,6 +1044,7 @@ VStack(alignment: .leading, spacing: 9) {
                         HStack(spacing: 7) {
                             ForEach(visibleItems) { item in
                                 Button {
+                                    HapticFeedback.play(.selection)
                                     withAnimation(.easeOut(duration: 0.15)) { selectedParameterName = item.rawValue }
                                 } label: {
                                     VStack(spacing: 4) {
