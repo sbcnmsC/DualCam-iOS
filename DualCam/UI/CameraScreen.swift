@@ -1303,43 +1303,47 @@ struct TopBar: View {
                         HStack(spacing: actionSpacing) {
                             if isCustomizing {
                                 Menu {
-                                Section("相机按钮") {
-                                    ForEach(availableActionKeys.filter { !Self.isParameterKey($0) }, id: \.self) { key in
-                                        Button { addAction(key) } label: {
-                                            Label(actionTitle(key), systemImage: actionSystemImage(key))
+                                    Section("相机按钮") {
+                                        ForEach(availableActionKeys.filter { !Self.isParameterKey($0) }, id: \.self) { key in
+                                            Button { addAction(key) } label: {
+                                                Label(actionTitle(key), systemImage: actionSystemImage(key))
+                                            }
                                         }
                                     }
-                                }
-                                Section("独立参数按钮") {
-                                    ForEach(availableActionKeys.filter { Self.isParameterKey($0) }, id: \.self) { key in
-                                        Button { addAction(key) } label: {
-                                            Label(actionTitle(key), systemImage: actionSystemImage(key))
+                                    Section("独立参数按钮") {
+                                        ForEach(availableActionKeys.filter { Self.isParameterKey($0) }, id: \.self) { key in
+                                            Button { addAction(key) } label: {
+                                                Label(actionTitle(key), systemImage: actionSystemImage(key))
+                                            }
                                         }
                                     }
+                                } label: {
+                                    Image(systemName: "plus.circle.fill")
+                                        .font(.system(size: compactLayout ? 23 : 27, weight: .semibold))
+                                        .foregroundStyle(Color.green)
+                                        .frame(width: compactLayout ? 28 : 32, height: compactLayout ? 28 : 32)
+                                        .background(Circle().fill(Color.white.opacity(0.09)))
                                 }
-                            } label: {
-                                Image(systemName: "plus.circle.fill")
-                                    .font(.system(size: compactLayout ? 23 : 27, weight: .semibold))
-                                    .foregroundStyle(Color.green)
-                                    .frame(width: compactLayout ? 28 : 32, height: compactLayout ? 28 : 32)
-                                    .background(Circle().fill(Color.white.opacity(0.09)))
-                            }
-                            .disabled(availableActionKeys.isEmpty)
-                            .accessibilityLabel("添加按钮或独立参数")
+                                .disabled(availableActionKeys.isEmpty)
+                                .accessibilityLabel("添加按钮或独立参数")
 
-                            Button {
-                                withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) { isCustomizing = false }
-                            } label: {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: compactLayout ? 22 : 25, weight: .semibold))
-                                    .foregroundStyle(Color.yellow)
-                                    .frame(width: compactLayout ? 28 : 32, height: compactLayout ? 28 : 32)
+                                Button {
+                                    withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) {
+                                        isCustomizing = false
+                                    }
+                                } label: {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .font(.system(size: compactLayout ? 22 : 25, weight: .semibold))
+                                        .foregroundStyle(Color.yellow)
+                                        .frame(width: compactLayout ? 28 : 32, height: compactLayout ? 28 : 32)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("完成自定义")
                             }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("完成自定义")
-                        }
 
-                            ForEach(actionKeys, id: \.self) { key in actionButton(for: key) }
+                            ForEach(actionKeys, id: \.self) { key in
+                                actionButton(for: key)
+                            }
                         }
                         .padding(.horizontal, 8)
                         // Center the button group whenever it fits; keep its natural width
