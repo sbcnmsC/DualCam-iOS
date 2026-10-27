@@ -1,5 +1,5 @@
 name: DualCam
-# Build 13: every Settings/Parameters control can be added as an independent camera shortcut (PIP, capture, filter, exposure, audio, haptics).
+# Build 13: Settings/Parameters controls are individually addable camera shortcuts; the top row scrolls when customized.
 
 options:
   bundleIdPrefix: com.dualcam
