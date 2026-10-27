@@ -1298,10 +1298,11 @@ struct TopBar: View {
                 .frame(height: 30)
                 .background(Capsule().fill(Color.red.opacity(0.85)))
             } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: actionSpacing) {
-                        if isCustomizing {
-                            Menu {
+                GeometryReader { geometry in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: actionSpacing) {
+                            if isCustomizing {
+                                Menu {
                                 Section("相机按钮") {
                                     ForEach(availableActionKeys.filter { !Self.isParameterKey($0) }, id: \.self) { key in
                                         Button { addAction(key) } label: {
@@ -1338,9 +1339,13 @@ struct TopBar: View {
                             .accessibilityLabel("完成自定义")
                         }
 
-                        ForEach(actionKeys, id: \.self) { key in actionButton(for: key) }
+                            ForEach(actionKeys, id: \.self) { key in actionButton(for: key) }
+                        }
+                        .padding(.horizontal, 8)
+                        // Center the button group whenever it fits; keep its natural width
+                        // when actions overflow so horizontal scrolling remains available.
+                        .frame(minWidth: geometry.size.width, alignment: .center)
                     }
-                    .padding(.horizontal, 8)
                 }
             }
         }
