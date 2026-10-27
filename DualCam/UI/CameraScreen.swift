@@ -5,6 +5,7 @@ struct CameraScreen: View {
     @EnvironmentObject private var cam: CameraManager
     @State private var showPanel = false
     @State private var panelTab: PanelTab = .pip
+    @AppStorage("dualcam.quickParameterSelected") private var selectedQuickParameterName = "曝光补偿"
     @State private var showTimerSettings = false
     @State private var showWirelessMonitor = false
     @StateObject private var wirelessSession = WirelessMonitorSession.shared
@@ -85,6 +86,14 @@ struct CameraScreen: View {
                             },
                             onWirelessMonitorTap: {
                                 showWirelessMonitor = true
+                            },
+                            onParameterTap: { parameterName in
+                                selectedQuickParameterName = parameterName
+                                withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
+                                    panelTab = .params
+                                    showPanel = true
+                                }
+                                HapticFeedback.play(.selection)
                             },
                             iconRotationDegrees: iconRotationDegrees,
                             compactLayout: hasSharingStopControl
@@ -1236,7 +1245,7 @@ struct TimerSettingsOverlay: View {
     }
 }
 
-// MARK: - 顶部栏（长按可自定义按钮）
+// MARK: - 顶部栏（长按自定义；参数可逐项添加）
 struct TopBar: View {
     @EnvironmentObject private var cam: CameraManager
     @AppStorage("dualcam.topbar.actions")
@@ -1245,12 +1254,17 @@ struct TopBar: View {
 
     let onTimerTap: () -> Void
     let onWirelessMonitorTap: () -> Void
+    let onParameterTap: (String) -> Void
     var iconRotationDegrees: CGFloat = 90
     var compactLayout = false
 
-    private static let allActionKeys = ["flash", "livePhoto", "liveMotion", "timer", "swapCamera", "wireless"]
-    private var showLiveSource: Bool { cam.cfg.livePhoto && cam.captureMode == .photo }
+    private static let baseActionKeys = ["flash", "livePhoto", "liveMotion", "timer", "swapCamera", "wireless"]
+    private static var allActionKeys: [String] {
+        baseActionKeys + QuickParameter.allCases.map { "param.\($0.shortcutKey)" }
+    }
+    private static func isParameterKey(_ key: String) -> Bool { key.hasPrefix("param.") }
 
+    private var showLiveSource: Bool { cam.cfg.livePhoto && cam.captureMode == .photo }
     private var actionKeys: [String] {
         guard actionOrderValue != "none" else { return [] }
         var seen = Set<String>()
@@ -1258,7 +1272,6 @@ struct TopBar: View {
             Self.allActionKeys.contains(key) && seen.insert(key).inserted
         }
     }
-
     private var availableActionKeys: [String] { Self.allActionKeys.filter { !actionKeys.contains($0) } }
     private var actionSpacing: CGFloat {
         if isCustomizing { return 3 }
@@ -1277,44 +1290,57 @@ struct TopBar: View {
             if cam.isRecording {
                 HStack(spacing: 6) {
                     Circle().fill(Color.red).frame(width: 8, height: 8)
-                    Text(timeString(cam.recordSeconds)).font(.system(size: 15, weight: .semibold, design: .monospaced))
+                    Text(timeString(cam.recordSeconds))
+                        .font(.system(size: 15, weight: .semibold, design: .monospaced))
                 }
-                .foregroundStyle(Color.white)
+                .foregroundStyle(.white)
                 .padding(.horizontal, 12)
                 .frame(height: 30)
                 .background(Capsule().fill(Color.red.opacity(0.85)))
             } else {
-                HStack(spacing: actionSpacing) {
-                    if isCustomizing {
-                        Menu {
-                            ForEach(availableActionKeys, id: \.self) { key in
-                                Button { addAction(key) } label: {
-                                    Label(actionTitle(key), systemImage: actionSystemImage(key))
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: actionSpacing) {
+                        if isCustomizing {
+                            Menu {
+                                Section("相机按钮") {
+                                    ForEach(availableActionKeys.filter { !Self.isParameterKey($0) }, id: \.self) { key in
+                                        Button { addAction(key) } label: {
+                                            Label(actionTitle(key), systemImage: actionSystemImage(key))
+                                        }
+                                    }
                                 }
+                                Section("独立参数按钮") {
+                                    ForEach(availableActionKeys.filter { Self.isParameterKey($0) }, id: \.self) { key in
+                                        Button { addAction(key) } label: {
+                                            Label(actionTitle(key), systemImage: actionSystemImage(key))
+                                        }
+                                    }
+                                }
+                            } label: {
+                                Image(systemName: "plus.circle.fill")
+                                    .font(.system(size: compactLayout ? 23 : 27, weight: .semibold))
+                                    .foregroundStyle(Color.green)
+                                    .frame(width: compactLayout ? 28 : 32, height: compactLayout ? 28 : 32)
+                                    .background(Circle().fill(Color.white.opacity(0.09)))
                             }
-                        } label: {
-                            Image(systemName: "plus.circle.fill")
-                                .font(.system(size: compactLayout ? 23 : 27, weight: .semibold))
-                                .foregroundStyle(Color.green)
-                                .frame(width: compactLayout ? 28 : 32, height: compactLayout ? 28 : 32)
-                                .background(Circle().fill(Color.white.opacity(0.09)))
-                        }
-                        .disabled(availableActionKeys.isEmpty)
-                        .accessibilityLabel("添加顶部按钮")
+                            .disabled(availableActionKeys.isEmpty)
+                            .accessibilityLabel("添加按钮或独立参数")
 
-                        Button {
-                            withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) { isCustomizing = false }
-                        } label: {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: compactLayout ? 22 : 25, weight: .semibold))
-                                .foregroundStyle(Color.yellow)
-                                .frame(width: compactLayout ? 28 : 32, height: compactLayout ? 28 : 32)
+                            Button {
+                                withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) { isCustomizing = false }
+                            } label: {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: compactLayout ? 22 : 25, weight: .semibold))
+                                    .foregroundStyle(Color.yellow)
+                                    .frame(width: compactLayout ? 28 : 32, height: compactLayout ? 28 : 32)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("完成自定义")
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("完成自定义")
+
+                        ForEach(actionKeys, id: \.self) { key in actionButton(for: key) }
                     }
-
-                    ForEach(actionKeys, id: \.self) { key in actionButton(for: key) }
+                    .padding(.horizontal, 8)
                 }
             }
         }
@@ -1340,16 +1366,16 @@ struct TopBar: View {
         case "liveMotion":
             if showLiveSource {
                 iconButton(actionKey: key, icon: cam.cfg.liveMotion.icon,
-                           active: cam.cfg.liveMotion != .composite, dimmed: cam.cfg.outputMode == .original,
-                           label: "实况动态片段：\(cam.cfg.liveMotion.rawValue)", badge: cam.cfg.liveMotion.badge) {
+                           active: cam.cfg.liveMotion != .composite,
+                           dimmed: cam.cfg.outputMode == .original,
+                           label: "实况动态来源：\(cam.cfg.liveMotion.rawValue)",
+                           badge: cam.cfg.liveMotion.badge) {
                     if cam.cfg.outputMode == .original {
-                        HapticFeedback.play(.button)
                         cam.showToast("「原图直出」没有合成图，动态片段取自各自镜头")
                         return
                     }
                     HapticFeedback.play(.selection)
                     cam.cfg.liveMotion = cam.cfg.liveMotion.next
-                    cam.showToast("实况动态：\(cam.cfg.liveMotion.rawValue)")
                 }
             } else {
                 EmptyView()
@@ -1372,12 +1398,22 @@ struct TopBar: View {
                 onWirelessMonitorTap()
             }
         default:
-            EmptyView()
+            if key.hasPrefix("param."),
+               let parameter = QuickParameter.fromShortcutKey(String(key.dropFirst("param.".count))) {
+                iconButton(actionKey: key, icon: parameter.icon, active: false,
+                           label: "打开参数：\(parameter.rawValue)") {
+                    onParameterTap(parameter.rawValue)
+                }
+            } else {
+                EmptyView()
+            }
         }
     }
 
-    private func iconButton(actionKey: String, icon: String, active: Bool, dimmed: Bool = false,
-                            label: String, badge: String? = nil, action: @escaping () -> Void) -> some View {
+    private func iconButton(
+        actionKey: String, icon: String, active: Bool, dimmed: Bool = false,
+        label: String, badge: String? = nil, action: @escaping () -> Void
+    ) -> some View {
         Button {
             if isCustomizing { removeAction(actionKey) } else { action() }
         } label: {
@@ -1392,7 +1428,7 @@ struct TopBar: View {
                 .overlay(alignment: .topTrailing) {
                     if let badge, !isCustomizing {
                         Text(badge).font(.system(size: 8, weight: .bold, design: .rounded))
-                            .foregroundStyle(Color.black).frame(minWidth: 13, minHeight: 13)
+                            .foregroundStyle(.black).frame(minWidth: 13, minHeight: 13)
                             .background(Circle().fill(Color.yellow)).offset(x: 3, y: -2)
                     }
                 }
@@ -1444,7 +1480,12 @@ struct TopBar: View {
         case "timer": return "倒计时"
         case "swapCamera": return "切换摄像头"
         case "wireless": return "无线监看"
-        default: return key
+        default:
+            if key.hasPrefix("param."),
+               let parameter = QuickParameter.fromShortcutKey(String(key.dropFirst("param.".count))) {
+                return parameter.rawValue
+            }
+            return key
         }
     }
 
@@ -1456,7 +1497,12 @@ struct TopBar: View {
         case "timer": return "timer"
         case "swapCamera": return "arrow.triangle.2.circlepath"
         case "wireless": return "dot.radiowaves.left.and.right"
-        default: return "plus"
+        default:
+            if key.hasPrefix("param."),
+               let parameter = QuickParameter.fromShortcutKey(String(key.dropFirst("param.".count))) {
+                return parameter.icon
+            }
+            return "plus"
         }
     }
 
