@@ -708,35 +708,8 @@ struct WirelessMonitorRolePickerSheet: View {
         NavigationStack {
             List {
                 Section("共享方式") {
-                    Button(action: onReceive) {
-                        HStack(spacing: 12) {
-                            Image(systemName: "rectangle.inset.filled.and.person.filled")
-                                .frame(width: 24)
-                            Text("接收画面")
-                            Spacer(minLength: 0)
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(.tertiary)
-                        }
-                        .foregroundStyle(Color(uiColor: .systemBlue))
-                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                        .contentShape(Rectangle())
-                    }
-
-                    Button(action: onShare) {
-                        HStack(spacing: 12) {
-                            Image(systemName: "dot.radiowaves.left.and.right")
-                                .frame(width: 24)
-                            Text("共享本机画面")
-                            Spacer(minLength: 0)
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(.tertiary)
-                        }
-                        .foregroundStyle(Color(uiColor: .systemBlue))
-                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                        .contentShape(Rectangle())
-                    }
+                    roleRow("接收画面", systemImage: "rectangle.inset.filled.and.person.filled", action: onReceive)
+                    roleRow("共享本机画面", systemImage: "dot.radiowaves.left.and.right", action: onShare)
                 }
 
                 Section {
@@ -756,6 +729,24 @@ struct WirelessMonitorRolePickerSheet: View {
                 }
             }
             .tint(Color(uiColor: .systemBlue))
+        }
+    }
+
+    /// Full-row standard button: the whole 44 pt row is the hit target, not just the label.
+    private func roleRow(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: systemImage)
+                    .frame(width: 24)
+                Text(title)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .foregroundStyle(Color(uiColor: .systemBlue))
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
         }
     }
 }

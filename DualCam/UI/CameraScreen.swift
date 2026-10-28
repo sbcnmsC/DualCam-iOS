@@ -32,8 +32,8 @@ struct CameraScreen: View {
 
     var body: some View {
         GeometryReader { geo in
-            // Preserve the original safe-area camera layout. The stop button gets its own
-            // full-screen pass-through touch layer below; the preview geometry stays untouched.
+            // Preserve the original safe-area camera layout; the sender's stop button is
+            // installed at window level (see StopShareWindowOverlayAnchor) and does not affect it.
             let insets = geo.safeAreaInsets
             let canvasSize = CGSize(
                 width: geo.size.width + insets.leading + insets.trailing,
@@ -293,7 +293,6 @@ struct CameraScreen: View {
                     .offset(x: canvasOffset.width, y: canvasOffset.height)
                     .zIndex(300)
                 }
-
             }
             .animation(.spring(response: 0.36, dampingFraction: 0.88), value: isParameterPanelLandscape)
             .onAppear {
@@ -335,11 +334,9 @@ struct CameraScreen: View {
                 shutterButtonTop = top
             }
         }
-        // Keep the original camera safe-area geometry. Only this pass-through overlay
-        // ignores safe areas; it does not change preview size, previewTop, or camera layout.
         .background(Color.black.ignoresSafeArea())
-        // Attach the stop button as a direct UIWindow child, not as part of the
-        // camera canvas layout. The preview geometry and safe-area calculations remain unchanged.
+        // The stop button lives in the UIWindow, outside the camera canvas layout, so it never
+        // changes preview size, previewTop or safe-area calculations.
         .background {
             if wirelessSession.mode == .sending {
                 StopShareWindowOverlayAnchor {
@@ -570,14 +567,11 @@ private struct StopShareWindowOverlayAnchor: UIViewRepresentable {
 }
 
 private final class StopShareWindowAnchorView: UIView {
+    /// Forwarded to the overlay as-is; assigning it never re-installs the overlay.
     var onStop: (() -> Void)? {
-        didSet {
-            overlayView?.onStop = onStop
-            refreshOverlay()
-        }
+        didSet { overlayView?.onStop = onStop }
     }
 
-    private weak var attachedWindow: UIWindow?
     private var overlayView: StopShareWindowTouchOverlay?
 
     override init(frame: CGRect) {
@@ -595,45 +589,49 @@ private final class StopShareWindowAnchorView: UIView {
         refreshOverlay()
     }
 
+    /// Installs the overlay in the current window (moving it if the window changed) and keeps
+    /// it on top. SwiftUI calls this on every update, so it only touches UIKit when needed.
     func refreshOverlay() {
         guard let window else {
             detachOverlay()
             return
         }
 
-        if attachedWindow !== window || overlayView == nil {
-            detachOverlay()
-            let overlay = StopShareWindowTouchOverlay(frame: window.bounds)
+        let overlay: StopShareWindowTouchOverlay
+        if let existing = overlayView {
+            overlay = existing
+        } else {
+            overlay = StopShareWindowTouchOverlay(frame: window.bounds)
             overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            overlay.onStop = onStop
-            attachedWindow = window
             overlayView = overlay
-            window.addSubview(overlay)
-        } else if let overlayView, overlayView.superview !== window {
-            window.addSubview(overlayView)
         }
+        overlay.onStop = onStop
 
-        guard let overlayView else { return }
-        overlayView.onStop = onStop
-        overlayView.frame = window.bounds
-        window.bringSubviewToFront(overlayView)
-        overlayView.setNeedsLayout()
+        if overlay.superview !== window {
+            overlay.frame = window.bounds
+            window.addSubview(overlay)
+        }
+        if window.subviews.last !== overlay {
+            window.bringSubviewToFront(overlay)
+        }
     }
 
     func detachOverlay() {
         overlayView?.removeFromSuperview()
         overlayView = nil
-        attachedWindow = nil
-    }
-
-    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-        false
     }
 }
 
 /// Window-level hit-test view: only the stop button consumes touches. All other coordinates
 /// return false so the normal SwiftUI camera surface receives them unchanged.
 private final class StopShareWindowTouchOverlay: UIView {
+    private enum Metrics {
+        static let minWidth: CGFloat = 104
+        static let height: CGFloat = 44
+        static let top: CGFloat = 8
+        static let trailingMargin: CGFloat = 22
+    }
+
     var onStop: (() -> Void)?
 
     private let stopButton = UIButton(type: .system)
@@ -641,27 +639,16 @@ private final class StopShareWindowTouchOverlay: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
-        isOpaque = false
-        isUserInteractionEnabled = true
-        clipsToBounds = false
 
-        var configuration = UIButton.Configuration.filled()
+        // Chrome-less control so the preview shows through: white label, red stop glyph.
+        // `.plain()` already has no background, stroke or shadow to reset.
+        var configuration = UIButton.Configuration.plain()
         configuration.title = "结束共享"
         configuration.image = UIImage(systemName: "stop.fill")
         configuration.imagePlacement = .trailing
         configuration.imagePadding = 6
         configuration.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 10, bottom: 0, trailing: 10)
-        configuration.baseBackgroundColor = .clear
         configuration.baseForegroundColor = .white
-        configuration.cornerStyle = .capsule
-
-        // Low-profile camera-style control: dark glass-like surface, restrained red outline,
-        // and a red stop glyph instead of a fully red pill that obscures the preview.
-        var background = configuration.background
-        background.backgroundColor = .clear
-        background.strokeColor = .clear
-        background.strokeWidth = 0
-        configuration.background = background
         configuration.imageColorTransformer = UIConfigurationColorTransformer { _ in UIColor.systemRed }
         configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
             var outgoing = incoming
@@ -671,13 +658,12 @@ private final class StopShareWindowTouchOverlay: UIView {
         }
 
         stopButton.configuration = configuration
+        // With no background there is no pressed-state fill, so dim the whole control instead.
+        stopButton.configurationUpdateHandler = { button in
+            button.alpha = button.isHighlighted ? 0.5 : 1
+        }
         stopButton.accessibilityLabel = "结束无线共享"
         stopButton.accessibilityHint = "停止向配对设备共享画面"
-        stopButton.layer.borderWidth = 0
-        stopButton.layer.shadowColor = UIColor.black.cgColor
-        stopButton.layer.shadowOpacity = 0
-        stopButton.layer.shadowRadius = 0
-        stopButton.layer.shadowOffset = .zero
         stopButton.addTarget(self, action: #selector(stopPressed), for: .touchUpInside)
         addSubview(stopButton)
     }
@@ -689,22 +675,24 @@ private final class StopShareWindowTouchOverlay: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         let rightInset = window?.safeAreaInsets.right ?? safeAreaInsets.right
-        let rightPadding = max(8, rightInset + 22)
+        // Grow with the label if the copy changes, but never shrink below the 104 x 44 pt target.
+        let fitted = stopButton.sizeThatFits(CGSize(width: bounds.width, height: Metrics.height))
+        let width = max(Metrics.minWidth, ceil(fitted.width))
         stopButton.frame = CGRect(
-            x: bounds.width - rightPadding - 104,
-            y: 8,
-            width: 104,
-            height: 44
+            x: bounds.width - rightInset - Metrics.trailingMargin - width,
+            y: Metrics.top,
+            width: width,
+            height: Metrics.height
         )
+    }
+
+    override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        setNeedsLayout()
     }
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         stopButton.frame.contains(point)
-    }
-
-    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        guard self.point(inside: point, with: event) else { return nil }
-        return super.hitTest(point, with: event)
     }
 
     @objc private func stopPressed() {
