@@ -711,12 +711,20 @@ struct WirelessMonitorRolePickerSheet: View {
                     Button(action: onReceive) {
                         Label("接收画面", systemImage: "rectangle.inset.filled.and.person.filled")
                             .foregroundStyle(Color(uiColor: .systemBlue))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    .contentShape(Rectangle())
 
                     Button(action: onShare) {
                         Label("共享本机画面", systemImage: "dot.radiowaves.left.and.right")
                             .foregroundStyle(Color(uiColor: .systemBlue))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    .contentShape(Rectangle())
                 }
 
                 Section {
