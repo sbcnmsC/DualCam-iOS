@@ -52,6 +52,11 @@ struct CameraScreen: View {
                 ? 90
                 : (activeOrientation == .landscapeRight ? -90 : 0)
             let topControlsBottom = insets.top + topBarHeight
+            // On iPhone, fit the close action beside the Dynamic Island and entirely above the TopBar.
+            // On iPad, reserve the trailing header space because its top safe area is too short for a 44 pt control.
+            let receiverCloseTop = max(8, insets.top - 44)
+            let reserveCloseSpaceInTopBar = wirelessSession.mode == .receiving && insets.top < 44
+            let topBarContentWidth = max(0, controlCanvasWidth - (reserveCloseSpaceInTopBar ? 56 : 0))
             let dockTop = canvasSize.height - insets.bottom - bottomBarHeight
 
             // Fit the selected output ratio against the whole device canvas.
@@ -126,7 +131,7 @@ struct CameraScreen: View {
                             iconRotationDegrees: iconRotationDegrees,
                             compactLayout: false
                         )
-                        .frame(width: controlCanvasWidth, height: topBarHeight)
+                        .frame(width: topBarContentWidth, height: topBarHeight)
                     }
                     .frame(width: controlCanvasWidth, height: topBarHeight, alignment: .leading)
 
@@ -264,9 +269,9 @@ struct CameraScreen: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("关闭接收画面并结束共享")
-                        // The camera TopBar occupies the first 56 pt below the safe area.
-                        // Place close below it so it never covers flash/timer/layout buttons.
-                        .padding(.top, insets.top + topBarHeight + 8)
+                        // Keep close above the TopBar and to the right of the Dynamic Island.
+                        // The iPad header reserves trailing width when the safe area is too short.
+                        .padding(.top, receiverCloseTop)
                         .padding(.trailing, insets.trailing + 12)
                     }
                     .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topTrailing)
@@ -316,7 +321,9 @@ struct CameraScreen: View {
                     .zIndex(250)
                 }
             }
-            .animation(.spring(response: 0.36, dampingFraction: 0.88), value: isParameterPanelLandscape)
+            // Switching between local preview and remote video must not animate the entire
+            // camera-control hierarchy; retain only explicitly scoped control animations.
+            .animation(nil, value: wirelessSession.mode)
             .onAppear {
                 wirelessSession.configure(cameraManager: cam)
                 UIDevice.current.beginGeneratingDeviceOrientationNotifications()
@@ -359,7 +366,6 @@ struct CameraScreen: View {
         // Preserve Build 94's safe-area measurement and expand the preview canvas explicitly.
         .background(Color.black.ignoresSafeArea())
         .statusBarHidden(true)
-        .animation(.easeInOut(duration: 0.22), value: showPanel)
         .sheet(item: $wirelessSheetRoute, onDismiss: {
             // Pairing remains separate from mode selection. A mode chosen by long-press
             // is resumed immediately after the safety-code sheet finishes.
