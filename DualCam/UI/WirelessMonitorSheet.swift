@@ -709,22 +709,34 @@ struct WirelessMonitorRolePickerSheet: View {
             List {
                 Section("共享方式") {
                     Button(action: onReceive) {
-                        Label("接收画面", systemImage: "rectangle.inset.filled.and.person.filled")
-                            .foregroundStyle(Color(uiColor: .systemBlue))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
+                        HStack(spacing: 12) {
+                            Image(systemName: "rectangle.inset.filled.and.person.filled")
+                                .frame(width: 24)
+                            Text("接收画面")
+                            Spacer(minLength: 0)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .foregroundStyle(Color(uiColor: .systemBlue))
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
-                    .contentShape(Rectangle())
 
                     Button(action: onShare) {
-                        Label("共享本机画面", systemImage: "dot.radiowaves.left.and.right")
-                            .foregroundStyle(Color(uiColor: .systemBlue))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
+                        HStack(spacing: 12) {
+                            Image(systemName: "dot.radiowaves.left.and.right")
+                                .frame(width: 24)
+                            Text("共享本机画面")
+                            Spacer(minLength: 0)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .foregroundStyle(Color(uiColor: .systemBlue))
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
-                    .contentShape(Rectangle())
                 }
 
                 Section {
