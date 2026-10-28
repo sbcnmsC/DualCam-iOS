@@ -37,7 +37,7 @@ struct CameraScreen: View {
         let activeScene = UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .first { $0.activationState == .foregroundActive }
-        let safe = activeScene?.windows.first(where: \\.isKeyWindow)?.safeAreaInsets ?? .zero
+        let safe = activeScene?.windows.first(where: { $0.isKeyWindow })?.safeAreaInsets ?? .zero
         return EdgeInsets(top: safe.top, leading: safe.left, bottom: safe.bottom, trailing: safe.right)
     }
 
@@ -177,6 +177,7 @@ struct CameraScreen: View {
                     )
                 }
                 .padding(.top, insets.top)
+                .padding(.bottom, insets.bottom)
                 .frame(width: controlCanvasWidth)
                 .frame(maxHeight: .infinity, alignment: .top)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
