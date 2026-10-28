@@ -573,6 +573,7 @@ private struct HardwareCameraCaptureModifier: ViewModifier {
         }
     }
 
+    @available(iOS 18.0, *)
     private func handleCaptureEvent(_ event: AVCaptureEvent) {
         switch event.phase {
         case .began:
