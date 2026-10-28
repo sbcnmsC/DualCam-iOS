@@ -30,24 +30,16 @@ struct CameraScreen: View {
 
     private let topBarHeight: CGFloat = 56
 
-    /// Read the physical window's safe area independently from the SwiftUI content bounds.
-    /// CameraScreen now owns a full-screen hit-testing canvas, so geometry.safeAreaInsets may
-    /// be zero after ignoresSafeArea is applied to the root.
-    private var windowSafeAreaInsets: EdgeInsets {
-        let activeScene = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .first { $0.activationState == .foregroundActive }
-        let safe = activeScene?.windows.first(where: { $0.isKeyWindow })?.safeAreaInsets ?? .zero
-        return EdgeInsets(top: safe.top, leading: safe.left, bottom: safe.bottom, trailing: safe.right)
-    }
-
     var body: some View {
         GeometryReader { geo in
-            // The camera canvas occupies the full screen, including the status-bar/Dynamic Island
-            // region. Keep controls safe using the window insets, but keep top overlays hittable.
-            let insets = windowSafeAreaInsets
-            let canvasSize = geo.size
-            let canvasOffset = CGSize.zero
+            // Preserve the original safe-area camera layout. The stop button gets its own
+            // full-screen pass-through touch layer below; the preview geometry stays untouched.
+            let insets = geo.safeAreaInsets
+            let canvasSize = CGSize(
+                width: geo.size.width + insets.leading + insets.trailing,
+                height: geo.size.height + insets.top + insets.bottom
+            )
+            let canvasOffset = CGSize(width: -insets.leading, height: -insets.top)
             // The app window remains portrait-locked. Physical device orientation only selects
             // the parameter panel's presentation; it must never resize the camera canvas or controls.
             let controlCanvasWidth: CGFloat = geo.size.width
@@ -176,8 +168,6 @@ struct CameraScreen: View {
                         iconRotationDegrees: iconRotationDegrees
                     )
                 }
-                .padding(.top, insets.top)
-                .padding(.bottom, insets.bottom)
                 .frame(width: controlCanvasWidth)
                 .frame(maxHeight: .infinity, alignment: .top)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -345,43 +335,17 @@ struct CameraScreen: View {
                 shutterButtonTop = top
             }
         }
-        // Expand the actual view bounds, not just its background. Otherwise visible controls
-        // drawn into the top unsafe area can be excluded by the parent's hit-test bounds.
-        .ignoresSafeArea(.container, edges: .all)
+        // Keep the original camera safe-area geometry. Only this pass-through overlay
+        // ignores safe areas; it does not change preview size, previewTop, or camera layout.
         .background(Color.black.ignoresSafeArea())
-        // Keep the stop action outside the camera's internal ZStack. This root-level
-        // overlay has full-screen bounds and is above preview, TopBar, and panel layers.
-        .overlay(alignment: .topTrailing) {
+        .overlay {
             if wirelessSession.mode == .sending {
-                Button {
+                StopSharePassthroughOverlay {
                     HapticFeedback.play(.button)
                     wirelessSession.stopVideo()
-                } label: {
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(Color.white)
-                            .frame(width: 6, height: 6)
-                        Text("结束共享")
-                            .font(.system(size: 11, weight: .semibold))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.8)
-                        Image(systemName: "stop.fill")
-                            .font(.system(size: 9, weight: .bold))
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 12)
-                    .frame(width: 104, height: 44)
-                    .background(Color.red, in: Capsule())
-                    .overlay(Capsule().stroke(Color.white.opacity(0.22), lineWidth: 0.7))
-                    // Make the complete 104 x 44 rectangle hittable, not only the capsule shape.
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("结束无线共享")
-                .frame(width: 112, height: 52)
-                .contentShape(Rectangle())
-                .padding(.top, 8)
-                .padding(.trailing, max(8, windowSafeAreaInsets.trailing + 12))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea(.container, edges: .all)
                 .zIndex(1000)
             }
         }
@@ -583,6 +547,78 @@ struct CameraScreen: View {
     }
 }
 
+
+/// A full-screen transparent touch layer that owns only the stop button hit target.
+/// Returning false outside the button lets all other touches pass through to the camera UI.
+private struct StopSharePassthroughOverlay: UIViewRepresentable {
+    let action: () -> Void
+
+    func makeUIView(context: Context) -> StopSharePassthroughUIView {
+        let view = StopSharePassthroughUIView()
+        view.onStop = action
+        return view
+    }
+
+    func updateUIView(_ uiView: StopSharePassthroughUIView, context: Context) {
+        uiView.onStop = action
+    }
+}
+
+private final class StopSharePassthroughUIView: UIView {
+    var onStop: (() -> Void)?
+
+    private let stopButton = UIButton(type: .system)
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        isOpaque = false
+        isUserInteractionEnabled = true
+        clipsToBounds = false
+
+        var configuration = UIButton.Configuration.filled()
+        configuration.title = "结束共享"
+        configuration.image = UIImage(systemName: "stop.fill")
+        configuration.imagePlacement = .trailing
+        configuration.imagePadding = 6
+        configuration.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12)
+        configuration.baseBackgroundColor = .systemRed
+        configuration.baseForegroundColor = .white
+        configuration.cornerStyle = .capsule
+        stopButton.configuration = configuration
+        stopButton.titleLabel?.font = UIFont.systemFont(ofSize: 11, weight: .semibold)
+        stopButton.accessibilityLabel = "结束无线共享"
+        stopButton.accessibilityHint = "停止向配对设备共享画面"
+        stopButton.layer.borderWidth = 0.7
+        stopButton.layer.borderColor = UIColor.white.withAlphaComponent(0.22).cgColor
+        stopButton.addTarget(self, action: #selector(stopPressed), for: .touchUpInside)
+        addSubview(stopButton)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let rightSafeInset = max(safeAreaInsets.right, window?.safeAreaInsets.right ?? 0)
+        let rightPadding = max(8, rightSafeInset + 12)
+        stopButton.frame = CGRect(
+            x: bounds.width - rightPadding - 112,
+            y: 8,
+            width: 112,
+            height: 52
+        )
+    }
+
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        stopButton.frame.contains(point)
+    }
+
+    @objc private func stopPressed() {
+        onStop?()
+    }
+}
 
 /// Route physical capture controls (iPhone Camera Control, volume buttons, Action button,
 /// and supported remote capture events) through exactly the same local/remote capture path.
