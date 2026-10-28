@@ -338,15 +338,15 @@ struct CameraScreen: View {
         // Keep the original camera safe-area geometry. Only this pass-through overlay
         // ignores safe areas; it does not change preview size, previewTop, or camera layout.
         .background(Color.black.ignoresSafeArea())
-        .overlay {
+        // Attach the stop button as a direct UIWindow child, not as part of the
+        // camera canvas layout. The preview geometry and safe-area calculations remain unchanged.
+        .background {
             if wirelessSession.mode == .sending {
-                StopSharePassthroughOverlay {
+                StopShareWindowOverlayAnchor {
                     HapticFeedback.play(.button)
                     wirelessSession.stopVideo()
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .ignoresSafeArea(.container, edges: .all)
-                .zIndex(1000)
+                .frame(width: 0, height: 0)
             }
         }
         .statusBarHidden(true)
@@ -548,23 +548,92 @@ struct CameraScreen: View {
 }
 
 
-/// A full-screen transparent touch layer that owns only the stop button hit target.
-/// Returning false outside the button lets all other touches pass through to the camera UI.
-private struct StopSharePassthroughOverlay: UIViewRepresentable {
+/// A zero-size SwiftUI anchor that installs the stop button directly in the active
+/// UIWindow. It does not participate in camera layout or expand CameraScreen's hit bounds.
+private struct StopShareWindowOverlayAnchor: UIViewRepresentable {
     let action: () -> Void
 
-    func makeUIView(context: Context) -> StopSharePassthroughUIView {
-        let view = StopSharePassthroughUIView()
+    func makeUIView(context: Context) -> StopShareWindowAnchorView {
+        let view = StopShareWindowAnchorView()
         view.onStop = action
         return view
     }
 
-    func updateUIView(_ uiView: StopSharePassthroughUIView, context: Context) {
+    func updateUIView(_ uiView: StopShareWindowAnchorView, context: Context) {
         uiView.onStop = action
+        uiView.refreshOverlay()
+    }
+
+    static func dismantleUIView(_ uiView: StopShareWindowAnchorView, coordinator: ()) {
+        uiView.detachOverlay()
     }
 }
 
-private final class StopSharePassthroughUIView: UIView {
+private final class StopShareWindowAnchorView: UIView {
+    var onStop: (() -> Void)? {
+        didSet {
+            overlayView?.onStop = onStop
+            refreshOverlay()
+        }
+    }
+
+    private weak var attachedWindow: UIWindow?
+    private var overlayView: StopShareWindowTouchOverlay?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        isUserInteractionEnabled = false
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        refreshOverlay()
+    }
+
+    func refreshOverlay() {
+        guard let window else {
+            detachOverlay()
+            return
+        }
+
+        if attachedWindow !== window || overlayView == nil {
+            detachOverlay()
+            let overlay = StopShareWindowTouchOverlay(frame: window.bounds)
+            overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            overlay.onStop = onStop
+            attachedWindow = window
+            overlayView = overlay
+            window.addSubview(overlay)
+        } else if let overlayView, overlayView.superview !== window {
+            window.addSubview(overlayView)
+        }
+
+        guard let overlayView else { return }
+        overlayView.onStop = onStop
+        overlayView.frame = window.bounds
+        window.bringSubviewToFront(overlayView)
+        overlayView.setNeedsLayout()
+    }
+
+    func detachOverlay() {
+        overlayView?.removeFromSuperview()
+        overlayView = nil
+        attachedWindow = nil
+    }
+
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        false
+    }
+}
+
+/// Window-level hit-test view: only the stop button consumes touches. All other coordinates
+/// return false so the normal SwiftUI camera surface receives them unchanged.
+private final class StopShareWindowTouchOverlay: UIView {
     var onStop: (() -> Void)?
 
     private let stopButton = UIButton(type: .system)
@@ -580,8 +649,8 @@ private final class StopSharePassthroughUIView: UIView {
         configuration.title = "结束共享"
         configuration.image = UIImage(systemName: "stop.fill")
         configuration.imagePlacement = .trailing
-        configuration.imagePadding = 6
-        configuration.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12)
+        configuration.imagePadding = 5
+        configuration.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 10, bottom: 0, trailing: 10)
         configuration.baseBackgroundColor = .systemRed
         configuration.baseForegroundColor = .white
         configuration.cornerStyle = .capsule
@@ -601,18 +670,23 @@ private final class StopSharePassthroughUIView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        let rightSafeInset = max(safeAreaInsets.right, window?.safeAreaInsets.right ?? 0)
-        let rightPadding = max(8, rightSafeInset + 12)
+        let rightInset = window?.safeAreaInsets.right ?? safeAreaInsets.right
+        let rightPadding = max(8, rightInset + 12)
         stopButton.frame = CGRect(
-            x: bounds.width - rightPadding - 112,
+            x: bounds.width - rightPadding - 104,
             y: 8,
-            width: 112,
-            height: 52
+            width: 104,
+            height: 44
         )
     }
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         stopButton.frame.contains(point)
+    }
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard self.point(inside: point, with: event) else { return nil }
+        return super.hitTest(point, with: event)
     }
 
     @objc private func stopPressed() {
