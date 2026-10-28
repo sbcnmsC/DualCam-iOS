@@ -52,11 +52,6 @@ struct CameraScreen: View {
                 ? 90
                 : (activeOrientation == .landscapeRight ? -90 : 0)
             let topControlsBottom = insets.top + topBarHeight
-            // On iPhone, fit the close action beside the Dynamic Island and entirely above the TopBar.
-            // On iPad, reserve the trailing header space because its top safe area is too short for a 44 pt control.
-            let receiverCloseTop = max(8, insets.top - 44)
-            let reserveCloseSpaceInTopBar = wirelessSession.mode == .receiving && insets.top < 44
-            let topBarContentWidth = max(0, controlCanvasWidth - (reserveCloseSpaceInTopBar ? 56 : 0))
             let dockTop = canvasSize.height - insets.bottom - bottomBarHeight
 
             // Fit the selected output ratio against the whole device canvas.
@@ -131,7 +126,7 @@ struct CameraScreen: View {
                             iconRotationDegrees: iconRotationDegrees,
                             compactLayout: false
                         )
-                        .frame(width: topBarContentWidth, height: topBarHeight)
+                        .frame(width: controlCanvasWidth, height: topBarHeight)
                     }
                     .frame(width: controlCanvasWidth, height: topBarHeight, alignment: .leading)
 
@@ -269,9 +264,8 @@ struct CameraScreen: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("关闭接收画面并结束共享")
-                        // Keep close above the TopBar and to the right of the Dynamic Island.
-                        // The iPad header reserves trailing width when the safe area is too short.
-                        .padding(.top, receiverCloseTop)
+                        // Keep the receiver close action below the top controls.
+                        .padding(.top, insets.top + topBarHeight + 8)
                         .padding(.trailing, insets.trailing + 12)
                     }
                     .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topTrailing)
@@ -312,8 +306,10 @@ struct CameraScreen: View {
                                 .buttonStyle(.plain)
                                 .accessibilityLabel("结束无线共享")
                             }
-                            .padding(.top, 10)
-                            .padding(.trailing, 8)
+                            // Keep the sender's stop-share control in the safe-area band,
+                            // above camera controls and aligned to the right of Dynamic Island.
+                            .padding(.top, max(8, insets.top - 44))
+                            .padding(.trailing, max(8, insets.trailing + 12))
                             Spacer(minLength: 0)
                         }
                     }
@@ -321,9 +317,7 @@ struct CameraScreen: View {
                     .zIndex(250)
                 }
             }
-            // Switching between local preview and remote video must not animate the entire
-            // camera-control hierarchy; retain only explicitly scoped control animations.
-            .animation(nil, value: wirelessSession.mode)
+            .animation(.spring(response: 0.36, dampingFraction: 0.88), value: isParameterPanelLandscape)
             .onAppear {
                 wirelessSession.configure(cameraManager: cam)
                 UIDevice.current.beginGeneratingDeviceOrientationNotifications()
@@ -366,6 +360,7 @@ struct CameraScreen: View {
         // Preserve Build 94's safe-area measurement and expand the preview canvas explicitly.
         .background(Color.black.ignoresSafeArea())
         .statusBarHidden(true)
+        .animation(.easeInOut(duration: 0.22), value: showPanel)
         .sheet(item: $wirelessSheetRoute, onDismiss: {
             // Pairing remains separate from mode selection. A mode chosen by long-press
             // is resumed immediately after the safety-code sheet finishes.
@@ -1786,8 +1781,10 @@ struct BottomBar: View {
         } label: {
             ZStack(alignment: .bottomTrailing) {
                 Image(systemName: cam.captureMode == .photo ? "video.fill" : "camera.fill")
+                    .contentTransition(.symbolEffect(.replace))
                     .rotationEffect(.degrees(iconRotationDegrees))
                     .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
+                    .animation(.easeInOut(duration: 0.18), value: cam.captureMode)
                     .font(.system(size: 17, weight: .semibold))
                     .frame(width: sideButtonSize, height: sideButtonSize)
                     .background(Circle().fill(Color.white.opacity(0.12)))
@@ -2009,18 +2006,22 @@ struct ShutterButton: View {
         } label: {
             ZStack {
                 Circle().stroke(Color.white, lineWidth: 4).frame(width: 76, height: 76)
-                if cam.captureMode == .photo {
-                    Circle().fill(Color.white).frame(width: 62, height: 62)
-                        // 处理中内圈收小并轻微呼吸，提示「正在拍」而不是整颗快门变灰
-                        .scaleEffect(cam.isCapturingPhoto ? 0.78 : 1)
-                        .animation(.easeInOut(duration: 0.18), value: cam.isCapturingPhoto)
-                } else {
-                    RoundedRectangle(cornerRadius: cam.isRecording ? 8 : 31)
-                        .fill(Color.red)
-                        .frame(width: cam.isRecording ? 30 : 62, height: cam.isRecording ? 30 : 62)
-                }
+                // Keep one shape identity across photo/video/recording states. Switching from
+                // a circle to a different shape type caused the shutter to pop instead of morph.
+                RoundedRectangle(
+                    cornerRadius: cam.captureMode == .video && cam.isRecording ? 8 : 31
+                )
+                .fill(cam.captureMode == .photo ? Color.white : Color.red)
+                .frame(
+                    width: cam.captureMode == .video && cam.isRecording ? 30 : 62,
+                    height: cam.captureMode == .video && cam.isRecording ? 30 : 62
+                )
+                // During photo capture, gently contract only the inner shutter surface.
+                .scaleEffect(cam.captureMode == .photo && cam.isCapturingPhoto ? 0.78 : 1)
+                .animation(.easeInOut(duration: 0.18), value: cam.captureMode)
+                .animation(.easeInOut(duration: 0.20), value: cam.isRecording)
+                .animation(.easeInOut(duration: 0.18), value: cam.isCapturingPhoto)
             }
-            .animation(.easeInOut(duration: 0.2), value: cam.isRecording)
         }
         .buttonStyle(ShutterPressStyle())
         // A zero-distance drag reports both touch-down and lift. LongPressGesture can't be used for
