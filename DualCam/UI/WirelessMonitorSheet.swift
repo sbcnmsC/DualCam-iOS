@@ -175,6 +175,10 @@ final class WirelessMonitorSession: ObservableObject {
         network.start()
     }
 
+    func restartDiscovery() {
+        network.restartDiscovery()
+    }
+
     /// A dismissed pairing sheet only closes discovery when pairing never completed.
     func pairingSheetDidClose() {
         if !isSecurelyPaired && mode == .idle {
@@ -590,14 +594,21 @@ struct WirelessMonitorSheet: View {
                 } else {
                     Section("附近设备") {
                         if session.nearbyDevices.isEmpty {
-                            HStack(spacing: 12) {
-                                ProgressView()
-                                    .controlSize(.small)
-                                Text(searchStatus)
-                                    .foregroundStyle(.secondary)
+                            HStack(alignment: .top, spacing: 10) {
+                                Image(systemName: searchStatus.contains("失败") || searchStatus.contains("等待网络") ? "exclamationmark.triangle" : "dot.radiowaves.left.and.right")
+                                    .foregroundStyle(searchStatus.contains("失败") ? Color.orange : Color.secondary)
+                                    .frame(width: 20)
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text(searchStatus)
+                                        .foregroundStyle(.primary)
+                                    Text("两台设备请同时打开 DualCam 并连接同一 Wi‑Fi；首次使用时请允许“本地网络”访问。")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
                                 Spacer(minLength: 0)
                             }
-                            .padding(.vertical, 6)
+                            .padding(.vertical, 8)
                         } else {
                             ForEach(session.nearbyDevices) { device in
                                 Button {
@@ -628,10 +639,11 @@ struct WirelessMonitorSheet: View {
 
                         Button {
                             HapticFeedback.play(.selection)
-                            session.startDiscovery()
+                            session.restartDiscovery()
                         } label: {
                             Label("重新搜索", systemImage: "arrow.clockwise")
                         }
+                        .disabled(session.isSecurelyPaired)
                     }
                 }
             }
