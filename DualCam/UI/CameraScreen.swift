@@ -217,6 +217,22 @@ struct CameraScreen: View {
                                 .allowsHitTesting(false)
                             }
 
+                            // Empty preview space maps taps to the sending device's real camera
+                            // focus/exposure pipeline. Controls above this layer keep their own hit targets.
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .gesture(
+                                    SpatialTapGesture()
+                                        .onEnded { value in
+                                            let point = CGPoint(
+                                                x: value.location.x / max(screen.size.width, 1),
+                                                y: value.location.y / max(screen.size.height, 1)
+                                            )
+                                            wirelessSession.requestRemoteFocus(atNormalized: point)
+                                        }
+                                )
+                                .frame(width: screen.size.width, height: screen.size.height)
+
                             Button {
                                 HapticFeedback.play(.button)
                                 wirelessSession.stopVideo()
@@ -1928,9 +1944,14 @@ struct ShutterButton: View {
                     if !pressActive {
                         pressActive = true
                         let arm = DispatchWorkItem {
-                            guard pressActive, !burstGestureTriggered, cam.canStartBurstCapture else { return }
+                            guard pressActive, !burstGestureTriggered else { return }
+                            if wirelessSession.mode == .receiving {
+                                guard wirelessSession.requestRemoteBurstStart() else { return }
+                            } else {
+                                guard cam.canStartBurstCapture else { return }
+                                cam.startBurstCapture()
+                            }
                             burstGestureTriggered = true
-                            cam.startBurstCapture()
                         }
                         burstArm = arm
                         DispatchQueue.main.asyncAfter(deadline: .now() + Self.burstHoldDelay, execute: arm)
@@ -1947,7 +1968,11 @@ struct ShutterButton: View {
                     burstArm?.cancel()
                     burstArm = nil
                     guard burstGestureTriggered else { return }
-                    cam.stopBurstCapture()
+                    if wirelessSession.mode == .receiving {
+                        wirelessSession.requestRemoteBurstStop()
+                    } else {
+                        cam.stopBurstCapture()
+                    }
                     // Keep the flag until after the Button's touch-up action has been swallowed.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
                         burstGestureTriggered = false
