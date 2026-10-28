@@ -87,9 +87,8 @@ struct CameraScreen: View {
                         .animation(.smooth(duration: 0.3), value: cam.cfg.aspect)
                 }
 
-                // Never leave local camera controls visible or interactive on the receiving device.
-                {
-                    VStack(spacing: 0) {
+                // Keep the full camera control surface available while receiving the remote feed.
+                VStack(spacing: 0) {
                     HStack(spacing: 0) {
                         TopBar(
                             onTimerTap: {
@@ -151,7 +150,6 @@ struct CameraScreen: View {
                 .frame(maxHeight: .infinity, alignment: .top)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .zIndex(5)
-                }
 
                 // When the device is physically landscape, render a real landscape-sized
                 // parameter canvas and rotate that panel as one unit. The camera interface and
