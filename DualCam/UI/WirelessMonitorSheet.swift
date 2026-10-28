@@ -93,6 +93,13 @@ final class WirelessMonitorSession: ObservableObject {
         transport.onPeerStopped = { [weak self] in
             DispatchQueue.main.async { self?.peerStopped() }
         }
+        transport.onRemoteCommand = { [weak self] command in
+            guard let self, self.mode == .sending else { return }
+            switch command {
+            case "shutter": self.cameraManager?.shutterTapped()
+            default: break
+            }
+        }
     }
 
     func startDiscovery() {
@@ -166,8 +173,14 @@ final class WirelessMonitorSession: ObservableObject {
         mode = .receiving
         remoteVideoFrameReceived = false
         cameraManager.compositedFrameSource.setSink(nil)
-        cameraManager.setLocalCameraCaptureSuspended(true)
+        // Keep the local camera alive so the receiving device retains its full camera controls.
+        cameraManager.setLocalCameraCaptureSuspended(false)
         rtc.startReceiving()
+    }
+
+    func requestRemoteShutter() {
+        guard mode == .receiving, isSecurelyPaired else { return }
+        rtc.sendRemoteCommand("shutter")
     }
 
     func stopVideo(notifyPeer: Bool = true, endActivity: Bool = true) {
