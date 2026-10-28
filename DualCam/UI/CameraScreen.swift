@@ -321,14 +321,14 @@ struct CameraScreen: View {
                             .foregroundStyle(.white)
                             .padding(.horizontal, 14)
                             // Keep a generous 44 pt touch target on phones, not just the text height.
-                            .frame(minWidth: 116, minHeight: 44)
+                            .frame(minWidth: 104, minHeight: 44)
                             .background(Color.red, in: Capsule())
                             .overlay(Capsule().stroke(Color.white.opacity(0.22), lineWidth: 0.7))
                             .contentShape(Capsule())
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("结束无线共享")
-                        .padding(.top, insets.top + 12)
+                        .padding(.top, insets.top + topBarHeight + 8)
                         .padding(.trailing, max(8, insets.trailing + 12))
                     }
                     .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topTrailing)
