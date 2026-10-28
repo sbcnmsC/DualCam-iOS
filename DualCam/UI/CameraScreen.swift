@@ -196,16 +196,18 @@ struct CameraScreen: View {
                         .zIndex(20)
                 }
 
-                // Receiver mode is intentionally distraction-free: show the incoming
-                // composited video edge-to-edge, with only a close control on top.
+                // Keep the incoming composite video full-screen as a passive background.
+                // Camera controls above it must remain available and receive touches normally.
                 if wirelessSession.mode == .receiving {
                     // Fill the physical screen, not only the safe-area canvas. This also
                     // prevents the camera UI beneath the remote feed from receiving touches.
                     GeometryReader { screen in
                         ZStack(alignment: .topTrailing) {
+                            // The remote video is a visual background only. It must never
+                            // participate in hit testing; camera controls remain interactive above it.
                             Color.black
                                 .frame(width: screen.size.width, height: screen.size.height)
-                                .contentShape(Rectangle())
+                                .allowsHitTesting(false)
 
                             if let track = wirelessSession.remoteVideoTrack {
                                 RemoteMonitorVideoSurface(track: track) {
