@@ -651,16 +651,16 @@ private final class StopShareWindowTouchOverlay: UIView {
         configuration.imagePlacement = .trailing
         configuration.imagePadding = 6
         configuration.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 10, bottom: 0, trailing: 10)
-        configuration.baseBackgroundColor = UIColor(white: 0.07, alpha: 0.90)
+        configuration.baseBackgroundColor = .clear
         configuration.baseForegroundColor = .white
         configuration.cornerStyle = .capsule
 
         // Low-profile camera-style control: dark glass-like surface, restrained red outline,
         // and a red stop glyph instead of a fully red pill that obscures the preview.
         var background = configuration.background
-        background.backgroundColor = UIColor(white: 0.07, alpha: 0.90)
-        background.strokeColor = UIColor.systemRed.withAlphaComponent(0.68)
-        background.strokeWidth = 0.9
+        background.backgroundColor = .clear
+        background.strokeColor = .clear
+        background.strokeWidth = 0
         configuration.background = background
         configuration.imageColorTransformer = UIConfigurationColorTransformer { _ in UIColor.systemRed }
         configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
@@ -675,9 +675,9 @@ private final class StopShareWindowTouchOverlay: UIView {
         stopButton.accessibilityHint = "停止向配对设备共享画面"
         stopButton.layer.borderWidth = 0
         stopButton.layer.shadowColor = UIColor.black.cgColor
-        stopButton.layer.shadowOpacity = 0.24
-        stopButton.layer.shadowRadius = 8
-        stopButton.layer.shadowOffset = CGSize(width: 0, height: 2)
+        stopButton.layer.shadowOpacity = 0
+        stopButton.layer.shadowRadius = 0
+        stopButton.layer.shadowOffset = .zero
         stopButton.addTarget(self, action: #selector(stopPressed), for: .touchUpInside)
         addSubview(stopButton)
     }
@@ -689,7 +689,7 @@ private final class StopShareWindowTouchOverlay: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         let rightInset = window?.safeAreaInsets.right ?? safeAreaInsets.right
-        let rightPadding = max(8, rightInset + 12)
+        let rightPadding = max(8, rightInset + 22)
         stopButton.frame = CGRect(
             x: bounds.width - rightPadding - 104,
             y: 8,
