@@ -88,7 +88,7 @@ struct CameraScreen: View {
                 }
 
                 // Never leave local camera controls visible or interactive on the receiving device.
-                if wirelessSession.mode != .receiving {
+                {
                     VStack(spacing: 0) {
                     HStack(spacing: 0) {
                         TopBar(
@@ -156,7 +156,7 @@ struct CameraScreen: View {
                 // When the device is physically landscape, render a real landscape-sized
                 // parameter canvas and rotate that panel as one unit. The camera interface and
                 // its preview remain portrait-locked underneath.
-                if wirelessSession.mode != .receiving && showPanel && isParameterPanelLandscape {
+                if showPanel && isParameterPanelLandscape {
                     ZStack {
                         Color.clear
 
@@ -236,7 +236,7 @@ struct CameraScreen: View {
                         .frame(width: screen.size.width, height: screen.size.height)
                     }
                     .ignoresSafeArea()
-                    .zIndex(100)
+                    .zIndex(0)
                 }
 
                 // A full-screen GeometryReader keeps the Dynamic Island-area button inside
@@ -1882,6 +1882,7 @@ private struct ShutterPressStyle: ButtonStyle {
 
 struct ShutterButton: View {
     @EnvironmentObject private var cam: CameraManager
+    @ObservedObject private var wirelessSession = WirelessMonitorSession.shared
 
     /// True from the moment a hold turned into a burst until just after the finger lifts, so the
     /// Button's own tap action (fired on touch-up) doesn't also take a normal photo.
@@ -1895,7 +1896,12 @@ struct ShutterButton: View {
     var body: some View {
         Button {
             if burstGestureTriggered { return }
-            cam.shutterTapped()
+            if wirelessSession.mode == .receiving {
+                wirelessSession.requestRemoteShutter()
+                HapticFeedback.play(.shutter)
+            } else {
+                cam.shutterTapped()
+            }
         } label: {
             ZStack {
                 Circle().stroke(Color.white, lineWidth: 4).frame(width: 76, height: 76)
