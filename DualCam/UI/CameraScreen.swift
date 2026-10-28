@@ -649,17 +649,35 @@ private final class StopShareWindowTouchOverlay: UIView {
         configuration.title = "结束共享"
         configuration.image = UIImage(systemName: "stop.fill")
         configuration.imagePlacement = .trailing
-        configuration.imagePadding = 5
+        configuration.imagePadding = 6
         configuration.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 10, bottom: 0, trailing: 10)
-        configuration.baseBackgroundColor = .systemRed
+        configuration.baseBackgroundColor = UIColor(white: 0.07, alpha: 0.90)
         configuration.baseForegroundColor = .white
         configuration.cornerStyle = .capsule
+
+        // Low-profile camera-style control: dark glass-like surface, restrained red outline,
+        // and a red stop glyph instead of a fully red pill that obscures the preview.
+        var background = configuration.background
+        background.backgroundColor = UIColor(white: 0.07, alpha: 0.90)
+        background.strokeColor = UIColor.systemRed.withAlphaComponent(0.68)
+        background.strokeWidth = 0.9
+        configuration.background = background
+        configuration.imageColorTransformer = UIConfigurationColorTransformer { _ in UIColor.systemRed }
+        configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var outgoing = incoming
+            outgoing.font = UIFont.systemFont(ofSize: 12, weight: .semibold)
+            outgoing.foregroundColor = UIColor.white
+            return outgoing
+        }
+
         stopButton.configuration = configuration
-        stopButton.titleLabel?.font = UIFont.systemFont(ofSize: 11, weight: .semibold)
         stopButton.accessibilityLabel = "结束无线共享"
         stopButton.accessibilityHint = "停止向配对设备共享画面"
-        stopButton.layer.borderWidth = 0.7
-        stopButton.layer.borderColor = UIColor.white.withAlphaComponent(0.22).cgColor
+        stopButton.layer.borderWidth = 0
+        stopButton.layer.shadowColor = UIColor.black.cgColor
+        stopButton.layer.shadowOpacity = 0.24
+        stopButton.layer.shadowRadius = 8
+        stopButton.layer.shadowOffset = CGSize(width: 0, height: 2)
         stopButton.addTarget(self, action: #selector(stopPressed), for: .touchUpInside)
         addSubview(stopButton)
     }
