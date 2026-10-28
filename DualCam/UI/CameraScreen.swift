@@ -273,47 +273,39 @@ struct CameraScreen: View {
                     .zIndex(300)
                 }
 
-                // The sender stop control is kept inside a full-screen hit-testable layer.
+                // Only the stop-share button is hit-testable. A full-screen transparent
+                // GeometryReader/VStack above this toolbar can intercept share/receive taps.
                 if wirelessSession.mode == .sending {
-                    GeometryReader { _ in
-                        VStack(spacing: 0) {
-                            HStack(spacing: 8) {
-                                Spacer(minLength: 0)
-                                Button {
-                                    HapticFeedback.play(.button)
-                                    Task { @MainActor in
-                                        await wirelessSession.stopFromLiveActivity()
-                                    }
-                                } label: {
-                                    HStack(spacing: 6) {
-                                        Circle()
-                                            .fill(Color.white)
-                                            .frame(width: 6, height: 6)
-                                        Text("结束共享")
-                                            .font(.system(size: 11, weight: .semibold))
-                                            .lineLimit(1)
-                                            .minimumScaleFactor(0.8)
-                                        Image(systemName: "stop.fill")
-                                            .font(.system(size: 9, weight: .bold))
-                                    }
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 11)
-                                    .frame(height: 34)
-                                    .background(Color.red, in: Capsule())
-                                    .overlay(Capsule().stroke(Color.white.opacity(0.22), lineWidth: 0.7))
-                                    .contentShape(Capsule())
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("结束无线共享")
-                            }
-                            // Keep the sender's stop-share control in the safe-area band,
-                            // above camera controls and aligned to the right of Dynamic Island.
-                            .padding(.top, max(4, insets.top - 56))
-                            .padding(.trailing, max(8, insets.trailing + 12))
-                            Spacer(minLength: 0)
+                    Button {
+                        HapticFeedback.play(.button)
+                        Task { @MainActor in
+                            await wirelessSession.stopFromLiveActivity()
                         }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(Color.white)
+                                .frame(width: 6, height: 6)
+                            Text("结束共享")
+                                .font(.system(size: 11, weight: .semibold))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                            Image(systemName: "stop.fill")
+                                .font(.system(size: 9, weight: .bold))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 11)
+                        .frame(height: 34)
+                        .background(Color.red, in: Capsule())
+                        .overlay(Capsule().stroke(Color.white.opacity(0.22), lineWidth: 0.7))
+                        .contentShape(Capsule())
                     }
-                    .ignoresSafeArea()
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("结束无线共享")
+                    .padding(.top, max(4, insets.top - 56))
+                    .padding(.trailing, max(8, insets.trailing + 12))
+                    .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topTrailing)
+                    .offset(x: canvasOffset.width, y: canvasOffset.height)
                     .zIndex(250)
                 }
             }
@@ -1584,9 +1576,10 @@ struct TopBar: View {
                             .foregroundStyle(.white, Color.red).offset(x: -3, y: -3)
                     }
                 }
-                .contentShape(Circle())
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .contentShape(Rectangle())
         .accessibilityLabel(isCustomizing ? "删除按钮：\(actionTitle(actionKey))" : label)
         .opacity(dimmed ? 0.4 : 1)
         .contextMenu {
