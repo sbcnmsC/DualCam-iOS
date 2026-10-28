@@ -308,7 +308,7 @@ struct CameraScreen: View {
                             }
                             // Keep the sender's stop-share control in the safe-area band,
                             // above camera controls and aligned to the right of Dynamic Island.
-                            .padding(.top, max(8, insets.top - 44))
+                            .padding(.top, max(4, insets.top - 56))
                             .padding(.trailing, max(8, insets.trailing + 12))
                             Spacer(minLength: 0)
                         }
