@@ -321,7 +321,7 @@ struct CameraScreen: View {
                             .foregroundStyle(.white)
                             .padding(.horizontal, 14)
                             // Keep a generous 44 pt touch target on phones, not just the text height.
-                            .frame(minWidth: 124, minHeight: 44)
+                            .frame(minWidth: 116, minHeight: 44)
                             .background(Color.red, in: Capsule())
                             .overlay(Capsule().stroke(Color.white.opacity(0.22), lineWidth: 0.7))
                             .contentShape(Capsule())
