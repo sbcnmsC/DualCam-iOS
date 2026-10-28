@@ -88,6 +88,32 @@ final class NetworkMonitorService: ObservableObject {
         }
     }
 
+    /// Force a fresh Bonjour browser/listener after a failed or stale search.
+    /// start() intentionally does not duplicate a live browser, so the UI's retry button
+    /// must explicitly cancel the existing pair and recreate them.
+    func restartDiscovery() {
+        queue.async {
+            guard !self.pairedOnQueue, self.activeConnection == nil else {
+                self.publishStatus("已有安全连接，不能重新搜索；请先断开设备")
+                return
+            }
+
+            self.browser?.cancel()
+            self.browser = nil
+            self.listener?.cancel()
+            self.listener = nil
+            self.publishDevices([])
+            self.publishStatus("正在重新启动设备搜索…")
+
+            self.queue.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                guard let self, !self.pairedOnQueue, self.activeConnection == nil else { return }
+                self.startListener()
+                self.startBrowser()
+                self.publishStatus("正在搜索附近的 DualCam 设备…")
+            }
+        }
+    }
+
     func connect(to device: NearbyMonitorDevice) {
         queue.async {
             guard self.activeConnection == nil else {
@@ -185,10 +211,22 @@ final class NetworkMonitorService: ObservableObject {
     private func startBrowser() {
         let descriptor = NWBrowser.Descriptor.bonjour(type: Self.serviceType, domain: nil)
         let newBrowser = NWBrowser(for: descriptor, using: Self.makeParameters())
-        newBrowser.stateUpdateHandler = { [weak self] state in
+        newBrowser.stateUpdateHandler = { [weak self, weak newBrowser] state in
             guard let self else { return }
-            if case .failed(let error) = state {
-                self.publishStatus("设备发现失败：\(error.localizedDescription)")
+            switch state {
+            case .ready:
+                self.publishStatus("正在搜索附近的 DualCam 设备…")
+            case .waiting(let error):
+                self.publishStatus("设备搜索等待网络：\(error.localizedDescription)")
+            case .failed(let error):
+                if let newBrowser, self.browser === newBrowser {
+                    self.browser = nil
+                }
+                self.publishStatus("设备发现失败：\(error.localizedDescription)；请检查本地网络权限后重新搜索")
+            case .cancelled, .setup:
+                break
+            @unknown default:
+                break
             }
         }
         newBrowser.browseResultsChangedHandler = { [weak self] results, _ in
