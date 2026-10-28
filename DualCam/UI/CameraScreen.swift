@@ -328,7 +328,7 @@ struct CameraScreen: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("结束无线共享")
-                        .padding(.top, max(8, insets.top - 48))
+                        .padding(.top, insets.top + 12)
                         .padding(.trailing, max(8, insets.trailing + 12))
                     }
                     .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topTrailing)
