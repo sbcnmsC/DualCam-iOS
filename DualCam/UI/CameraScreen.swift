@@ -264,7 +264,9 @@ struct CameraScreen: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("关闭接收画面并结束共享")
-                        .padding(.top, insets.top + 8)
+                        // The camera TopBar occupies the first 56 pt below the safe area.
+                        // Place close below it so it never covers flash/timer/layout buttons.
+                        .padding(.top, insets.top + topBarHeight + 8)
                         .padding(.trailing, insets.trailing + 12)
                     }
                     .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topTrailing)
@@ -272,9 +274,7 @@ struct CameraScreen: View {
                     .zIndex(300)
                 }
 
-                // A full-screen GeometryReader keeps the Dynamic Island-area button inside
-                // a hit-testable view even though it sits above the normal safe-area content.
-                // a hit-testable view even though it sits above the normal safe-area content.
+                // The sender stop control is kept inside a full-screen hit-testable layer.
                 if wirelessSession.mode == .sending {
                     GeometryReader { _ in
                         VStack(spacing: 0) {
