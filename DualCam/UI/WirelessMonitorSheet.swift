@@ -378,7 +378,7 @@ final class WirelessMonitorSession: ObservableObject {
 
     private func slotStateDelta(from old: [SlotState], to new: [SlotState]) -> [String: String] {
         var delta: [String: String] = [:]
-        for slot in 0..<min(old.count, new.count, 2) {
+        for slot in 0..<min(min(old.count, new.count), 2) {
             let a = old[slot]
             let b = new[slot]
             let prefix = "slot.\(slot)."
