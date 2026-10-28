@@ -12,6 +12,7 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
 
     var onSignal: ((Data) -> Void)?
     var onPeerStopped: (() -> Void)?
+    var onRemoteCommand: ((String) -> Void)?
 
     private static let factory: RTCPeerConnectionFactory = {
         RTCInitializeSSL()
@@ -58,6 +59,7 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
         var candidate: String? = nil
         var sdpMLineIndex: Int32? = nil
         var sdpMid: String? = nil
+        var command: String? = nil
     }
 
     func startSending() {
@@ -251,6 +253,9 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
             } else {
                 pendingRemoteCandidates.append(remote)
             }
+        case "control":
+            guard let command = signal.command else { return }
+            DispatchQueue.main.async { self.onRemoteCommand?(command) }
         case "stop":
             stop()
             DispatchQueue.main.async { self.onPeerStopped?() }
@@ -261,6 +266,10 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
 
     func reportSignallingFailure(_ message: String) {
         updateStatus("信令发送失败：\(message)")
+    }
+
+    func sendRemoteCommand(_ command: String) {
+        send(Signal(type: "control", command: command))
     }
 
     func stopAndNotifyPeer() {
