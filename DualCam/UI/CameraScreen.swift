@@ -30,16 +30,24 @@ struct CameraScreen: View {
 
     private let topBarHeight: CGFloat = 56
 
+    /// Read the physical window's safe area independently from the SwiftUI content bounds.
+    /// CameraScreen now owns a full-screen hit-testing canvas, so geometry.safeAreaInsets may
+    /// be zero after ignoresSafeArea is applied to the root.
+    private var windowSafeAreaInsets: EdgeInsets {
+        let activeScene = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive }
+        let safe = activeScene?.windows.first(where: \\.isKeyWindow)?.safeAreaInsets ?? .zero
+        return EdgeInsets(top: safe.top, leading: safe.left, bottom: safe.bottom, trailing: safe.right)
+    }
+
     var body: some View {
         GeometryReader { geo in
-            // Build 94 baseline: derive the device canvas by restoring the system safe-area insets.
-            // Preview size comes from the selected capture aspect, not the smaller gap between controls.
-            let insets = geo.safeAreaInsets
-            let canvasSize = CGSize(
-                width: geo.size.width + insets.leading + insets.trailing,
-                height: geo.size.height + insets.top + insets.bottom
-            )
-            let canvasOffset = CGSize(width: -insets.leading, height: -insets.top)
+            // The camera canvas occupies the full screen, including the status-bar/Dynamic Island
+            // region. Keep controls safe using the window insets, but keep top overlays hittable.
+            let insets = windowSafeAreaInsets
+            let canvasSize = geo.size
+            let canvasOffset = CGSize.zero
             // The app window remains portrait-locked. Physical device orientation only selects
             // the parameter panel's presentation; it must never resize the camera canvas or controls.
             let controlCanvasWidth: CGFloat = geo.size.width
@@ -168,6 +176,7 @@ struct CameraScreen: View {
                         iconRotationDegrees: iconRotationDegrees
                     )
                 }
+                .padding(.top, insets.top)
                 .frame(width: controlCanvasWidth)
                 .frame(maxHeight: .infinity, alignment: .top)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -328,7 +337,7 @@ struct CameraScreen: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("结束无线共享")
-                        .padding(.top, insets.top + topBarHeight + 8)
+                        .padding(.top, 12)
                         .padding(.trailing, max(8, insets.trailing + 12))
                     }
                     .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topTrailing)
@@ -376,7 +385,9 @@ struct CameraScreen: View {
                 shutterButtonTop = top
             }
         }
-        // Preserve Build 94's safe-area measurement and expand the preview canvas explicitly.
+        // Expand the actual view bounds, not just its background. Otherwise visible controls
+        // drawn into the top unsafe area can be excluded by the parent's hit-test bounds.
+        .ignoresSafeArea(.container, edges: .all)
         .background(Color.black.ignoresSafeArea())
         .statusBarHidden(true)
         .animation(.easeInOut(duration: 0.22), value: showPanel)
