@@ -12,7 +12,7 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
 
     var onSignal: ((Data) -> Void)?
     var onPeerStopped: (() -> Void)?
-    var onRemoteCommand: ((String) -> Void)?
+    var onRemoteCommand: ((String, [String: String]?) -> Void)?
 
     private static let factory: RTCPeerConnectionFactory = {
         RTCInitializeSSL()
@@ -60,6 +60,7 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
         var sdpMLineIndex: Int32? = nil
         var sdpMid: String? = nil
         var command: String? = nil
+        var payload: [String: String]? = nil
     }
 
     func startSending() {
@@ -255,7 +256,8 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
             }
         case "control":
             guard let command = signal.command else { return }
-            DispatchQueue.main.async { self.onRemoteCommand?(command) }
+            let payload = signal.payload
+            DispatchQueue.main.async { self.onRemoteCommand?(command, payload) }
         case "stop":
             stop()
             DispatchQueue.main.async { self.onPeerStopped?() }
@@ -268,8 +270,10 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
         updateStatus("信令发送失败：\(message)")
     }
 
-    func sendRemoteCommand(_ command: String) {
-        send(Signal(type: "control", command: command))
+    /// Sends a small typed control message through the already paired signalling channel.
+    /// Payload values are strings so they remain stable across app versions and easy to validate.
+    func sendRemoteCommand(_ command: String, payload: [String: String]? = nil) {
+        send(Signal(type: "control", command: command, payload: payload))
     }
 
     func stopAndNotifyPeer() {
