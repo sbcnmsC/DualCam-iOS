@@ -185,7 +185,7 @@ struct CameraScreen: View {
                         .offset(x: canvasOffset.width, y: canvasOffset.height)
                 }
 
-                if showTimerSettings && wirelessSession.mode != .receiving {
+                if showTimerSettings {
                     TimerSettingsOverlay(
                         timerDraft: $timerDraft,
                         isPresented: $showTimerSettings,
@@ -233,21 +233,6 @@ struct CameraScreen: View {
                                 )
                                 .frame(width: screen.size.width, height: screen.size.height)
 
-                            Button {
-                                HapticFeedback.play(.button)
-                                wirelessSession.stopVideo()
-                            } label: {
-                                Image(systemName: "xmark")
-                                    .font(.system(size: 13, weight: .bold))
-                                    .foregroundStyle(.white)
-                                    .frame(width: 36, height: 36)
-                                    .background(.ultraThinMaterial, in: Circle())
-                                    .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 1))
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("关闭画面")
-                            .padding(.top, 12)
-                            .padding(.trailing, 12)
                         }
                         .frame(width: screen.size.width, height: screen.size.height)
                     }
@@ -255,7 +240,41 @@ struct CameraScreen: View {
                     .zIndex(0)
                 }
 
+                // The receiver close control is a separate topmost sibling, not inside the
+                // video layer (zIndex 0). This prevents the full-width TopBar/control canvas
+                // from intercepting its taps at the top edge.
+                if wirelessSession.mode == .receiving {
+                    GeometryReader { screen in
+                        VStack {
+                            HStack {
+                                Spacer(minLength: 0)
+                                Button {
+                                    HapticFeedback.play(.button)
+                                    wirelessSession.stopVideo()
+                                } label: {
+                                    Image(systemName: "xmark")
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundStyle(.white)
+                                        .frame(width: 40, height: 40)
+                                        .background(.ultraThinMaterial, in: Circle())
+                                        .overlay(Circle().stroke(Color.white.opacity(0.28), lineWidth: 1))
+                                        .contentShape(Circle())
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("关闭接收画面并结束共享")
+                            }
+                            .padding(.top, max(screen.safeAreaInsets.top + 6, 12))
+                            .padding(.trailing, 12)
+                            Spacer(minLength: 0)
+                        }
+                        .frame(width: screen.size.width, height: screen.size.height)
+                    }
+                    .ignoresSafeArea()
+                    .zIndex(300)
+                }
+
                 // A full-screen GeometryReader keeps the Dynamic Island-area button inside
+                // a hit-testable view even though it sits above the normal safe-area content.
                 // a hit-testable view even though it sits above the normal safe-area content.
                 if wirelessSession.mode == .sending {
                     GeometryReader { _ in
