@@ -304,47 +304,6 @@ struct CameraScreen: View {
                     .zIndex(300)
                 }
 
-                // Keep the full-screen positioning container non-interactive; only the
-                // red pill itself may receive touches, never the camera controls beneath it.
-                if wirelessSession.mode == .sending {
-                    ZStack(alignment: .topTrailing) {
-                        Color.clear
-                            .allowsHitTesting(false)
-
-                        Button {
-                            HapticFeedback.play(.button)
-                            // This is an in-app control, so stop the WebRTC session immediately
-                            // on the UI action. stopVideo schedules ActivityKit cleanup itself.
-                            wirelessSession.stopVideo()
-                        } label: {
-                            HStack(spacing: 6) {
-                                Circle()
-                                    .fill(Color.white)
-                                    .frame(width: 6, height: 6)
-                                Text("结束共享")
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.8)
-                                Image(systemName: "stop.fill")
-                                    .font(.system(size: 9, weight: .bold))
-                            }
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 14)
-                            // Keep a generous 44 pt touch target on phones, not just the text height.
-                            .frame(minWidth: 104, minHeight: 44)
-                            .background(Color.red, in: Capsule())
-                            .overlay(Capsule().stroke(Color.white.opacity(0.22), lineWidth: 0.7))
-                            .contentShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("结束无线共享")
-                        .padding(.top, 12)
-                        .padding(.trailing, max(8, insets.trailing + 12))
-                    }
-                    .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topTrailing)
-                    .offset(x: canvasOffset.width, y: canvasOffset.height)
-                    .zIndex(250)
-                }
             }
             .animation(.spring(response: 0.36, dampingFraction: 0.88), value: isParameterPanelLandscape)
             .onAppear {
@@ -390,6 +349,42 @@ struct CameraScreen: View {
         // drawn into the top unsafe area can be excluded by the parent's hit-test bounds.
         .ignoresSafeArea(.container, edges: .all)
         .background(Color.black.ignoresSafeArea())
+        // Keep the stop action outside the camera's internal ZStack. This root-level
+        // overlay has full-screen bounds and is above preview, TopBar, and panel layers.
+        .overlay(alignment: .topTrailing) {
+            if wirelessSession.mode == .sending {
+                Button {
+                    HapticFeedback.play(.button)
+                    wirelessSession.stopVideo()
+                } label: {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(Color.white)
+                            .frame(width: 6, height: 6)
+                        Text("结束共享")
+                            .font(.system(size: 11, weight: .semibold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 9, weight: .bold))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .frame(width: 104, height: 44)
+                    .background(Color.red, in: Capsule())
+                    .overlay(Capsule().stroke(Color.white.opacity(0.22), lineWidth: 0.7))
+                    // Make the complete 104 x 44 rectangle hittable, not only the capsule shape.
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("结束无线共享")
+                .frame(width: 112, height: 52)
+                .contentShape(Rectangle())
+                .padding(.top, 8)
+                .padding(.trailing, max(8, windowSafeAreaInsets.trailing + 12))
+                .zIndex(1000)
+            }
+        }
         .statusBarHidden(true)
         .animation(.easeInOut(duration: 0.22), value: showPanel)
         .sheet(item: $wirelessSheetRoute, onDismiss: {
