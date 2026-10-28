@@ -303,9 +303,9 @@ struct CameraScreen: View {
 
                         Button {
                             HapticFeedback.play(.button)
-                            Task { @MainActor in
-                                await wirelessSession.stopFromLiveActivity()
-                            }
+                            // This is an in-app control, so stop the WebRTC session immediately
+                            // on the UI action. stopVideo schedules ActivityKit cleanup itself.
+                            wirelessSession.stopVideo()
                         } label: {
                             HStack(spacing: 6) {
                                 Circle()
@@ -319,15 +319,16 @@ struct CameraScreen: View {
                                     .font(.system(size: 9, weight: .bold))
                             }
                             .foregroundStyle(.white)
-                            .padding(.horizontal, 11)
-                            .frame(height: 34)
+                            .padding(.horizontal, 14)
+                            // Keep a generous 44 pt touch target on phones, not just the text height.
+                            .frame(minWidth: 124, minHeight: 44)
                             .background(Color.red, in: Capsule())
                             .overlay(Capsule().stroke(Color.white.opacity(0.22), lineWidth: 0.7))
                             .contentShape(Capsule())
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("结束无线共享")
-                        .padding(.top, max(4, insets.top - 56))
+                        .padding(.top, max(8, insets.top - 48))
                         .padding(.trailing, max(8, insets.trailing + 12))
                     }
                     .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topTrailing)
