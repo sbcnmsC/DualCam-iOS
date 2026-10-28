@@ -20,6 +20,7 @@ struct CameraScreen: View {
     @State private var pendingWirelessMode: MonitorMode?
     @State private var wirelessRolePickerDetent: PresentationDetent = .large
     @StateObject private var wirelessSession = WirelessMonitorSession.shared
+    @AppStorage("dualcam.dismissOnBlankTap") private var dismissOnBlankTap = true
     @State private var showCreativeGallery = false
     @State private var timerDraft = 5
     @State private var bottomBarHeight: CGFloat = 222
@@ -86,6 +87,26 @@ struct CameraScreen: View {
                         .offset(x: canvasOffset.width, y: canvasOffset.height + previewTop)
                         // 切换画幅时取景框平滑伸缩 / 移动，而不是瞬间跳变
                         .animation(.smooth(duration: 0.3), value: cam.cfg.aspect)
+                }
+
+                // The setting toggle is stored in AppStorage; honor it on the actual tool panel
+                // too. A full-screen backdrop below controls catches only taps outside the panel.
+                if showPanel && dismissOnBlankTap {
+                    Button {
+                        HapticFeedback.play(.button)
+                        withAnimation(.easeInOut(duration: 0.22)) {
+                            showPanel = false
+                        }
+                    } label: {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .frame(width: canvasSize.width, height: canvasSize.height)
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .offset(x: canvasOffset.width, y: canvasOffset.height)
+                    .zIndex(isParameterPanelLandscape ? 14 : 4)
+                    .accessibilityLabel("点击空白处关闭设置面板")
                 }
 
                 // Keep the full camera control surface available while receiving the remote feed.
@@ -405,18 +426,12 @@ struct CameraScreen: View {
             case .rolePicker:
                 WirelessMonitorRolePickerSheet(
                     onReceive: {
-                        shouldShowRolePickerAfterPairing = false
-                        wirelessSheetRoute = nil
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                            switchWirelessMode(to: .receiving)
-                        }
+                        HapticFeedback.play(.selection)
+                        chooseWirelessMode(.receiving)
                     },
                     onShare: {
-                        shouldShowRolePickerAfterPairing = false
-                        wirelessSheetRoute = nil
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                            switchWirelessMode(to: .sending)
-                        }
+                        HapticFeedback.play(.selection)
+                        chooseWirelessMode(.sending)
                     },
                     onDisconnect: {
                         shouldShowRolePickerAfterPairing = false
@@ -436,6 +451,20 @@ struct CameraScreen: View {
                 .environmentObject(cam)
         }
         .modifier(HardwareCameraCaptureModifier())
+    }
+
+    /// Close the role picker first; onDismiss then resumes this pending role after the sheet
+    /// finishes its interactive dismissal. This avoids racing the sheet's transition.
+    private func chooseWirelessMode(_ target: MonitorMode) {
+        guard target != .idle else { return }
+        guard wirelessSession.isSecurelyPaired else {
+            pendingWirelessMode = target
+            wirelessSheetRoute = .deviceSearch
+            return
+        }
+        shouldShowRolePickerAfterPairing = false
+        pendingWirelessMode = target
+        wirelessSheetRoute = nil
     }
 
     /// Switch the paired peer to the requested wireless role. Switching an active session
