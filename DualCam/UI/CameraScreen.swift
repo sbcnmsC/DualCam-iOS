@@ -1,3 +1,4 @@
+import AVKit
 import SwiftUI
 import UIKit
 
@@ -240,36 +241,34 @@ struct CameraScreen: View {
                     .zIndex(0)
                 }
 
-                // The receiver close control is a separate topmost sibling, not inside the
-                // video layer (zIndex 0). This prevents the full-width TopBar/control canvas
-                // from intercepting its taps at the top edge.
+                // Standalone hit target above the receiver video, timer overlay, and camera controls.
+                // Use the outer geometry's real safe-area inset; a nested GeometryReader with
+                // ignoresSafeArea reports zero insets on some iOS versions and puts the button
+                // underneath the Dynamic Island where it cannot reliably receive taps.
                 if wirelessSession.mode == .receiving {
-                    GeometryReader { screen in
-                        VStack {
-                            HStack {
-                                Spacer(minLength: 0)
-                                Button {
-                                    HapticFeedback.play(.button)
-                                    wirelessSession.stopVideo()
-                                } label: {
-                                    Image(systemName: "xmark")
-                                        .font(.system(size: 13, weight: .bold))
-                                        .foregroundStyle(.white)
-                                        .frame(width: 40, height: 40)
-                                        .background(.ultraThinMaterial, in: Circle())
-                                        .overlay(Circle().stroke(Color.white.opacity(0.28), lineWidth: 1))
-                                        .contentShape(Circle())
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("关闭接收画面并结束共享")
-                            }
-                            .padding(.top, max(screen.safeAreaInsets.top + 6, 12))
-                            .padding(.trailing, 12)
-                            Spacer(minLength: 0)
+                    ZStack(alignment: .topTrailing) {
+                        Color.clear
+                            .allowsHitTesting(false)
+
+                        Button {
+                            HapticFeedback.play(.button)
+                            wirelessSession.stopVideo()
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 44, height: 44)
+                                .background(.ultraThinMaterial, in: Circle())
+                                .overlay(Circle().stroke(Color.white.opacity(0.32), lineWidth: 1))
+                                .contentShape(Circle())
                         }
-                        .frame(width: screen.size.width, height: screen.size.height)
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("关闭接收画面并结束共享")
+                        .padding(.top, insets.top + 8)
+                        .padding(.trailing, insets.trailing + 12)
                     }
-                    .ignoresSafeArea()
+                    .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topTrailing)
+                    .offset(x: canvasOffset.width, y: canvasOffset.height)
                     .zIndex(300)
                 }
 
@@ -550,20 +549,83 @@ struct CameraScreen: View {
 }
 
 
-/// Route iPhone 16 Pro Camera Control capture events through the same shutter path as the UI.
-/// iOS 17 remains supported; Camera Control integration is active on iOS 18 and later.
+/// Route physical capture controls (iPhone Camera Control, volume buttons, Action button,
+/// and supported remote capture events) through exactly the same local/remote capture path.
 private struct HardwareCameraCaptureModifier: ViewModifier {
     @EnvironmentObject private var cam: CameraManager
+    @ObservedObject private var wirelessSession = WirelessMonitorSession.shared
+    @State private var pressWorkItem: DispatchWorkItem?
+    @State private var pressActive = false
+    @State private var burstStarted = false
+
+    private let burstHoldDelay: TimeInterval = 0.35
 
     @ViewBuilder
     func body(content: Content) -> some View {
         if #available(iOS 18.0, *) {
-            content.onCameraCaptureEvent(isEnabled: cam.ready, action: { event in
-                guard event.phase == .ended, cam.ready else { return }
-                cam.shutterTapped()
-            })
+            content.onCameraCaptureEvent(
+                isEnabled: cam.ready,
+                primaryAction: { event in handleCaptureEvent(event) },
+                secondaryAction: { event in handleCaptureEvent(event) }
+            )
         } else {
             content
+        }
+    }
+
+    private func handleCaptureEvent(_ event: AVCaptureEvent) {
+        switch event.phase {
+        case .began:
+            pressActive = true
+            pressWorkItem?.cancel()
+            let work = DispatchWorkItem {
+                guard pressActive, !burstStarted else { return }
+                if wirelessSession.mode == .receiving {
+                    guard wirelessSession.requestRemoteBurstStart() else { return }
+                } else {
+                    guard cam.canStartBurstCapture else { return }
+                    cam.startBurstCapture()
+                }
+                burstStarted = true
+            }
+            pressWorkItem = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + burstHoldDelay, execute: work)
+
+        case .ended:
+            pressActive = false
+            pressWorkItem?.cancel()
+            pressWorkItem = nil
+            if burstStarted {
+                if wirelessSession.mode == .receiving {
+                    wirelessSession.requestRemoteBurstStop()
+                } else {
+                    cam.stopBurstCapture()
+                }
+                burstStarted = false
+            } else if cam.ready {
+                if wirelessSession.mode == .receiving {
+                    wirelessSession.requestRemoteShutter()
+                    HapticFeedback.play(.shutter)
+                } else {
+                    cam.shutterTapped()
+                }
+            }
+
+        case .cancelled:
+            pressActive = false
+            pressWorkItem?.cancel()
+            pressWorkItem = nil
+            if burstStarted {
+                if wirelessSession.mode == .receiving {
+                    wirelessSession.requestRemoteBurstStop()
+                } else {
+                    cam.stopBurstCapture()
+                }
+                burstStarted = false
+            }
+
+        @unknown default:
+            break
         }
     }
 }
