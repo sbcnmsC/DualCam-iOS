@@ -47,6 +47,7 @@ final class WirelessMonitorSession: ObservableObject {
     private var lastObservedParamTarget: Int?
     private var pendingRemoteControlPayload: [String: String] = [:]
     private var pendingRemoteControlWorkItem: DispatchWorkItem?
+    private var remoteBurstInProgress = false
 
     init() {
         network.$nearbyDevices.receive(on: DispatchQueue.main)
@@ -146,9 +147,11 @@ final class WirelessMonitorSession: ObservableObject {
                         self.cameraManager?.shutterTapped()
                     case "burst-start":
                         if self.cameraManager?.canStartBurstCapture == true {
+                            self.remoteBurstInProgress = true
                             self.cameraManager?.startBurstCapture()
                         }
                     case "burst-stop":
+                        self.remoteBurstInProgress = false
                         self.cameraManager?.stopBurstCapture()
                     case "focus":
                         guard let values = payload,
@@ -494,12 +497,19 @@ final class WirelessMonitorSession: ObservableObject {
         if endActivity {
             Task { @MainActor in await MonitorLiveActivityManager.shared.stop() }
         }
-        guard mode != .idle || rtc.remoteVideoTrack != nil else { return }
+        guard mode != .idle || rtc.remoteVideoTrack != nil else {
+            // Nothing is on screen, but the transport can still hold half a session: an offer the
+            // peer sent that was never accepted, and its queued ICE candidates. If they survived,
+            // the next "接收画面" would consume that stale offer and show a black screen.
+            rtc.stop()
+            return
+        }
         let wasReceiving = mode == .receiving
         let wasSending = mode == .sending
         if wasSending {
             // Do not let any transient sharing message reappear after the session stops.
             cameraManager?.toast = nil
+            endRemoteBurstIfNeeded()
         }
         cameraManager?.compositedFrameSource.setSink(nil)
         if wasReceiving {
@@ -543,10 +553,19 @@ final class WirelessMonitorSession: ObservableObject {
         }
         if mode == .sending {
             cameraManager?.toast = nil
+            endRemoteBurstIfNeeded()
             restoreWirelessStreamPreset()
         }
         mode = .idle
         remoteVideoFrameReceived = false
+    }
+
+    /// A remote "burst-start" is normally ended by a "burst-stop". If the link drops in between,
+    /// that message never arrives, so end the burst here instead of letting it run to its limit.
+    private func endRemoteBurstIfNeeded() {
+        guard remoteBurstInProgress else { return }
+        remoteBurstInProgress = false
+        cameraManager?.stopBurstCapture()
     }
 }
 
