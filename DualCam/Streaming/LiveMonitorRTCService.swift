@@ -12,6 +12,7 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
 
     var onSignal: ((Data) -> Void)?
     var onPeerStopped: (() -> Void)?
+    var onRemoteCommand: ((String, [String: String]?) -> Void)?
 
     private static let factory: RTCPeerConnectionFactory = {
         RTCInitializeSSL()
@@ -40,6 +41,7 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
     private let streamingMaximumBitrateBps = 12_000_000
     private let streamingStartBitrateKbps = 6_000
     private let streamingMinimumBitrateKbps = 2_500
+    private static let maxPendingRemoteCandidates = 128
 
     // Everything below is main-thread only. WebRTC completion handlers hop back to main first.
     private var peerConnection: RTCPeerConnection?
@@ -58,6 +60,8 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
         var candidate: String? = nil
         var sdpMLineIndex: Int32? = nil
         var sdpMid: String? = nil
+        var command: String? = nil
+        var payload: [String: String]? = nil
     }
 
     func startSending() {
@@ -81,20 +85,28 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
 
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
         pc.offer(for: constraints) { [weak self, weak pc] description, error in
-            guard let self, let pc, let description else {
-                self?.updateStatus("生成视频请求失败：\(error?.localizedDescription ?? "未知错误")")
-                return
-            }
-            // LibWebRTC in the bundled SDK doesn't expose RTCRtpSender.setParameters.
-            // Use its supported SDP bitrate hints while retaining the bounded source output below.
-            let tunedSDP = self.addVideoBitrateHints(to: description.sdp)
-            let tunedDescription = RTCSessionDescription(type: .offer, sdp: tunedSDP)
-            pc.setLocalDescription(tunedDescription) { [weak self] error in
-                guard let self, error == nil else {
-                    self?.updateStatus("设置本地视频描述失败：\(error?.localizedDescription ?? "未知错误")")
+            // WebRTC calls back on its signalling thread. Hop to main and make sure this is still
+            // the live connection: after stop() an old offer must never reach the peer.
+            DispatchQueue.main.async {
+                guard let self, let pc, self.peerConnection === pc else { return }
+                guard let description else {
+                    self.updateStatus("生成视频请求失败：\(error?.localizedDescription ?? "未知错误")")
                     return
                 }
-                self.send(Signal(type: "offer", sdp: tunedSDP, sdpType: "offer"))
+                // LibWebRTC in the bundled SDK doesn't expose RTCRtpSender.setParameters.
+                // Use its supported SDP bitrate hints while retaining the bounded source output below.
+                let tunedSDP = self.addVideoBitrateHints(to: description.sdp)
+                let tunedDescription = RTCSessionDescription(type: .offer, sdp: tunedSDP)
+                pc.setLocalDescription(tunedDescription) { [weak self, weak pc] error in
+                    DispatchQueue.main.async {
+                        guard let self, let pc, self.peerConnection === pc else { return }
+                        if let error {
+                            self.updateStatus("设置本地视频描述失败：\(error.localizedDescription)")
+                            return
+                        }
+                        self.send(Signal(type: "offer", sdp: tunedSDP, sdpType: "offer"))
+                    }
+                }
             }
         }
     }
@@ -248,9 +260,14 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
                 peerConnection?.add(remote, completionHandler: { [weak self] error in
                     if let error { self?.updateStatus("添加网络候选失败：\(error.localizedDescription)") }
                 })
-            } else {
+            } else if pendingRemoteCandidates.count < Self.maxPendingRemoteCandidates {
+                // Bounded: a real session produces a handful; never let a peer grow this without limit.
                 pendingRemoteCandidates.append(remote)
             }
+        case "control":
+            guard let command = signal.command else { return }
+            let payload = signal.payload
+            DispatchQueue.main.async { self.onRemoteCommand?(command, payload) }
         case "stop":
             stop()
             DispatchQueue.main.async { self.onPeerStopped?() }
@@ -261,6 +278,12 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
 
     func reportSignallingFailure(_ message: String) {
         updateStatus("信令发送失败：\(message)")
+    }
+
+    /// Sends a small typed control message through the already paired signalling channel.
+    /// Payload values are strings so they remain stable across app versions and easy to validate.
+    func sendRemoteCommand(_ command: String, payload: [String: String]? = nil) {
+        send(Signal(type: "control", command: command, payload: payload))
     }
 
     func stopAndNotifyPeer() {
@@ -319,19 +342,25 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
                 self.hasRemoteDescription = true
                 self.drainRemoteCandidates()
                 let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
-                pc.answer(for: constraints) { [weak self] answer, error in
-                    guard let self, let answer else {
-                        self?.updateStatus("生成接收端响应失败：\(error?.localizedDescription ?? "未知错误")")
-                        return
-                    }
-                    pc.setLocalDescription(answer) { [weak self] error in
-                        guard let self, error == nil else {
-                            self?.updateStatus("设置接收端响应失败：\(error?.localizedDescription ?? "未知错误")")
+                pc.answer(for: constraints) { [weak self, weak pc] answer, error in
+                    DispatchQueue.main.async {
+                        guard let self, let pc, self.peerConnection === pc else { return }
+                        guard let answer else {
+                            self.updateStatus("生成接收端响应失败：\(error?.localizedDescription ?? "未知错误")")
                             return
                         }
-                        self.send(Signal(type: "answer", sdp: answer.sdp, sdpType: "answer"))
-                        self.updateStatus("等待接收实时画面…")
-                        self.refreshRemoteTrack(from: pc)
+                        pc.setLocalDescription(answer) { [weak self, weak pc] error in
+                            DispatchQueue.main.async {
+                                guard let self, let pc, self.peerConnection === pc else { return }
+                                if let error {
+                                    self.updateStatus("设置接收端响应失败：\(error.localizedDescription)")
+                                    return
+                                }
+                                self.send(Signal(type: "answer", sdp: answer.sdp, sdpType: "answer"))
+                                self.updateStatus("等待接收实时画面…")
+                                self.refreshRemoteTrack(from: pc)
+                            }
+                        }
                     }
                 }
             }
@@ -483,26 +512,34 @@ extension LiveMonitorRTCService: RTCPeerConnectionDelegate {
     }
     func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
-        switch newState {
-        case .connected, .completed:
-            // ICE only proves that a network path exists; it does not prove that video RTP
-            // is arriving or that the receiver can decode/render it. Keep the UI truthful.
-            updateStatus("网络通道已建立，正在检查视频数据…")
-            announceConnection(connected: true)
-            startStatsProbe(for: peerConnection)
-        case .checking:
-            updateStatus("正在连接设备…")
-        case .disconnected:
-            updateStatus("视频连接暂时中断")
-            announceConnection(connected: false, hapticOnLoss: false)
-        case .failed:
-            updateStatus("局域网直连失败；请确认两台设备在同一 Wi-Fi，且路由器未隔离客户端")
-            announceConnection(connected: false, hapticOnLoss: true)
-        case .closed:
-            updateStatus("视频连接已关闭")
-            announceConnection(connected: false, hapticOnLoss: false)
-        default:
-            break
+        // Delegate callbacks arrive on WebRTC's signalling thread, but connection state and the
+        // stats-probe generation are main-thread only.
+        DispatchQueue.main.async {
+            guard self.peerConnection === peerConnection else { return }
+            switch newState {
+            case .connected, .completed:
+                // ICE only proves that a network path exists; it does not prove that video RTP
+                // is arriving or that the receiver can decode/render it. Keep the UI truthful.
+                self.updateStatus("网络通道已建立，正在检查视频数据…")
+                self.announceConnection(connected: true)
+                self.startStatsProbe(for: peerConnection)
+            case .checking:
+                self.updateStatus("正在连接设备…")
+            case .disconnected:
+                self.updateStatus("视频连接暂时中断")
+                self.announceConnection(connected: false, hapticOnLoss: false)
+            case .failed:
+                // Stop polling a dead connection; it would otherwise rewrite the status every 2 s.
+                self.statsProbeGeneration += 1
+                self.updateStatus("局域网直连失败；请确认两台设备在同一 Wi-Fi，且路由器未隔离客户端")
+                self.announceConnection(connected: false, hapticOnLoss: true)
+            case .closed:
+                self.statsProbeGeneration += 1
+                self.updateStatus("视频连接已关闭")
+                self.announceConnection(connected: false, hapticOnLoss: false)
+            default:
+                break
+            }
         }
     }
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {}

@@ -1,5 +1,13 @@
+import AVKit
 import SwiftUI
 import UIKit
+
+private enum WirelessSetupSheetRoute: String, Identifiable {
+    case deviceSearch
+    case rolePicker
+
+    var id: String { rawValue }
+}
 
 struct CameraScreen: View {
     @EnvironmentObject private var cam: CameraManager
@@ -7,8 +15,12 @@ struct CameraScreen: View {
     @State private var panelTab: PanelTab = .pip
     @AppStorage("dualcam.quickParameterSelected") private var selectedQuickParameterName = "曝光补偿"
     @State private var showTimerSettings = false
-    @State private var showWirelessMonitor = false
+    @State private var wirelessSheetRoute: WirelessSetupSheetRoute?
+    @State private var shouldShowRolePickerAfterPairing = false
+    @State private var pendingWirelessMode: MonitorMode?
+    @State private var wirelessRolePickerDetent: PresentationDetent = .large
     @StateObject private var wirelessSession = WirelessMonitorSession.shared
+    @AppStorage("dualcam.dismissOnBlankTap") private var dismissOnBlankTap = true
     @State private var showCreativeGallery = false
     @State private var timerDraft = 5
     @State private var bottomBarHeight: CGFloat = 222
@@ -20,8 +32,8 @@ struct CameraScreen: View {
 
     var body: some View {
         GeometryReader { geo in
-            // Build 94 baseline: derive the device canvas by restoring the system safe-area insets.
-            // Preview size comes from the selected capture aspect, not the smaller gap between controls.
+            // Preserve the original safe-area camera layout; the sender's stop button is
+            // installed at window level (see StopShareWindowOverlayAnchor) and does not affect it.
             let insets = geo.safeAreaInsets
             let canvasSize = CGSize(
                 width: geo.size.width + insets.leading + insets.trailing,
@@ -42,7 +54,6 @@ struct CameraScreen: View {
                 : (activeOrientation == .landscapeRight ? -90 : 0)
             let topControlsBottom = insets.top + topBarHeight
             let dockTop = canvasSize.height - insets.bottom - bottomBarHeight
-            let hasSharingStopControl = wirelessSession.mode == .sending
 
             // Fit the selected output ratio against the whole device canvas.
             // In free mode this exactly matches the iPhone screen; fixed ratios use the largest
@@ -69,14 +80,36 @@ struct CameraScreen: View {
             ZStack(alignment: .topLeading) {
                 Color.black.ignoresSafeArea()
 
-                PreviewStage(size: previewSize, iconRotationDegrees: iconRotationDegrees)
-                    .frame(width: previewSize.width, height: previewSize.height)
-                    .frame(width: canvasSize.width, height: canvasSize.height, alignment: .top)
-                    .offset(x: canvasOffset.width, y: canvasOffset.height + previewTop)
-                    // 切换画幅时取景框平滑伸缩 / 移动，而不是瞬间跳变
-                    .animation(.smooth(duration: 0.3), value: cam.cfg.aspect)
+                if wirelessSession.mode != .receiving {
+                    PreviewStage(size: previewSize, iconRotationDegrees: iconRotationDegrees)
+                        .frame(width: previewSize.width, height: previewSize.height)
+                        .frame(width: canvasSize.width, height: canvasSize.height, alignment: .top)
+                        .offset(x: canvasOffset.width, y: canvasOffset.height + previewTop)
+                        // 切换画幅时取景框平滑伸缩 / 移动，而不是瞬间跳变
+                        .animation(.smooth(duration: 0.3), value: cam.cfg.aspect)
+                }
 
-                // Top and bottom controls float above the preview and keep their own hit targets.
+                // The setting toggle is stored in AppStorage; honor it on the actual tool panel
+                // too. A full-screen backdrop below controls catches only taps outside the panel.
+                if showPanel && dismissOnBlankTap {
+                    Button {
+                        HapticFeedback.play(.button)
+                        withAnimation(.easeInOut(duration: 0.22)) {
+                            showPanel = false
+                        }
+                    } label: {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .frame(width: canvasSize.width, height: canvasSize.height)
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .offset(x: canvasOffset.width, y: canvasOffset.height)
+                    .zIndex(isParameterPanelLandscape ? 14 : 4)
+                    .accessibilityLabel("点击空白处关闭设置面板")
+                }
+
+                // Keep the full camera control surface available while receiving the remote feed.
                 VStack(spacing: 0) {
                     HStack(spacing: 0) {
                         TopBar(
@@ -85,8 +118,24 @@ struct CameraScreen: View {
                                 showTimerSettings = true
                             },
                             onWirelessMonitorTap: {
-                                showWirelessMonitor = true
+                                // A single tap opens the wireless feature's own mode screen.
+                                if wirelessSession.isSecurelyPaired {
+                                    wirelessRolePickerDetent = .large
+                                    wirelessSheetRoute = .rolePicker
+                                } else {
+                                    wirelessSheetRoute = .deviceSearch
+                                }
                             },
+                            onWirelessReceiveTap: {
+                                switchWirelessMode(to: .receiving)
+                            },
+                            onWirelessShareTap: {
+                                switchWirelessMode(to: .sending)
+                            },
+                            onShareCompositeTap: {
+                                switchWirelessMode(to: .sending)
+                            },
+                            isSharingComposite: wirelessSession.mode == .sending,
                             onParameterTap: { parameterName in
                                 selectedQuickParameterName = parameterName
                                 withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
@@ -96,33 +145,9 @@ struct CameraScreen: View {
                                 HapticFeedback.play(.selection)
                             },
                             iconRotationDegrees: iconRotationDegrees,
-                            compactLayout: hasSharingStopControl
+                            compactLayout: false
                         )
-                        .frame(
-                            width: hasSharingStopControl ? max(controlCanvasWidth - 110, 220) : controlCanvasWidth,
-                            height: topBarHeight
-                        )
-
-                        if hasSharingStopControl {
-                            Button {
-                                HapticFeedback.play(.button)
-                                wirelessSession.stopVideo()
-                            } label: {
-                                Label("结束共享", systemImage: "stop.fill")
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.8)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 8)
-                                    .frame(maxWidth: .infinity)
-                                    .background(Color.red.opacity(0.82), in: Capsule())
-                                    .overlay(Capsule().stroke(Color.white.opacity(0.22), lineWidth: 0.7))
-                            }
-                            .tint(.white)
-                            .accessibilityLabel("结束无线共享")
-                            .frame(width: 102, height: topBarHeight)
-                            .padding(.trailing, 8)
-                        }
+                        .frame(width: controlCanvasWidth, height: topBarHeight)
                     }
                     .frame(width: controlCanvasWidth, height: topBarHeight, alignment: .leading)
 
@@ -176,9 +201,11 @@ struct CameraScreen: View {
                     .zIndex(15)
                 }
 
-                OverlayLayer(topSafeAreaInset: insets.top)
-                    .frame(width: canvasSize.width, height: canvasSize.height)
-                    .offset(x: canvasOffset.width, y: canvasOffset.height)
+                if wirelessSession.mode != .receiving {
+                    OverlayLayer(topSafeAreaInset: insets.top, suppressToast: wirelessSession.mode == .sending)
+                        .frame(width: canvasSize.width, height: canvasSize.height)
+                        .offset(x: canvasOffset.width, y: canvasOffset.height)
+                }
 
                 if showTimerSettings {
                     TimerSettingsOverlay(
@@ -191,224 +218,80 @@ struct CameraScreen: View {
                         .zIndex(20)
                 }
 
-                // Receiver mode replaces the camera interface with the peer's final composited
-                // video. The persistent session lives in CameraScreen, so closing the pairing
-                // sheet never deallocates the WebRTC track or its encrypted signalling connection.
+                // Keep the incoming composite video full-screen as a passive background.
+                // Camera controls above it must remain available and receive touches normally.
                 if wirelessSession.mode == .receiving {
-                    ZStack {
-                        Color.black.ignoresSafeArea()
+                    // Fill the physical screen, not only the safe-area canvas. This also
+                    // prevents the camera UI beneath the remote feed from receiving touches.
+                    GeometryReader { screen in
+                        ZStack(alignment: .topTrailing) {
+                            // The remote video is a visual background only. It must never
+                            // participate in hit testing; camera controls remain interactive above it.
+                            Color.black
+                                .frame(width: screen.size.width, height: screen.size.height)
+                                .allowsHitTesting(false)
 
-                        if let track = wirelessSession.remoteVideoTrack {
-                            RemoteMonitorVideoSurface(track: track) {
-                                wirelessSession.remoteFrameDidArrive()
-                            }
-                            .frame(width: canvasSize.width, height: canvasSize.height)
-                        }
-
-                        VStack(spacing: 0) {
-                            HStack {
-                                Label("无线全屏监看", systemImage: "dot.radiowaves.left.and.right")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.white)
-                                Spacer()
-                                Button {
-                                    HapticFeedback.play(.button)
-                                    wirelessSession.stopVideo()
-                                } label: {
-                                    Label("退出监看", systemImage: "xmark")
-                                        .font(.subheadline.weight(.semibold))
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 9)
-                                        .background(.ultraThinMaterial, in: Capsule())
+                            if let track = wirelessSession.remoteVideoTrack {
+                                RemoteMonitorVideoSurface(track: track) {
+                                    wirelessSession.remoteFrameDidArrive()
                                 }
-                                .tint(.white)
-                            }
-                            .padding(.horizontal, 18)
-                            .padding(.top, max(insets.top + 12, 28))
-
-                            Spacer()
-
-                            if !wirelessSession.remoteVideoFrameReceived {
-                                VStack(spacing: 10) {
-                                    ProgressView().tint(.white)
-                                    Text(wirelessSession.remoteVideoTrack == nil
-                                         ? "正在等待远端视频轨道…"
-                                         : wirelessSession.rtcStatusText)
-                                        .font(.callout)
-                                        .multilineTextAlignment(.center)
-                                        .foregroundStyle(.white.opacity(0.88))
-                                    Text("请确认另一台设备已选择“共享本机合成画面”")
-                                        .font(.caption)
-                                        .multilineTextAlignment(.center)
-                                        .foregroundStyle(.white.opacity(0.68))
-                                }
-                                .padding(18)
+                                .frame(width: screen.size.width, height: screen.size.height)
+                                .allowsHitTesting(false)
                             }
 
-                            Spacer()
+                            // Empty preview space maps taps to the sending device's real camera
+                            // focus/exposure pipeline. Controls above this layer keep their own hit targets.
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .gesture(
+                                    SpatialTapGesture()
+                                        .onEnded { value in
+                                            let point = CGPoint(
+                                                x: value.location.x / max(screen.size.width, 1),
+                                                y: value.location.y / max(screen.size.height, 1)
+                                            )
+                                            wirelessSession.requestRemoteFocus(atNormalized: point)
+                                        }
+                                )
+                                .frame(width: screen.size.width, height: screen.size.height)
+
                         }
+                        .frame(width: screen.size.width, height: screen.size.height)
                     }
-                    .frame(width: canvasSize.width, height: canvasSize.height)
-                    .offset(x: canvasOffset.width, y: canvasOffset.height)
                     .ignoresSafeArea()
-                    .zIndex(100)
-                } else if wirelessSession.isSecurelyPaired && wirelessSession.mode == .idle {
-                    ZStack {
-                        Color(uiColor: .systemGroupedBackground).ignoresSafeArea()
+                    .zIndex(0)
+                }
 
-                        ScrollView(showsIndicators: false) {
-                            VStack(spacing: 22) {
-                                VStack(spacing: 13) {
-                                    Image(systemName: "checkmark.shield.fill")
-                                        .font(.system(size: 30, weight: .semibold))
-                                        .foregroundStyle(.white)
-                                        .frame(width: 76, height: 76)
-                                        .background(
-                                            LinearGradient(
-                                                colors: [
-                                                    Color(uiColor: .systemBlue),
-                                                    Color(uiColor: .systemIndigo)
-                                                ],
-                                                startPoint: .topLeading,
-                                                endPoint: .bottomTrailing
-                                            ),
-                                            in: RoundedRectangle(cornerRadius: 25, style: .continuous)
-                                        )
-                                        .shadow(color: Color(uiColor: .systemBlue).opacity(0.18), radius: 18, y: 8)
+                // Standalone hit target above the receiver video, timer overlay, and camera controls.
+                // Use the outer geometry's real safe-area inset; a nested GeometryReader with
+                // ignoresSafeArea reports zero insets on some iOS versions and puts the button
+                // underneath the Dynamic Island where it cannot reliably receive taps.
+                if wirelessSession.mode == .receiving {
+                    ZStack(alignment: .topTrailing) {
+                        Color.clear
+                            .allowsHitTesting(false)
 
-                                    VStack(spacing: 6) {
-                                        Text("设备已安全连接")
-                                            .font(.system(.title2, design: .rounded, weight: .bold))
-                                            .foregroundStyle(.primary)
-                                        Text("选择这台 iPhone 的用途")
-                                            .font(.subheadline)
-                                            .foregroundStyle(.secondary)
-                                        HStack(spacing: 6) {
-                                            Circle()
-                                                .fill(Color(uiColor: .systemGreen))
-                                                .frame(width: 7, height: 7)
-                                            Text("已与 \(wirelessSession.localDeviceName) 完成配对")
-                                                .font(.caption.weight(.medium))
-                                                .foregroundStyle(.secondary)
-                                        }
-                                        .padding(.top, 3)
-                                    }
-                                }
-                                .frame(maxWidth: .infinity)
-                                .padding(.top, max(insets.top + 22, 40))
-
-                                VStack(spacing: 12) {
-                                    Button {
-                                        HapticFeedback.play(.button)
-                                        wirelessSession.startReceiving()
-                                    } label: {
-                                        HStack(spacing: 14) {
-                                            Image(systemName: "play.rectangle.on.rectangle")
-                                                .font(.system(size: 22, weight: .semibold))
-                                                .foregroundStyle(Color(uiColor: .systemBlue))
-                                                .frame(width: 52, height: 52)
-                                                .background(Color(uiColor: .systemBlue).opacity(0.10),
-                                                            in: RoundedRectangle(cornerRadius: 17, style: .continuous))
-                                            VStack(alignment: .leading, spacing: 5) {
-                                                Text("全屏接收画面")
-                                                    .font(.headline)
-                                                    .foregroundStyle(.primary)
-                                                Text("在这台设备上实时观看另一台设备")
-                                                    .font(.caption)
-                                                    .foregroundStyle(.secondary)
-                                                    .multilineTextAlignment(.leading)
-                                            }
-                                            Spacer(minLength: 0)
-                                            Image(systemName: "chevron.right")
-                                                .font(.system(size: 13, weight: .semibold))
-                                                .foregroundStyle(.tertiary)
-                                        }
-                                        .padding(16)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .background(Color(uiColor: .secondarySystemGroupedBackground),
-                                                    in: RoundedRectangle(cornerRadius: 23, style: .continuous))
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 23, style: .continuous)
-                                                .stroke(Color(uiColor: .systemBlue).opacity(0.20), lineWidth: 1)
-                                        )
-                                    }
-                                    .buttonStyle(.plain)
-
-                                    Button {
-                                        HapticFeedback.play(.button)
-                                        wirelessSession.startSending()
-                                    } label: {
-                                        HStack(spacing: 14) {
-                                            Image(systemName: "dot.radiowaves.left.and.right")
-                                                .font(.system(size: 22, weight: .semibold))
-                                                .foregroundStyle(Color(uiColor: .systemTeal))
-                                                .frame(width: 52, height: 52)
-                                                .background(Color(uiColor: .systemTeal).opacity(0.11),
-                                                            in: RoundedRectangle(cornerRadius: 17, style: .continuous))
-                                            VStack(alignment: .leading, spacing: 5) {
-                                                Text("共享本机合成画面")
-                                                    .font(.headline)
-                                                    .foregroundStyle(.primary)
-                                                Text("发送双摄、画中画 / 分屏与滤镜画面")
-                                                    .font(.caption)
-                                                    .foregroundStyle(.secondary)
-                                                    .multilineTextAlignment(.leading)
-                                            }
-                                            Spacer(minLength: 0)
-                                            Image(systemName: "chevron.right")
-                                                .font(.system(size: 13, weight: .semibold))
-                                                .foregroundStyle(.tertiary)
-                                        }
-                                        .padding(16)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .background(Color(uiColor: .secondarySystemGroupedBackground),
-                                                    in: RoundedRectangle(cornerRadius: 23, style: .continuous))
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 23, style: .continuous)
-                                                .stroke(Color(uiColor: .systemTeal).opacity(0.23), lineWidth: 1)
-                                        )
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-
-                                Button(role: .destructive) {
-                                    HapticFeedback.play(.button)
-                                    wirelessSession.disconnectPairing()
-                                } label: {
-                                    Label("断开安全配对", systemImage: "lock.slash")
-                                        .font(.subheadline.weight(.medium))
-                                        .foregroundStyle(Color(uiColor: .systemRed))
-                                        .frame(maxWidth: .infinity)
-                                        .padding(.vertical, 13)
-                                        .background(Color(uiColor: .secondarySystemGroupedBackground),
-                                                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                                }
-                                .buttonStyle(.plain)
-
-                                HStack(alignment: .top, spacing: 10) {
-                                    Image(systemName: "lock.shield")
-                                        .font(.system(size: 14, weight: .medium))
-                                        .foregroundStyle(Color(uiColor: .systemGreen))
-                                        .padding(.top, 1)
-                                    Text("实时视频经加密传输，不启用麦克风。退出当前窗口不会自动断开已建立的配对。")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                    Spacer(minLength: 0)
-                                }
-                                .padding(.horizontal, 4)
-                            }
-                            .padding(.horizontal, 22)
-                            .padding(.bottom, max(insets.bottom + 26, 40))
-                            .frame(maxWidth: 440)
-                            .frame(maxWidth: .infinity)
+                        Button {
+                            HapticFeedback.play(.button)
+                            wirelessSession.stopVideo()
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 44, height: 44)
+                                .background(.ultraThinMaterial, in: Circle())
+                                .overlay(Circle().stroke(Color.white.opacity(0.32), lineWidth: 1))
+                                .contentShape(Circle())
                         }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("关闭接收画面并结束共享")
+                        // Keep the receiver close action below the top controls.
+                        .padding(.top, insets.top + topBarHeight + 8)
+                        .padding(.trailing, insets.trailing + 12)
                     }
-                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topTrailing)
                     .offset(x: canvasOffset.width, y: canvasOffset.height)
-                    .ignoresSafeArea()
-                    .tint(Color(uiColor: .systemBlue))
-                    .zIndex(80)
+                    .zIndex(300)
                 }
             }
             .animation(.spring(response: 0.36, dampingFraction: 0.88), value: isParameterPanelLandscape)
@@ -451,19 +334,138 @@ struct CameraScreen: View {
                 shutterButtonTop = top
             }
         }
-        // Preserve Build 94's safe-area measurement and expand the preview canvas explicitly.
         .background(Color.black.ignoresSafeArea())
+        // The stop button lives in the UIWindow, outside the camera canvas layout, so it never
+        // changes preview size, previewTop or safe-area calculations.
+        .background {
+            if wirelessSession.mode == .sending {
+                StopShareWindowOverlayAnchor {
+                    HapticFeedback.play(.button)
+                    wirelessSession.stopVideo()
+                }
+                .frame(width: 0, height: 0)
+            }
+        }
         .statusBarHidden(true)
         .animation(.easeInOut(duration: 0.22), value: showPanel)
-        .sheet(isPresented: $showWirelessMonitor) {
-            WirelessMonitorSheet(session: wirelessSession)
+        .sheet(item: $wirelessSheetRoute, onDismiss: {
+            // Pairing remains separate from mode selection. A mode chosen by long-press
+            // is resumed immediately after the safety-code sheet finishes.
+            guard wirelessSession.isSecurelyPaired else {
+                shouldShowRolePickerAfterPairing = false
+                pendingWirelessMode = nil
+                return
+            }
+            if let requestedMode = pendingWirelessMode {
+                pendingWirelessMode = nil
+                shouldShowRolePickerAfterPairing = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
+                    guard wirelessSheetRoute == nil, wirelessSession.isSecurelyPaired else { return }
+                    switchWirelessMode(to: requestedMode)
+                }
+                return
+            }
+            guard wirelessSession.mode == .idle else {
+                shouldShowRolePickerAfterPairing = false
+                return
+            }
+            guard shouldShowRolePickerAfterPairing else { return }
+            shouldShowRolePickerAfterPairing = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
+                guard wirelessSheetRoute == nil,
+                      wirelessSession.isSecurelyPaired,
+                      wirelessSession.mode == .idle else { return }
+                wirelessRolePickerDetent = .large
+                wirelessSheetRoute = .rolePicker
+            }
+        }) { route in
+            switch route {
+            case .deviceSearch:
+                WirelessMonitorSheet(
+                    session: wirelessSession,
+                    onPairingSucceeded: {
+                        shouldShowRolePickerAfterPairing = true
+                    }
+                )
                 .environmentObject(cam)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(28)
+
+            case .rolePicker:
+                WirelessMonitorRolePickerSheet(
+                    onReceive: {
+                        HapticFeedback.play(.selection)
+                        chooseWirelessMode(.receiving)
+                    },
+                    onShare: {
+                        HapticFeedback.play(.selection)
+                        chooseWirelessMode(.sending)
+                    },
+                    onDisconnect: {
+                        shouldShowRolePickerAfterPairing = false
+                        wirelessSheetRoute = nil
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                            wirelessSession.disconnectPairing()
+                        }
+                    }
+                )
+                .presentationDetents([.medium, .large], selection: $wirelessRolePickerDetent)
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(28)
+            }
         }
         .fullScreenCover(isPresented: $showCreativeGallery) {
             CreativeGalleryView()
                 .environmentObject(cam)
         }
         .modifier(HardwareCameraCaptureModifier())
+    }
+
+    /// Close the role picker first; onDismiss then resumes this pending role after the sheet
+    /// finishes its interactive dismissal. This avoids racing the sheet's transition.
+    private func chooseWirelessMode(_ target: MonitorMode) {
+        guard target != .idle else { return }
+        guard wirelessSession.isSecurelyPaired else {
+            pendingWirelessMode = target
+            wirelessSheetRoute = .deviceSearch
+            return
+        }
+        shouldShowRolePickerAfterPairing = false
+        pendingWirelessMode = target
+        wirelessSheetRoute = nil
+    }
+
+    /// Switch the paired peer to the requested wireless role. Switching an active session
+    /// first tears down its current stream, then starts the newly selected role.
+    private func switchWirelessMode(to target: MonitorMode) {
+        guard target != .idle else { return }
+        guard wirelessSession.isSecurelyPaired else {
+            pendingWirelessMode = target
+            shouldShowRolePickerAfterPairing = false
+            wirelessSheetRoute = .deviceSearch
+            return
+        }
+        guard wirelessSession.mode != target else { return }
+
+        let startTarget: () -> Void = {
+            guard wirelessSession.isSecurelyPaired, wirelessSession.mode == .idle else { return }
+            switch target {
+            case .receiving:
+                wirelessSession.startReceiving()
+            case .sending:
+                wirelessSession.startSending()
+            case .idle:
+                break
+            }
+        }
+
+        if wirelessSession.mode != .idle {
+            wirelessSession.stopVideo()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { startTarget() }
+        } else {
+            startTarget()
+        }
     }
 
     /// Open the native iPhone Photos app from the album shortcut.
@@ -543,20 +545,239 @@ struct CameraScreen: View {
 }
 
 
-/// Route iPhone 16 Pro Camera Control capture events through the same shutter path as the UI.
-/// iOS 17 remains supported; Camera Control integration is active on iOS 18 and later.
+/// A zero-size SwiftUI anchor that installs the stop button directly in the active
+/// UIWindow. It does not participate in camera layout or expand CameraScreen's hit bounds.
+private struct StopShareWindowOverlayAnchor: UIViewRepresentable {
+    let action: () -> Void
+
+    func makeUIView(context: Context) -> StopShareWindowAnchorView {
+        let view = StopShareWindowAnchorView()
+        view.onStop = action
+        return view
+    }
+
+    func updateUIView(_ uiView: StopShareWindowAnchorView, context: Context) {
+        uiView.onStop = action
+        uiView.refreshOverlay()
+    }
+
+    static func dismantleUIView(_ uiView: StopShareWindowAnchorView, coordinator: ()) {
+        uiView.detachOverlay()
+    }
+}
+
+private final class StopShareWindowAnchorView: UIView {
+    /// Forwarded to the overlay as-is; assigning it never re-installs the overlay.
+    var onStop: (() -> Void)? {
+        didSet { overlayView?.onStop = onStop }
+    }
+
+    private var overlayView: StopShareWindowTouchOverlay?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        isUserInteractionEnabled = false
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        refreshOverlay()
+    }
+
+    /// Installs the overlay in the current window (moving it if the window changed) and keeps
+    /// it on top. SwiftUI calls this on every update, so it only touches UIKit when needed.
+    func refreshOverlay() {
+        guard let window else {
+            detachOverlay()
+            return
+        }
+
+        let overlay: StopShareWindowTouchOverlay
+        if let existing = overlayView {
+            overlay = existing
+        } else {
+            overlay = StopShareWindowTouchOverlay(frame: window.bounds)
+            overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            overlayView = overlay
+        }
+        overlay.onStop = onStop
+
+        if overlay.superview !== window {
+            overlay.frame = window.bounds
+            window.addSubview(overlay)
+        }
+        if window.subviews.last !== overlay {
+            window.bringSubviewToFront(overlay)
+        }
+    }
+
+    func detachOverlay() {
+        overlayView?.removeFromSuperview()
+        overlayView = nil
+    }
+}
+
+/// Window-level hit-test view: only the stop button consumes touches. All other coordinates
+/// return false so the normal SwiftUI camera surface receives them unchanged.
+private final class StopShareWindowTouchOverlay: UIView {
+    private enum Metrics {
+        static let minWidth: CGFloat = 104
+        static let height: CGFloat = 44
+        static let top: CGFloat = 8
+        static let trailingMargin: CGFloat = 22
+    }
+
+    var onStop: (() -> Void)?
+
+    private let stopButton = UIButton(type: .system)
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+
+        // Chrome-less control so the preview shows through: white label, red stop glyph.
+        // `.plain()` already has no background, stroke or shadow to reset.
+        var configuration = UIButton.Configuration.plain()
+        configuration.title = "结束共享"
+        configuration.image = UIImage(systemName: "stop.fill")
+        configuration.imagePlacement = .trailing
+        configuration.imagePadding = 6
+        configuration.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 10, bottom: 0, trailing: 10)
+        configuration.baseForegroundColor = .white
+        configuration.imageColorTransformer = UIConfigurationColorTransformer { _ in UIColor.systemRed }
+        configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var outgoing = incoming
+            outgoing.font = UIFont.systemFont(ofSize: 12, weight: .semibold)
+            outgoing.foregroundColor = UIColor.white
+            return outgoing
+        }
+
+        stopButton.configuration = configuration
+        // With no background there is no pressed-state fill, so dim the whole control instead.
+        stopButton.configurationUpdateHandler = { button in
+            button.alpha = button.isHighlighted ? 0.5 : 1
+        }
+        stopButton.accessibilityLabel = "结束无线共享"
+        stopButton.accessibilityHint = "停止向配对设备共享画面"
+        stopButton.addTarget(self, action: #selector(stopPressed), for: .touchUpInside)
+        addSubview(stopButton)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let rightInset = window?.safeAreaInsets.right ?? safeAreaInsets.right
+        // Grow with the label if the copy changes, but never shrink below the 104 x 44 pt target.
+        let fitted = stopButton.sizeThatFits(CGSize(width: bounds.width, height: Metrics.height))
+        let width = max(Metrics.minWidth, ceil(fitted.width))
+        stopButton.frame = CGRect(
+            x: bounds.width - rightInset - Metrics.trailingMargin - width,
+            y: Metrics.top,
+            width: width,
+            height: Metrics.height
+        )
+    }
+
+    override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        setNeedsLayout()
+    }
+
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        stopButton.frame.contains(point)
+    }
+
+    @objc private func stopPressed() {
+        onStop?()
+    }
+}
+
+/// Route physical capture controls (iPhone Camera Control, volume buttons, Action button,
+/// and supported remote capture events) through exactly the same local/remote capture path.
 private struct HardwareCameraCaptureModifier: ViewModifier {
     @EnvironmentObject private var cam: CameraManager
+    @ObservedObject private var wirelessSession = WirelessMonitorSession.shared
+    @State private var pressWorkItem: DispatchWorkItem?
+    @State private var pressActive = false
+    @State private var burstStarted = false
+
+    private let burstHoldDelay: TimeInterval = 0.35
 
     @ViewBuilder
     func body(content: Content) -> some View {
         if #available(iOS 18.0, *) {
-            content.onCameraCaptureEvent(isEnabled: cam.ready, action: { event in
-                guard event.phase == .ended, cam.ready else { return }
-                cam.shutterTapped()
-            })
+            content.onCameraCaptureEvent(
+                isEnabled: cam.ready,
+                primaryAction: { event in handleCaptureEvent(event) },
+                secondaryAction: { event in handleCaptureEvent(event) }
+            )
         } else {
             content
+        }
+    }
+
+    @available(iOS 18.0, *)
+    private func handleCaptureEvent(_ event: AVCaptureEvent) {
+        switch event.phase {
+        case .began:
+            pressActive = true
+            pressWorkItem?.cancel()
+            let work = DispatchWorkItem {
+                guard pressActive, !burstStarted else { return }
+                if wirelessSession.mode == .receiving {
+                    guard wirelessSession.requestRemoteBurstStart() else { return }
+                } else {
+                    guard cam.canStartBurstCapture else { return }
+                    cam.startBurstCapture()
+                }
+                burstStarted = true
+            }
+            pressWorkItem = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + burstHoldDelay, execute: work)
+
+        case .ended:
+            pressActive = false
+            pressWorkItem?.cancel()
+            pressWorkItem = nil
+            if burstStarted {
+                if wirelessSession.mode == .receiving {
+                    wirelessSession.requestRemoteBurstStop()
+                } else {
+                    cam.stopBurstCapture()
+                }
+                burstStarted = false
+            } else if cam.ready {
+                if wirelessSession.mode == .receiving {
+                    wirelessSession.requestRemoteShutter()
+                    HapticFeedback.play(.shutter)
+                } else {
+                    cam.shutterTapped()
+                }
+            }
+
+        case .cancelled:
+            pressActive = false
+            pressWorkItem?.cancel()
+            pressWorkItem = nil
+            if burstStarted {
+                if wirelessSession.mode == .receiving {
+                    wirelessSession.requestRemoteBurstStop()
+                } else {
+                    cam.stopBurstCapture()
+                }
+                burstStarted = false
+            }
+
+        @unknown default:
+            break
         }
     }
 }
@@ -1194,14 +1415,26 @@ struct TimerSettingsOverlay: View {
     @EnvironmentObject private var cam: CameraManager
     @Binding var timerDraft: Int
     @Binding var isPresented: Bool
+    @AppStorage("dualcam.dismissOnBlankTap") private var dismissOnBlankTap = true
     var iconRotationDegrees: CGFloat = 0
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.55)
-                .ignoresSafeArea()
-                .contentShape(Rectangle())
-                .onTapGesture { isPresented = false }
+            // Use a dedicated full-screen button so backdrop taps never fall through
+            // to PreviewStage's focus/exposure gesture. When disabled, the backdrop still
+            // intercepts touches but leaves this timer panel open.
+            Button {
+                guard dismissOnBlankTap else { return }
+                HapticFeedback.play(.button)
+                isPresented = false
+            } label: {
+                Color.black.opacity(0.55)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("关闭倒计时设置")
             VStack(spacing: 16) {
                 HStack {
                     Image(systemName: "timer")
@@ -1289,11 +1522,15 @@ struct TopBar: View {
 
     let onTimerTap: () -> Void
     let onWirelessMonitorTap: () -> Void
+    let onWirelessReceiveTap: () -> Void
+    let onWirelessShareTap: () -> Void
+    let onShareCompositeTap: () -> Void
+    let isSharingComposite: Bool
     let onParameterTap: (String) -> Void
     var iconRotationDegrees: CGFloat = 90
     var compactLayout = false
 
-    private static let baseActionKeys = ["flash", "livePhoto", "liveMotion", "timer", "swapCamera", "wireless"]
+    private static let baseActionKeys = ["flash", "livePhoto", "liveMotion", "timer", "swapCamera", "wireless", "shareComposite"]
     private static var allActionKeys: [String] {
         baseActionKeys + QuickParameter.allCases.map { "param.\($0.shortcutKey)" }
     }
@@ -1339,7 +1576,16 @@ struct TopBar: View {
                             if isCustomizing {
                                 Menu {
                                     Section("相机按钮") {
-                                        ForEach(availableActionKeys.filter { !Self.isParameterKey($0) }, id: \.self) { key in
+                                        ForEach(availableActionKeys.filter {
+                                            !Self.isParameterKey($0) && $0 != "wireless" && $0 != "shareComposite"
+                                        }, id: \.self) { key in
+                                            Button { addAction(key) } label: {
+                                                Label(actionTitle(key), systemImage: actionSystemImage(key))
+                                            }
+                                        }
+                                    }
+                                    Section("互联按钮") {
+                                        ForEach(availableActionKeys.filter { $0 == "wireless" || $0 == "shareComposite" }, id: \.self) { key in
                                             Button { addAction(key) } label: {
                                                 Label(actionTitle(key), systemImage: actionSystemImage(key))
                                             }
@@ -1441,6 +1687,12 @@ struct TopBar: View {
                 HapticFeedback.play(.button)
                 onWirelessMonitorTap()
             }
+        case "shareComposite":
+            iconButton(actionKey: key, icon: "airplayvideo", active: isSharingComposite,
+                       label: "共享本机合成画面") {
+                HapticFeedback.play(.button)
+                onShareCompositeTap()
+            }
         default:
             if key.hasPrefix("param."),
                let parameter = QuickParameter.fromShortcutKey(String(key.dropFirst("param.".count))) {
@@ -1482,12 +1734,24 @@ struct TopBar: View {
                             .foregroundStyle(.white, Color.red).offset(x: -3, y: -3)
                     }
                 }
-                .contentShape(Circle())
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .contentShape(Rectangle())
         .accessibilityLabel(isCustomizing ? "删除按钮：\(actionTitle(actionKey))" : label)
         .opacity(dimmed ? 0.4 : 1)
         .contextMenu {
+            if actionKey == "wireless" || actionKey == "shareComposite" {
+                Button(action: onWirelessReceiveTap) {
+                    Label("切换为接收画面", systemImage: "rectangle.inset.filled.and.person.filled")
+                }
+                Button(action: onWirelessShareTap) {
+                    Label("切换为共享画面", systemImage: "airplayvideo")
+                }
+                Button(action: onWirelessMonitorTap) {
+                    Label("打开无线功能界面", systemImage: "slider.horizontal.3")
+                }
+            }
             Button {
                 withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) { isCustomizing = true }
             } label: {
@@ -1524,6 +1788,7 @@ struct TopBar: View {
         case "timer": return "倒计时"
         case "swapCamera": return "切换摄像头"
         case "wireless": return "无线监看"
+        case "shareComposite": return "共享本机合成画面"
         default:
             if key.hasPrefix("param."),
                let parameter = QuickParameter.fromShortcutKey(String(key.dropFirst("param.".count))) {
@@ -1541,6 +1806,7 @@ struct TopBar: View {
         case "timer": return "timer"
         case "swapCamera": return "arrow.triangle.2.circlepath"
         case "wireless": return "dot.radiowaves.left.and.right"
+        case "shareComposite": return "airplayvideo"
         default:
             if key.hasPrefix("param."),
                let parameter = QuickParameter.fromShortcutKey(String(key.dropFirst("param.".count))) {
@@ -1666,8 +1932,10 @@ struct BottomBar: View {
         } label: {
             ZStack(alignment: .bottomTrailing) {
                 Image(systemName: cam.captureMode == .photo ? "video.fill" : "camera.fill")
+                    .contentTransition(.symbolEffect(.replace))
                     .rotationEffect(.degrees(iconRotationDegrees))
                     .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
+                    .animation(.easeInOut(duration: 0.18), value: cam.captureMode)
                     .font(.system(size: 17, weight: .semibold))
                     .frame(width: sideButtonSize, height: sideButtonSize)
                     .background(Circle().fill(Color.white.opacity(0.12)))
@@ -1866,6 +2134,7 @@ private struct ShutterPressStyle: ButtonStyle {
 
 struct ShutterButton: View {
     @EnvironmentObject private var cam: CameraManager
+    @ObservedObject private var wirelessSession = WirelessMonitorSession.shared
 
     /// True from the moment a hold turned into a burst until just after the finger lifts, so the
     /// Button's own tap action (fired on touch-up) doesn't also take a normal photo.
@@ -1879,22 +2148,31 @@ struct ShutterButton: View {
     var body: some View {
         Button {
             if burstGestureTriggered { return }
-            cam.shutterTapped()
+            if wirelessSession.mode == .receiving {
+                wirelessSession.requestRemoteShutter()
+                HapticFeedback.play(.shutter)
+            } else {
+                cam.shutterTapped()
+            }
         } label: {
             ZStack {
                 Circle().stroke(Color.white, lineWidth: 4).frame(width: 76, height: 76)
-                if cam.captureMode == .photo {
-                    Circle().fill(Color.white).frame(width: 62, height: 62)
-                        // 处理中内圈收小并轻微呼吸，提示「正在拍」而不是整颗快门变灰
-                        .scaleEffect(cam.isCapturingPhoto ? 0.78 : 1)
-                        .animation(.easeInOut(duration: 0.18), value: cam.isCapturingPhoto)
-                } else {
-                    RoundedRectangle(cornerRadius: cam.isRecording ? 8 : 31)
-                        .fill(Color.red)
-                        .frame(width: cam.isRecording ? 30 : 62, height: cam.isRecording ? 30 : 62)
-                }
+                // Keep one shape identity across photo/video/recording states. Switching from
+                // a circle to a different shape type caused the shutter to pop instead of morph.
+                RoundedRectangle(
+                    cornerRadius: cam.captureMode == .video && cam.isRecording ? 8 : 31
+                )
+                .fill(cam.captureMode == .photo ? Color.white : Color.red)
+                .frame(
+                    width: cam.captureMode == .video && cam.isRecording ? 30 : 62,
+                    height: cam.captureMode == .video && cam.isRecording ? 30 : 62
+                )
+                // During photo capture, gently contract only the inner shutter surface.
+                .scaleEffect(cam.captureMode == .photo && cam.isCapturingPhoto ? 0.78 : 1)
+                .animation(.easeInOut(duration: 0.18), value: cam.captureMode)
+                .animation(.easeInOut(duration: 0.20), value: cam.isRecording)
+                .animation(.easeInOut(duration: 0.18), value: cam.isCapturingPhoto)
             }
-            .animation(.easeInOut(duration: 0.2), value: cam.isRecording)
         }
         .buttonStyle(ShutterPressStyle())
         // A zero-distance drag reports both touch-down and lift. LongPressGesture can't be used for
@@ -1906,9 +2184,14 @@ struct ShutterButton: View {
                     if !pressActive {
                         pressActive = true
                         let arm = DispatchWorkItem {
-                            guard pressActive, !burstGestureTriggered, cam.canStartBurstCapture else { return }
+                            guard pressActive, !burstGestureTriggered else { return }
+                            if wirelessSession.mode == .receiving {
+                                guard wirelessSession.requestRemoteBurstStart() else { return }
+                            } else {
+                                guard cam.canStartBurstCapture else { return }
+                                cam.startBurstCapture()
+                            }
                             burstGestureTriggered = true
-                            cam.startBurstCapture()
                         }
                         burstArm = arm
                         DispatchQueue.main.asyncAfter(deadline: .now() + Self.burstHoldDelay, execute: arm)
@@ -1925,7 +2208,11 @@ struct ShutterButton: View {
                     burstArm?.cancel()
                     burstArm = nil
                     guard burstGestureTriggered else { return }
-                    cam.stopBurstCapture()
+                    if wirelessSession.mode == .receiving {
+                        wirelessSession.requestRemoteBurstStop()
+                    } else {
+                        cam.stopBurstCapture()
+                    }
                     // Keep the flag until after the Button's touch-up action has been swallowed.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
                         burstGestureTriggered = false
@@ -1948,6 +2235,7 @@ struct ShutterButton: View {
 struct OverlayLayer: View {
     @EnvironmentObject private var cam: CameraManager
     let topSafeAreaInset: CGFloat
+    var suppressToast = false
 
     var body: some View {
         ZStack {
@@ -1958,7 +2246,7 @@ struct OverlayLayer: View {
                 Color.black.opacity(0.18).ignoresSafeArea()
                 Text("\(n)").font(.system(size: 112, weight: .bold, design: .rounded)).monospacedDigit().foregroundStyle(Color.white).shadow(color: .black.opacity(0.6), radius: 18).frame(maxWidth: .infinity, maxHeight: .infinity).allowsHitTesting(false).zIndex(10)
             }
-            if let text = cam.toast {
+            if !suppressToast, let text = cam.toast {
                 VStack {
                     Text(text)
                         .font(.system(size: 13, weight: .semibold))

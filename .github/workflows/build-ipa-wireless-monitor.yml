@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/wireless-live-monitor-network
+      - ui/wireless-apple-refresh-2026-10-27
   workflow_dispatch:
 
 permissions:

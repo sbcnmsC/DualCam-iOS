@@ -35,6 +35,20 @@ final class WirelessMonitorSession: ObservableObject {
     private var preShareResolution: ResolutionOption?
     private var preShareFPS: Int?
 
+    // Track the receiver's UI state and forward only changed fields. Sending deltas instead of
+    // the entire local config prevents untouched defaults (especially resolution/FPS) from
+    // overwriting the sending device's active stream preset.
+    private var lastObservedConfig: Config?
+    private var lastObservedSlotStates: [SlotState]?
+    private var lastObservedCaptureMode: CaptureMode?
+    private var lastObservedTimerSeconds: Int?
+    private var lastObservedFlashEnabled: Bool?
+    private var lastObservedComboIndex: Int?
+    private var lastObservedParamTarget: Int?
+    private var pendingRemoteControlPayload: [String: String] = [:]
+    private var pendingRemoteControlWorkItem: DispatchWorkItem?
+    private var remoteBurstInProgress = false
+
     init() {
         network.$nearbyDevices.receive(on: DispatchQueue.main)
             .sink { [weak self] in self?.nearbyDevices = $0 }
@@ -74,6 +88,36 @@ final class WirelessMonitorSession: ObservableObject {
         guard !didConfigure else { return }
         didConfigure = true
 
+        lastObservedConfig = cameraManager.cfg
+        lastObservedSlotStates = cameraManager.slotStates
+        lastObservedCaptureMode = cameraManager.captureMode
+        lastObservedTimerSeconds = cameraManager.timerSeconds
+        lastObservedFlashEnabled = cameraManager.flashEnabled
+        lastObservedComboIndex = cameraManager.comboIndex
+        lastObservedParamTarget = cameraManager.paramTarget
+
+        cameraManager.$cfg.dropFirst()
+            .sink { [weak self] value in self?.observeRemoteConfig(value) }
+            .store(in: &cancellables)
+        cameraManager.$slotStates.dropFirst()
+            .sink { [weak self] value in self?.observeRemoteSlotStates(value) }
+            .store(in: &cancellables)
+        cameraManager.$captureMode.dropFirst()
+            .sink { [weak self] value in self?.observeRemoteCaptureMode(value) }
+            .store(in: &cancellables)
+        cameraManager.$timerSeconds.dropFirst()
+            .sink { [weak self] value in self?.observeRemoteTimer(value) }
+            .store(in: &cancellables)
+        cameraManager.$flashEnabled.dropFirst()
+            .sink { [weak self] value in self?.observeRemoteFlash(value) }
+            .store(in: &cancellables)
+        cameraManager.$comboIndex.dropFirst()
+            .sink { [weak self] value in self?.observeRemoteCombo(value) }
+            .store(in: &cancellables)
+        cameraManager.$paramTarget.dropFirst()
+            .sink { [weak self] value in self?.observeRemoteParameterTarget(value) }
+            .store(in: &cancellables)
+
         let peerService = network
         let transport = rtc
         // NetworkMonitorService delivers decrypted signalling on its private serial queue.
@@ -93,10 +137,49 @@ final class WirelessMonitorSession: ObservableObject {
         transport.onPeerStopped = { [weak self] in
             DispatchQueue.main.async { self?.peerStopped() }
         }
+        transport.onRemoteCommand = { [weak self] command, payload in
+            guard let self else { return }
+            DispatchQueue.main.async {
+                switch self.mode {
+                case .sending:
+                    switch command {
+                    case "shutter":
+                        self.cameraManager?.shutterTapped()
+                    case "burst-start":
+                        if self.cameraManager?.canStartBurstCapture == true {
+                            self.remoteBurstInProgress = true
+                            self.cameraManager?.startBurstCapture()
+                        }
+                    case "burst-stop":
+                        self.remoteBurstInProgress = false
+                        self.cameraManager?.stopBurstCapture()
+                    case "focus":
+                        guard let values = payload,
+                              let x = Double(values["x"] ?? ""),
+                              let y = Double(values["y"] ?? ""),
+                              x.isFinite, y.isFinite else { return }
+                        self.cameraManager?.focus(atNormalized: CGPoint(
+                            x: min(max(x, 0), 1),
+                            y: min(max(y, 0), 1)
+                        ))
+                    case "state":
+                        if let payload { self.applyRemoteCameraState(payload) }
+                    default:
+                        break
+                    }
+                case .receiving, .idle:
+                    break
+                }
+            }
+        }
     }
 
     func startDiscovery() {
         network.start()
+    }
+
+    func restartDiscovery() {
+        network.restartDiscovery()
     }
 
     /// A dismissed pairing sheet only closes discovery when pairing never completed.
@@ -109,6 +192,8 @@ final class WirelessMonitorSession: ObservableObject {
     func startSending() {
         guard isSecurelyPaired, mode == .idle, let cameraManager else { return }
         applyWirelessStreamPreset(to: cameraManager)
+        // Clear any toast left over from the previous camera action before sharing starts.
+        cameraManager.toast = nil
         mode = .sending
         remoteVideoFrameReceived = false
         let transport = rtc
@@ -164,8 +249,246 @@ final class WirelessMonitorSession: ObservableObject {
         mode = .receiving
         remoteVideoFrameReceived = false
         cameraManager.compositedFrameSource.setSink(nil)
-        cameraManager.setLocalCameraCaptureSuspended(true)
+        // Keep the local camera alive so the receiving device retains its full camera controls.
+        cameraManager.setLocalCameraCaptureSuspended(false)
         rtc.startReceiving()
+    }
+
+    func requestRemoteShutter() {
+        guard mode == .receiving, isSecurelyPaired else { return }
+        rtc.sendRemoteCommand("shutter")
+    }
+
+    @discardableResult
+    func requestRemoteBurstStart() -> Bool {
+        guard mode == .receiving, isSecurelyPaired else { return false }
+        rtc.sendRemoteCommand("burst-start")
+        return true
+    }
+
+    func requestRemoteBurstStop() {
+        guard mode == .receiving, isSecurelyPaired else { return }
+        rtc.sendRemoteCommand("burst-stop")
+    }
+
+    func requestRemoteFocus(atNormalized point: CGPoint) {
+        guard mode == .receiving, isSecurelyPaired else { return }
+        rtc.sendRemoteCommand("focus", payload: [
+            "x": String(Double(min(max(point.x, 0), 1))),
+            "y": String(Double(min(max(point.y, 0), 1)))
+        ])
+    }
+
+    private func observeRemoteConfig(_ value: Config) {
+        let previous = lastObservedConfig
+        lastObservedConfig = value
+        guard mode == .receiving, let previous else { return }
+        enqueueRemoteControlDelta(configDelta(from: previous, to: value))
+    }
+
+    private func observeRemoteSlotStates(_ value: [SlotState]) {
+        let previous = lastObservedSlotStates
+        lastObservedSlotStates = value
+        guard mode == .receiving, let previous else { return }
+        enqueueRemoteControlDelta(slotStateDelta(from: previous, to: value))
+    }
+
+    private func observeRemoteCaptureMode(_ value: CaptureMode) {
+        let previous = lastObservedCaptureMode
+        lastObservedCaptureMode = value
+        guard mode == .receiving, let previous, previous != value else { return }
+        enqueueRemoteControlDelta(["captureMode": value.rawValue])
+    }
+
+    private func observeRemoteTimer(_ value: Int) {
+        let previous = lastObservedTimerSeconds
+        lastObservedTimerSeconds = value
+        guard mode == .receiving, let previous, previous != value else { return }
+        enqueueRemoteControlDelta(["timerSeconds": String(min(max(value, 0), 60))])
+    }
+
+    private func observeRemoteFlash(_ value: Bool) {
+        let previous = lastObservedFlashEnabled
+        lastObservedFlashEnabled = value
+        guard mode == .receiving, let previous, previous != value else { return }
+        enqueueRemoteControlDelta(["flashEnabled": String(value)])
+    }
+
+    private func observeRemoteCombo(_ value: Int) {
+        let previous = lastObservedComboIndex
+        lastObservedComboIndex = value
+        guard mode == .receiving, let previous, previous != value,
+              let cameraManager, cameraManager.combos.indices.contains(value) else { return }
+        let combo = cameraManager.combos[value]
+        enqueueRemoteControlDelta([
+            "combo.a": combo.a.rawValue,
+            "combo.b": combo.b.rawValue
+        ])
+    }
+
+    private func observeRemoteParameterTarget(_ value: Int) {
+        let previous = lastObservedParamTarget
+        lastObservedParamTarget = value
+        guard mode == .receiving, let previous, previous != value else { return }
+        enqueueRemoteControlDelta(["paramTarget": String(value == 1 ? 1 : 0)])
+    }
+
+    private func enqueueRemoteControlDelta(_ delta: [String: String]) {
+        guard mode == .receiving, isSecurelyPaired, !delta.isEmpty else { return }
+        for (key, value) in delta { pendingRemoteControlPayload[key] = value }
+        pendingRemoteControlWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.mode == .receiving, self.isSecurelyPaired else {
+                self?.pendingRemoteControlPayload.removeAll()
+                return
+            }
+            let payload = self.pendingRemoteControlPayload
+            self.pendingRemoteControlPayload.removeAll()
+            guard !payload.isEmpty else { return }
+            self.rtc.sendRemoteCommand("state", payload: payload)
+        }
+        pendingRemoteControlWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.035, execute: work)
+    }
+
+    private func configDelta(from old: Config, to new: Config) -> [String: String] {
+        var delta: [String: String] = [:]
+        if old.layout != new.layout { delta["cfg.layout"] = new.layout.rawValue }
+        if old.swapped != new.swapped { delta["cfg.swapped"] = String(new.swapped) }
+        if old.aspect != new.aspect { delta["cfg.aspect"] = new.aspect.rawValue }
+        if old.freeAspect != new.freeAspect { delta["cfg.freeAspect"] = String(Double(new.freeAspect)) }
+        if old.pipCenter != new.pipCenter {
+            delta["cfg.pipX"] = String(Double(new.pipCenter.x))
+            delta["cfg.pipY"] = String(Double(new.pipCenter.y))
+        }
+        if old.pipWidth != new.pipWidth { delta["cfg.pipWidth"] = String(Double(new.pipWidth)) }
+        if old.pipRatio != new.pipRatio { delta["cfg.pipRatio"] = new.pipRatio.rawValue }
+        if old.pipShape != new.pipShape { delta["cfg.pipShape"] = new.pipShape.rawValue }
+        if old.pipCorner != new.pipCorner { delta["cfg.pipCorner"] = String(Double(new.pipCorner)) }
+        if old.pipBorder != new.pipBorder { delta["cfg.pipBorder"] = String(Double(new.pipBorder)) }
+        if old.pipOpacity != new.pipOpacity { delta["cfg.pipOpacity"] = String(Double(new.pipOpacity)) }
+        if old.pipSnap != new.pipSnap { delta["cfg.pipSnap"] = String(new.pipSnap) }
+        if old.splitRatio != new.splitRatio { delta["cfg.splitRatio"] = String(Double(new.splitRatio)) }
+        if old.mirrorFront != new.mirrorFront { delta["cfg.mirrorFront"] = String(new.mirrorFront) }
+        if old.filter != new.filter { delta["cfg.filter"] = new.filter.rawValue }
+        if old.filterIntensity != new.filterIntensity { delta["cfg.filterIntensity"] = String(Double(new.filterIntensity)) }
+        if old.resolution != new.resolution { delta["cfg.resolution"] = new.resolution.rawValue }
+        if old.fps != new.fps { delta["cfg.fps"] = String(new.fps) }
+        if old.outputMode != new.outputMode { delta["cfg.outputMode"] = new.outputMode.rawValue }
+        if old.livePhoto != new.livePhoto { delta["cfg.livePhoto"] = String(new.livePhoto) }
+        if old.liveMotion != new.liveMotion { delta["cfg.liveMotion"] = new.liveMotion.rawValue }
+        if old.lowLight != new.lowLight { delta["cfg.lowLight"] = String(new.lowLight) }
+        if old.stabilization != new.stabilization { delta["cfg.stabilization"] = String(new.stabilization) }
+        if old.showGrid != new.showGrid { delta["cfg.showGrid"] = String(new.showGrid) }
+        return delta
+    }
+
+    private func slotStateDelta(from old: [SlotState], to new: [SlotState]) -> [String: String] {
+        var delta: [String: String] = [:]
+        for slot in 0..<min(min(old.count, new.count), 2) {
+            let a = old[slot]
+            let b = new[slot]
+            let prefix = "slot.\(slot)."
+            if a.zoom != b.zoom { delta[prefix + "zoom"] = String(Double(b.zoom)) }
+            if a.exposureBias != b.exposureBias { delta[prefix + "exposureBias"] = String(b.exposureBias) }
+            if a.manualExposure != b.manualExposure { delta[prefix + "manualExposure"] = String(b.manualExposure) }
+            if a.iso != b.iso { delta[prefix + "iso"] = String(b.iso) }
+            if a.shutter != b.shutter { delta[prefix + "shutter"] = String(b.shutter) }
+            if a.manualWB != b.manualWB { delta[prefix + "manualWB"] = String(b.manualWB) }
+            if a.temperature != b.temperature { delta[prefix + "temperature"] = String(b.temperature) }
+            if a.tint != b.tint { delta[prefix + "tint"] = String(b.tint) }
+            if a.manualFocus != b.manualFocus { delta[prefix + "manualFocus"] = String(b.manualFocus) }
+            if a.lensPosition != b.lensPosition { delta[prefix + "lensPosition"] = String(b.lensPosition) }
+            if a.locked != b.locked { delta[prefix + "locked"] = String(b.locked) }
+        }
+        return delta
+    }
+
+    private func applyRemoteCameraState(_ payload: [String: String]) {
+        guard mode == .sending, let cameraManager else { return }
+
+        // Match a lens combination by hardware identity rather than assuming both devices have
+        // the same menu index. Unsupported combinations are safely ignored by the receiver.
+        if let rawA = payload["combo.a"], let rawB = payload["combo.b"],
+           let a = LensSpec(rawValue: rawA), let b = LensSpec(rawValue: rawB),
+           let index = cameraManager.combos.firstIndex(where: { $0.a == a && $0.b == b }),
+           index != cameraManager.comboIndex {
+            cameraManager.selectCombo(index)
+        }
+
+        var config = cameraManager.cfg
+        var configChanged = false
+        if let raw = payload["cfg.layout"], let value = LayoutMode(rawValue: raw) { config.layout = value; configChanged = true }
+        if let raw = payload["cfg.swapped"], let value = Bool(raw) { config.swapped = value; configChanged = true }
+        if let raw = payload["cfg.aspect"], let value = CanvasAspect(rawValue: raw) { config.aspect = value; configChanged = true }
+        if let raw = payload["cfg.freeAspect"], let value = Double(raw), value.isFinite { config.freeAspect = CGFloat(min(max(value, 0.2), 4.0)); configChanged = true }
+        if let raw = payload["cfg.pipX"], let value = Double(raw), value.isFinite {
+            config.pipCenter.x = CGFloat(min(max(value, 0.0), 1.0)); configChanged = true
+        }
+        if let raw = payload["cfg.pipY"], let value = Double(raw), value.isFinite {
+            config.pipCenter.y = CGFloat(min(max(value, 0.0), 1.0)); configChanged = true
+        }
+        if let raw = payload["cfg.pipWidth"], let value = Double(raw), value.isFinite { config.pipWidth = CGFloat(min(max(value, 0.16), 0.9)); configChanged = true }
+        if let raw = payload["cfg.pipRatio"], let value = PiPRatio(rawValue: raw) { config.pipRatio = value; configChanged = true }
+        if let raw = payload["cfg.pipShape"], let value = PiPShape(rawValue: raw) { config.pipShape = value; configChanged = true }
+        if let raw = payload["cfg.pipCorner"], let value = Double(raw), value.isFinite { config.pipCorner = CGFloat(min(max(value, 0.0), 0.5)); configChanged = true }
+        if let raw = payload["cfg.pipBorder"], let value = Double(raw), value.isFinite { config.pipBorder = CGFloat(min(max(value, 0.0), 8.0)); configChanged = true }
+        if let raw = payload["cfg.pipOpacity"], let value = Double(raw), value.isFinite { config.pipOpacity = CGFloat(min(max(value, 0.0), 1.0)); configChanged = true }
+        if let raw = payload["cfg.pipSnap"], let value = Bool(raw) { config.pipSnap = value; configChanged = true }
+        if let raw = payload["cfg.splitRatio"], let value = Double(raw), value.isFinite { config.splitRatio = CGFloat(min(max(value, 0.05), 0.95)); configChanged = true }
+        if let raw = payload["cfg.mirrorFront"], let value = Bool(raw) { config.mirrorFront = value; configChanged = true }
+        if let raw = payload["cfg.filter"], let value = FilterKind(rawValue: raw) { config.filter = value; configChanged = true }
+        if let raw = payload["cfg.filterIntensity"], let value = Double(raw), value.isFinite { config.filterIntensity = CGFloat(min(max(value, 0.0), 1.0)); configChanged = true }
+        if let raw = payload["cfg.resolution"], let value = ResolutionOption(rawValue: raw) { config.resolution = value; configChanged = true }
+        if let raw = payload["cfg.fps"], let value = Int(raw) { config.fps = min(max(value, 15), 60); configChanged = true }
+        if let raw = payload["cfg.outputMode"], let value = OutputMode(rawValue: raw) { config.outputMode = value; configChanged = true }
+        if let raw = payload["cfg.livePhoto"], let value = Bool(raw) { config.livePhoto = value; configChanged = true }
+        if let raw = payload["cfg.liveMotion"], let value = LiveMotionSource(rawValue: raw) { config.liveMotion = value; configChanged = true }
+        if let raw = payload["cfg.lowLight"], let value = Bool(raw) { config.lowLight = value; configChanged = true }
+        if let raw = payload["cfg.stabilization"], let value = Bool(raw) { config.stabilization = value; configChanged = true }
+        if let raw = payload["cfg.showGrid"], let value = Bool(raw) { config.showGrid = value; configChanged = true }
+        if configChanged, config != cameraManager.cfg { cameraManager.cfg = config }
+
+        if let raw = payload["captureMode"], let value = CaptureMode(rawValue: raw) {
+            cameraManager.captureMode = value
+        }
+        if let raw = payload["timerSeconds"], let value = Int(raw) {
+            cameraManager.timerSeconds = min(max(value, 0), 60)
+        }
+        if let raw = payload["flashEnabled"], let value = Bool(raw) {
+            cameraManager.flashEnabled = value
+        }
+        if let raw = payload["paramTarget"], let value = Int(raw) {
+            cameraManager.paramTarget = value == 1 ? 1 : 0
+        }
+
+        var states = cameraManager.slotStates
+        var changedSlots = Set<Int>()
+        for slot in 0..<min(states.count, 2) {
+            let prefix = "slot.\(slot)."
+            var state = states[slot]
+            if let raw = payload[prefix + "zoom"], let value = Double(raw), value.isFinite { state.zoom = CGFloat(max(value, 1)); changedSlots.insert(slot) }
+            if let raw = payload[prefix + "exposureBias"], let value = Float(raw), value.isFinite { state.exposureBias = value; changedSlots.insert(slot) }
+            if let raw = payload[prefix + "manualExposure"], let value = Bool(raw) { state.manualExposure = value; changedSlots.insert(slot) }
+            if let raw = payload[prefix + "iso"], let value = Float(raw), value.isFinite { state.iso = min(max(value, 25), 6400); changedSlots.insert(slot) }
+            if let raw = payload[prefix + "shutter"], let value = Double(raw), value.isFinite { state.shutter = min(max(value, 0), 1); changedSlots.insert(slot) }
+            if let raw = payload[prefix + "manualWB"], let value = Bool(raw) { state.manualWB = value; changedSlots.insert(slot) }
+            if let raw = payload[prefix + "temperature"], let value = Float(raw), value.isFinite { state.temperature = min(max(value, 2000), 12000); changedSlots.insert(slot) }
+            if let raw = payload[prefix + "tint"], let value = Float(raw), value.isFinite { state.tint = min(max(value, -150), 150); changedSlots.insert(slot) }
+            if let raw = payload[prefix + "manualFocus"], let value = Bool(raw) { state.manualFocus = value; changedSlots.insert(slot) }
+            if let raw = payload[prefix + "lensPosition"], let value = Float(raw), value.isFinite { state.lensPosition = min(max(value, 0), 1); changedSlots.insert(slot) }
+            if let raw = payload[prefix + "locked"], let value = Bool(raw) { state.locked = value; changedSlots.insert(slot) }
+            states[slot] = state
+        }
+        if !changedSlots.isEmpty {
+            cameraManager.slotStates = states
+            for slot in changedSlots.sorted() {
+                cameraManager.setZoom(slot: slot, factor: states[slot].zoom)
+                cameraManager.applyFocus(slot)
+                cameraManager.applyExposure(slot)
+                cameraManager.applyWhiteBalance(slot)
+            }
+        }
     }
 
     func stopVideo(notifyPeer: Bool = true, endActivity: Bool = true) {
@@ -174,9 +497,20 @@ final class WirelessMonitorSession: ObservableObject {
         if endActivity {
             Task { @MainActor in await MonitorLiveActivityManager.shared.stop() }
         }
-        guard mode != .idle || rtc.remoteVideoTrack != nil else { return }
+        guard mode != .idle || rtc.remoteVideoTrack != nil else {
+            // Nothing is on screen, but the transport can still hold half a session: an offer the
+            // peer sent that was never accepted, and its queued ICE candidates. If they survived,
+            // the next "接收画面" would consume that stale offer and show a black screen.
+            rtc.stop()
+            return
+        }
         let wasReceiving = mode == .receiving
         let wasSending = mode == .sending
+        if wasSending {
+            // Do not let any transient sharing message reappear after the session stops.
+            cameraManager?.toast = nil
+            endRemoteBurstIfNeeded()
+        }
         cameraManager?.compositedFrameSource.setSink(nil)
         if wasReceiving {
             cameraManager?.setLocalCameraCaptureSuspended(false)
@@ -217,371 +551,221 @@ final class WirelessMonitorSession: ObservableObject {
         if mode == .receiving {
             cameraManager?.setLocalCameraCaptureSuspended(false)
         }
-        if mode == .sending { restoreWirelessStreamPreset() }
+        if mode == .sending {
+            cameraManager?.toast = nil
+            endRemoteBurstIfNeeded()
+            restoreWirelessStreamPreset()
+        }
         mode = .idle
         remoteVideoFrameReceived = false
+    }
+
+    /// A remote "burst-start" is normally ended by a "burst-stop". If the link drops in between,
+    /// that message never arrives, so end the burst here instead of letting it run to its limit.
+    private func endRemoteBurstIfNeeded() {
+        guard remoteBurstInProgress else { return }
+        remoteBurstInProgress = false
+        cameraManager?.stopBurstCapture()
     }
 }
 
 struct WirelessMonitorSheet: View {
     @ObservedObject var session: WirelessMonitorSession
+    let onPairingSucceeded: () -> Void
     @EnvironmentObject private var cam: CameraManager
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
-            ScrollView(showsIndicators: false) {
-                VStack(spacing: 16) {
-                    headerCard
-                    connectionStatusCard
-                    nearbyDevicesCard
-                    if let code = session.pairingCode, !session.isSecurelyPaired {
-                        pairingCodeCard(code)
+            List {
+                if let code = session.pairingCode, !session.isSecurelyPaired {
+                    Section("安全匹配") {
+                        VStack(spacing: 14) {
+                            Text(code)
+                                .font(.system(size: 36, weight: .semibold, design: .rounded).monospacedDigit())
+                                .tracking(8)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                                .accessibilityLabel("安全配对验证码 \(code)")
+
+                            Text("确认两台设备显示的验证码一致")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+
+                            Button {
+                                HapticFeedback.play(.success)
+                                session.network.confirmPairing()
+                            } label: {
+                                Text("确认连接")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(session.isSecurelyPaired)
+
+                            Button("拒绝连接", role: .destructive) {
+                                HapticFeedback.play(.button)
+                                session.network.rejectPairing()
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                        .padding(.vertical, 8)
                     }
-                    privacyCard
+                } else {
+                    Section("附近设备") {
+                        if session.nearbyDevices.isEmpty {
+                            HStack(alignment: .top, spacing: 10) {
+                                Image(systemName: searchStatus.contains("失败") || searchStatus.contains("等待网络") ? "exclamationmark.triangle" : "dot.radiowaves.left.and.right")
+                                    .foregroundStyle(searchStatus.contains("失败") ? Color.orange : Color.secondary)
+                                    .frame(width: 20)
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text(searchStatus)
+                                        .foregroundStyle(.primary)
+                                    Text("两台设备请同时打开 DualCam 并连接同一 Wi‑Fi；首次使用时请允许“本地网络”访问。")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.vertical, 8)
+                        } else {
+                            ForEach(session.nearbyDevices) { device in
+                                Button {
+                                    HapticFeedback.play(.button)
+                                    session.network.connect(to: device)
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        Image(systemName: device.name.localizedCaseInsensitiveContains("ipad") ? "ipad.gen2" : "iphone.gen3")
+                                            .font(.system(size: 22))
+                                            .foregroundStyle(Color(uiColor: .systemBlue))
+                                            .frame(width: 32, height: 32)
+
+                                        Text(device.name)
+                                            .foregroundStyle(.primary)
+
+                                        Spacer(minLength: 0)
+
+                                        Image(systemName: "chevron.right")
+                                            .font(.system(size: 12, weight: .semibold))
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(session.isSecurelyPaired)
+                            }
+                        }
+
+                        Button {
+                            HapticFeedback.play(.selection)
+                            session.restartDiscovery()
+                        } label: {
+                            Label("重新搜索", systemImage: "arrow.clockwise")
+                        }
+                        .disabled(session.isSecurelyPaired)
+                    }
                 }
-                .padding(.horizontal, 18)
-                .padding(.top, 12)
-                .padding(.bottom, 28)
-                .frame(maxWidth: 620)
-                .frame(maxWidth: .infinity)
             }
-            .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
-            .navigationTitle("无线互联")
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(Color(uiColor: .systemGroupedBackground))
+            .navigationTitle("连接设备")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("完成") {
-                        HapticFeedback.play(.button)
+                    Button("取消") {
                         session.pairingSheetDidClose()
                         dismiss()
                     }
-                    .fontWeight(.semibold)
                 }
             }
             .tint(Color(uiColor: .systemBlue))
-            .onAppear {
-                session.configure(cameraManager: cam)
-                if session.isSecurelyPaired {
-                    dismiss()
-                } else {
-                    session.startDiscovery()
-                }
-            }
-            .onDisappear {
-                session.pairingSheetDidClose()
-            }
-            .onChange(of: session.pairingCode) { _, code in
-                if code != nil { HapticFeedback.play(.focus) }
-            }
-            .onChange(of: session.isSecurelyPaired) { _, paired in
-                if paired {
-                    HapticFeedback.play(.success)
-                    dismiss()
-                }
-            }
         }
-    }
-
-    private var headerCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .top, spacing: 14) {
-                Image(systemName: "dot.radiowaves.left.and.right")
-                    .font(.system(size: 25, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 58, height: 58)
-                    .background(
-                        LinearGradient(
-                            colors: [
-                                Color(uiColor: .systemBlue),
-                                Color(uiColor: .systemIndigo)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        in: RoundedRectangle(cornerRadius: 19, style: .continuous)
-                    )
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("让两台设备协同取景")
-                        .font(.system(.title3, design: .rounded, weight: .bold))
-                        .foregroundStyle(.primary)
-                    Text("同步 DualCam 实时合成画面")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    Text("双摄 · 画中画 · 滤镜")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(Color(uiColor: .systemBlue))
-                }
-                Spacer(minLength: 0)
-            }
-
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(session.isSecurelyPaired ? Color(uiColor: .systemGreen) : Color(uiColor: .systemOrange))
-                    .frame(width: 8, height: 8)
-                Text(session.isSecurelyPaired ? "安全配对已建立" : "等待设备连接")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                Spacer()
-                Text(session.localDeviceName)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 13)
-            .padding(.vertical, 11)
-            .background(Color(uiColor: .secondarySystemGroupedBackground).opacity(0.76),
-                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        }
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(uiColor: .secondarySystemGroupedBackground),
-                    in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(Color.primary.opacity(0.045), lineWidth: 1)
-        )
-    }
-
-    private var connectionStatusCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            cardHeading("连接状态", subtitle: "网络发现与实时视频链路")
-
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: session.isSecurelyPaired ? "checkmark.shield.fill" : "wifi")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(session.isSecurelyPaired ? Color(uiColor: .systemGreen) : Color(uiColor: .systemBlue))
-                    .frame(width: 38, height: 38)
-                    .background(Color(uiColor: .tertiarySystemGroupedBackground),
-                                in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("本地网络")
-                        .font(.subheadline.weight(.semibold))
-                    Text(session.networkStatusText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 0)
-            }
-
-            Divider()
-
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "video.fill")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Color(uiColor: .systemIndigo))
-                    .frame(width: 38, height: 38)
-                    .background(Color(uiColor: .tertiarySystemGroupedBackground),
-                                in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("实时画面")
-                        .font(.subheadline.weight(.semibold))
-                    Text(session.rtcStatusText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 0)
-            }
-        }
-        .padding(17)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(uiColor: .secondarySystemGroupedBackground),
-                    in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color.primary.opacity(0.045), lineWidth: 1)
-        )
-    }
-
-    private var nearbyDevicesCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline) {
-                cardHeading("附近的设备", subtitle: "选择另一台 DualCam 设备")
-                Spacer()
-                Button {
-                    HapticFeedback.play(.selection)
-                    session.startDiscovery()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Color(uiColor: .systemBlue))
-                        .frame(width: 34, height: 34)
-                        .background(Color(uiColor: .tertiarySystemGroupedBackground), in: Circle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("重新搜索设备")
-            }
-
-            if session.nearbyDevices.isEmpty {
-                VStack(spacing: 11) {
-                    Image(systemName: "iphone.gen3.radiowaves.left.and.right")
-                        .font(.system(size: 25, weight: .regular))
-                        .foregroundStyle(Color(uiColor: .systemBlue))
-                        .frame(width: 62, height: 62)
-                        .background(Color(uiColor: .systemBlue).opacity(0.09), in: Circle())
-                    Text("正在寻找附近设备")
-                        .font(.subheadline.weight(.semibold))
-                    Text("请让另一台设备也打开无线互联，并允许 DualCam 访问本地网络。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: 300)
-                    ProgressView()
-                        .tint(Color(uiColor: .systemBlue))
-                        .padding(.top, 2)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 20)
+        .presentationDragIndicator(.visible)
+        .onAppear {
+            session.configure(cameraManager: cam)
+            if session.isSecurelyPaired {
+                onPairingSucceeded()
+                dismiss()
             } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(session.nearbyDevices.enumerated()), id: \.element.id) { index, device in
-                        HStack(spacing: 12) {
-                            Image(systemName: "iphone.gen3")
-                                .font(.system(size: 20, weight: .medium))
-                                .foregroundStyle(Color(uiColor: .systemBlue))
-                                .frame(width: 46, height: 46)
-                                .background(Color(uiColor: .tertiarySystemGroupedBackground),
-                                            in: RoundedRectangle(cornerRadius: 15, style: .continuous))
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(device.name)
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(.primary)
-                                Text("DualCam · 附近可用")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer(minLength: 4)
-                            Button {
-                                HapticFeedback.play(.button)
-                                session.network.connect(to: device)
-                            } label: {
-                                Text("连接")
-                                    .font(.subheadline.weight(.semibold))
-                                    .padding(.horizontal, 15)
-                                    .padding(.vertical, 8)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                            .disabled(session.isSecurelyPaired)
-                        }
-                        .padding(.vertical, 10)
+                session.startDiscovery()
+            }
+        }
+        .onDisappear {
+            session.pairingSheetDidClose()
+        }
+        .onChange(of: session.pairingCode) { _, code in
+            if code != nil { HapticFeedback.play(.focus) }
+        }
+        .onChange(of: session.isSecurelyPaired) { _, paired in
+            if paired {
+                HapticFeedback.play(.success)
+                onPairingSucceeded()
+                dismiss()
+            }
+        }
+    }
 
-                        if index < session.nearbyDevices.count - 1 {
-                            Divider().padding(.leading, 58)
-                        }
+    private var searchStatus: String {
+        let value = session.networkStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.isEmpty || value == "准备搜索附近设备" {
+            return "正在搜索…"
+        }
+        return value
+    }
+}
+
+/// Shown only after the device-search and safety-match sheet has closed.
+struct WirelessMonitorRolePickerSheet: View {
+    let onReceive: () -> Void
+    let onShare: () -> Void
+    let onDisconnect: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("共享方式") {
+                    roleRow("接收画面", systemImage: "rectangle.inset.filled.and.person.filled", action: onReceive)
+                    roleRow("共享本机画面", systemImage: "dot.radiowaves.left.and.right", action: onShare)
+                }
+
+                Section {
+                    Button(role: .destructive, action: onDisconnect) {
+                        Label("断开连接", systemImage: "xmark.circle")
                     }
                 }
             }
-        }
-        .padding(17)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(uiColor: .secondarySystemGroupedBackground),
-                    in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color.primary.opacity(0.045), lineWidth: 1)
-        )
-    }
-
-    private func pairingCodeCard(_ code: String) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 10) {
-                Image(systemName: "lock.shield.fill")
-                    .font(.system(size: 19, weight: .semibold))
-                    .foregroundStyle(Color(uiColor: .systemBlue))
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("验证安全连接")
-                        .font(.headline)
-                    Text("两台设备都要显示相同验证码")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(Color(uiColor: .systemGroupedBackground))
+            .navigationTitle("选择共享方式")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("取消") { dismiss() }
                 }
             }
-
-            Text(code)
-                .font(.system(size: 34, weight: .semibold, design: .rounded).monospacedDigit())
-                .tracking(8)
-                .foregroundStyle(.primary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 17)
-                .background(Color(uiColor: .tertiarySystemGroupedBackground),
-                            in: RoundedRectangle(cornerRadius: 17, style: .continuous))
-                .accessibilityLabel("安全配对验证码 \(code)")
-
-            Text("请亲自核对两台设备上的数字。只有完全一致时才确认；不一致就拒绝连接。")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Button {
-                HapticFeedback.play(.success)
-                session.network.confirmPairing()
-            } label: {
-                Label("验证码一致，确认连接", systemImage: "checkmark.shield.fill")
-                    .font(.body.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 5)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(session.isSecurelyPaired)
-
-            Button(role: .destructive) {
-                HapticFeedback.play(.button)
-                session.network.rejectPairing()
-            } label: {
-                Text("拒绝此次连接")
-                    .font(.subheadline.weight(.medium))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 3)
-            }
-            .buttonStyle(.plain)
+            .tint(Color(uiColor: .systemBlue))
         }
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(uiColor: .secondarySystemGroupedBackground),
-                    in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color(uiColor: .systemBlue).opacity(0.22), lineWidth: 1)
-        )
     }
 
-    private var privacyCard: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "hand.raised.fingers.spread.fill")
-                .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(Color(uiColor: .systemGreen))
-                .frame(width: 36, height: 36)
-                .background(Color(uiColor: .systemGreen).opacity(0.10),
-                            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            VStack(alignment: .leading, spacing: 5) {
-                Text("端到端保护你的画面")
-                    .font(.subheadline.weight(.semibold))
-                Text("确认配对后，选择共享本机合成画面或全屏接收画面。视频使用 WebRTC DTLS-SRTP 加密传输，不启用麦克风音频。关闭此窗口不会结束已建立的会话。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+    /// Full-row standard button: the whole 44 pt row is the hit target, not just the label.
+    private func roleRow(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: systemImage)
+                    .frame(width: 24)
+                Text(title)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.tertiary)
             }
-            Spacer(minLength: 0)
-        }
-        .padding(15)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(uiColor: .secondarySystemGroupedBackground).opacity(0.70),
-                    in: RoundedRectangle(cornerRadius: 19, style: .continuous))
-    }
-
-    private func cardHeading(_ title: String, subtitle: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.headline)
-                .foregroundStyle(.primary)
-            Text(subtitle)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            .foregroundStyle(Color(uiColor: .systemBlue))
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
         }
     }
 }
