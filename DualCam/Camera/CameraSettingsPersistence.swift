@@ -10,6 +10,7 @@ enum CameraSettingsPersistence {
         var flashEnabled: Bool
         var timerSeconds: Int
         var paramTarget: Int
+        var selectedComboTitle: String?
     }
 
     private static let key = "dualcam.cameraSettings.snapshot"
