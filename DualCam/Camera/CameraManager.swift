@@ -114,10 +114,15 @@ private final class CaptureCuePlayer {
 
 final class CameraManager: NSObject, ObservableObject {
 
+    private static let launchSettings = CameraSettingsPersistence.launchSettings
+    private var settingsSaveWorkItem: DispatchWorkItem?
+
     // MARK: - 界面状态（只在主线程修改）
 
-    @Published var cfg = Config() { didSet { cfgDidChange(oldValue) } }
-    @Published var slotStates: [SlotState] = [SlotState(), SlotState()]
+    @Published var cfg = launchSettings?.config ?? Config() { didSet { cfgDidChange(oldValue) } }
+    @Published var slotStates = launchSettings?.slotStates ?? [SlotState(), SlotState()] {
+        didSet { scheduleSettingsPersistence() }
+    }
     @Published var slotInfos: [SlotInfo] = [SlotInfo(), SlotInfo()]
     @Published var combos: [LensCombo] = []
     @Published var comboIndex = 0
@@ -138,14 +143,18 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var recordSeconds = 0
     @Published var countdown: Int? = nil
     @Published var screenFlash = false
-    @Published var flashEnabled = false
-    @Published var timerSeconds = 0
+    @Published var flashEnabled = launchSettings?.flashEnabled ?? false {
+        didSet { scheduleSettingsPersistence() }
+    }
+    @Published var timerSeconds = launchSettings?.timerSeconds ?? 0 {
+        didSet { scheduleSettingsPersistence() }
+    }
     @Published var toast: String? = nil
     @Published var outputLabel = ""
     @Published var effectiveFPS = 30
     @Published var filterThumbs: [String: UIImage] = [:]
     @Published var thumbsActive = false { didSet { setSharedThumbs(thumbsActive) } }
-    @Published var paramTarget = 0
+    @Published var paramTarget = launchSettings?.paramTarget ?? 0 { didSet { scheduleSettingsPersistence() } }
     @Published var focusMarker: FocusMarker? = nil
     @Published var zoomStops: [ZoomStop] = []
     @Published var lastThumb: UIImage? = nil
@@ -396,13 +405,17 @@ final class CameraManager: NSObject, ObservableObject {
             stops.append(ZoomStop(value: target, spec: spec, zoom: z))
         }
 
-        currentCombo = first
+        let savedComboTitle = Self.launchSettings?.selectedComboTitle
+        let restoredIndex = found.firstIndex(where: { $0.title == savedComboTitle }) ?? 0
+        currentCombo = found[restoredIndex]
         DispatchQueue.main.async {
             self.combos = found
-            self.comboIndex = 0
+            self.comboIndex = restoredIndex
             self.zoomStops = stops
         }
-        rebuild(resetStates: true)
+        // Keep the restored per-lens settings on the first launch; the old unconditional reset
+        // discarded the user's last ISO, focus, exposure and zoom values every time the app opened.
+        rebuild(resetStates: false)
     }
 
     // MARK: - 会话构建
@@ -695,7 +708,29 @@ final class CameraManager: NSObject, ObservableObject {
         return true
     }
 
+    private func scheduleSettingsPersistence() {
+        settingsSaveWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            let snapshot = CameraSettingsPersistence.Snapshot(
+                version: 1,
+                config: self.cfg,
+                slotStates: self.slotStates,
+                flashEnabled: self.flashEnabled,
+                timerSeconds: self.timerSeconds,
+                paramTarget: self.paramTarget,
+                selectedComboTitle: self.combos.indices.contains(self.comboIndex)
+                    ? self.combos[self.comboIndex].title
+                    : Self.launchSettings?.selectedComboTitle
+            )
+            CameraSettingsPersistence.save(snapshot)
+        }
+        settingsSaveWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+    }
+
     private func cfgDidChange(_ old: Config) {
+        scheduleSettingsPersistence()
         lock.lock()
         sharedCfg = cfg
         lock.unlock()
