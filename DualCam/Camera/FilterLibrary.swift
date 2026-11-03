@@ -1,6 +1,6 @@
 import CoreImage
 
-enum FilterKind: String, CaseIterable, Identifiable {
+enum FilterKind: String, CaseIterable, Identifiable, Codable {
     case original = "原片"
     case vivid = "鲜艳"
     case warm = "暖阳"
