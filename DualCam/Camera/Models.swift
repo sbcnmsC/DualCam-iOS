@@ -1,19 +1,19 @@
 import AVFoundation
 import SwiftUI
 
-enum LayoutMode: String, CaseIterable, Identifiable {
+enum LayoutMode: String, CaseIterable, Identifiable, Codable {
     case pip = "画中画"
     case split = "分屏"
     var id: String { rawValue }
 }
 
-enum PiPShape: String, CaseIterable, Identifiable {
+enum PiPShape: String, CaseIterable, Identifiable, Codable {
     case rounded = "圆角"
     case circle = "圆形"
     var id: String { rawValue }
 }
 
-enum PiPRatio: String, CaseIterable, Identifiable {
+enum PiPRatio: String, CaseIterable, Identifiable, Codable {
     case r34 = "3:4"
     case r11 = "1:1"
     case r43 = "4:3"
@@ -30,7 +30,7 @@ enum PiPRatio: String, CaseIterable, Identifiable {
     }
 }
 
-enum CanvasAspect: String, CaseIterable, Identifiable {
+enum CanvasAspect: String, CaseIterable, Identifiable, Codable {
     case r916 = "9:16"
     case r34 = "3:4"
     case r11 = "1:1"
@@ -51,7 +51,7 @@ enum CanvasAspect: String, CaseIterable, Identifiable {
     }
 }
 
-enum ResolutionOption: String, CaseIterable, Identifiable {
+enum ResolutionOption: String, CaseIterable, Identifiable, Codable {
     case p720 = "720p"
     case p1080 = "1080p"
     case maximum = "最高"
@@ -67,7 +67,7 @@ enum CaptureMode: String {
 /// - original：每颗镜头各存一份原始画面（不镜像、不加滤镜、不裁切、不合成）
 /// - composite：只存预览里看到的合成画面（画中画 / 分屏 + 滤镜）
 /// - both：两者都存
-enum OutputMode: String, CaseIterable, Identifiable {
+enum OutputMode: String, CaseIterable, Identifiable, Codable {
     case original = "原图直出"
     case composite = "合成画面"
     case both = "两者都存"
@@ -80,7 +80,7 @@ enum OutputMode: String, CaseIterable, Identifiable {
 /// - composite：合成画面（画中画 / 分屏 + 滤镜），和静态图一样
 /// - main：只取主画面那颗镜头
 /// - secondary：只取副画面（小窗）那颗镜头，用于在系统相册里长按查看小窗
-enum LiveMotionSource: String, CaseIterable, Identifiable {
+enum LiveMotionSource: String, CaseIterable, Identifiable, Codable {
     case composite = "合成画面"
     case main = "主摄"
     case secondary = "副摄（小窗）"
@@ -129,7 +129,7 @@ enum PanelTab: String, CaseIterable, Identifiable {
 }
 
 /// 所有会影响合成画面和采集的设置。UI 修改它，渲染线程读取它的快照。
-struct Config: Equatable {
+struct Config: Equatable, Codable {
     // 布局
     var layout: LayoutMode = .pip
     var swapped = false
@@ -165,7 +165,7 @@ struct Config: Equatable {
 }
 
 /// 每个镜头（A / B 两个槽位）各自记住的参数。
-struct SlotState: Equatable {
+struct SlotState: Equatable, Codable {
     var zoom: CGFloat = 1                // 设备 videoZoomFactor
     var exposureBias: Float = 0
     var manualExposure = false
