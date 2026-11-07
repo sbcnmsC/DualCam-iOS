@@ -1264,15 +1264,16 @@ struct PiPOverlay: View {
                 dragPlaceholder(in: rect)
             } else {
                 Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        guard !cam.isRecording && !cam.isCapturingPhoto else { return }
-                        cam.swapCameras()
-                    }
             }
 
+            // Keep tap, move and pinch on one interaction plane. A separate transparent
+            // gesture sibling can swallow taps before the camera-swap handler receives them.
             Color.clear
                 .contentShape(Rectangle())
+                .onTapGesture {
+                    guard !cam.isRecording && !cam.isCapturingPhoto else { return }
+                    cam.swapCameras()
+                }
                 .gesture(moveGesture)
                 .simultaneousGesture(pinchGesture)
 
@@ -1285,7 +1286,10 @@ struct PiPOverlay: View {
                 .background(Circle().fill(Color.black.opacity(0.45)))
                 .padding(4)
                 .contentShape(Circle())
-                .gesture(resizeGesture)
+                // The handle must win over the full-size drag/pinch interaction plane.
+                // Otherwise the initial touch may start moving the whole PiP instead of resizing it.
+                .highPriorityGesture(resizeGesture)
+                .accessibilityLabel("调整画中画大小")
         }
         // One measured frame and one position for the image and its resize control.
         .frame(width: rect.width, height: rect.height)
