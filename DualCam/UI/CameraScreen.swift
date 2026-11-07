@@ -1256,7 +1256,7 @@ struct PiPOverlay: View {
 
     var body: some View {
         let rect = previewRect
-        ZStack(alignment: .bottomTrailing) {
+        ZStack {
             if isDraggingPiP {
                 dragPlaceholder(in: rect)
             } else {
@@ -1272,7 +1272,11 @@ struct PiPOverlay: View {
                 .contentShape(Rectangle())
                 .gesture(moveGesture)
                 .simultaneousGesture(pinchGesture)
-
+        }
+        // The PiP container alone owns the measured rectangle. The resize control is
+        // attached as an overlay afterwards, so its hit area cannot affect container sizing.
+        .frame(width: rect.width, height: rect.height)
+        .overlay(alignment: .bottomTrailing) {
             Image(systemName: "arrow.up.left.and.arrow.down.right")
                 .rotationEffect(.degrees(iconRotationDegrees))
                 .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
@@ -1282,12 +1286,13 @@ struct PiPOverlay: View {
                 .background(Circle().fill(Color.black.opacity(0.45)))
                 .padding(4)
                 .contentShape(Circle())
-                .gesture(resizeGesture)
+                .highPriorityGesture(resizeGesture)
+                .accessibilityLabel("缩放小窗")
         }
-        .frame(width: rect.width, height: rect.height)
         .position(x: rect.midX, y: rect.midY)
         .offset(dragTranslation)
-        .animation(.smooth(duration: 0.26), value: size)
+        // Do not animate this overlay's geometry independently from PreviewStage.
+        // The parent preview already animates aspect-ratio changes as one synchronized surface.
     }
 
     @ViewBuilder
