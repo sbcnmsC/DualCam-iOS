@@ -8,6 +8,7 @@ on:
       - feature/persistent-camera-settings
       - perf/high-res-photo-speed-2026-11-07
       - fix/pip-preview-overlay-2026-11-07 # PiP preview and gesture fixes
+      - fix/pip-gesture-persistence-2026-11-07 # PiP gesture and settings migration fixes
   workflow_dispatch:
 
 permissions:
