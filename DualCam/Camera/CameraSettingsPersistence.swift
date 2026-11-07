@@ -22,18 +22,46 @@ enum CameraSettingsPersistence {
             return nil
         }
 
+        var didMigrate = false
         switch snapshot.version {
         case 1:
-            // Repair only the persisted PiP width. Preserve all other camera preferences.
+            // Version 1 could contain the invalid PiP dimensions seen in early builds.
             snapshot.config.pipWidth = 0.32
-            snapshot.version = 2
-            save(snapshot)
-            return snapshot
-        case 2:
-            return snapshot
+            didMigrate = true
+        case 2, 3:
+            break
         default:
             return nil
         }
+
+        // Sanitize corrupted values once, without resetting valid user-customized size/position.
+        let width = snapshot.config.pipWidth
+        if !width.isFinite || width < 0.16 || width > 0.90 {
+            snapshot.config.pipWidth = 0.32
+            didMigrate = true
+        }
+
+        let center = snapshot.config.pipCenter
+        if !center.x.isFinite || !center.y.isFinite {
+            snapshot.config.pipCenter = CGPoint(x: 0.76, y: 0.20)
+            didMigrate = true
+        } else {
+            let clamped = CGPoint(
+                x: min(max(center.x, 0), 1),
+                y: min(max(center.y, 0), 1)
+            )
+            if clamped != center {
+                snapshot.config.pipCenter = clamped
+                didMigrate = true
+            }
+        }
+
+        if snapshot.version != 3 {
+            snapshot.version = 3
+            didMigrate = true
+        }
+        if didMigrate { save(snapshot) }
+        return snapshot
     }
 
     static func save(_ snapshot: Snapshot) {
