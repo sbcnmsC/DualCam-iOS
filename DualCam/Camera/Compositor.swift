@@ -38,42 +38,20 @@ enum Compositor {
         return aspect > 1 ? 1 / aspect : 1
     }
 
-    /// 小窗归一化尺寸。UI 覆盖层、实时合成、静态照片和相册点击区域都使用这一套尺寸。
-    static func pipSizeNormalized(cfg: Config) -> CGSize {
-        let ratio: CGFloat = cfg.pipShape == .circle ? 1 : cfg.pipRatio.value
-        let canvasAspect = max(cfg.aspectRatio.isFinite ? cfg.aspectRatio : 9.0 / 16.0, 0.1)
-        let requestedWidth = cfg.pipWidth.isFinite ? cfg.pipWidth : 0.32
-        var width = min(max(requestedWidth, 0.1), 0.95) * pipWidthScale(aspect: canvasAspect)
-        var height = width * canvasAspect / max(ratio, 0.1)
-        if height > 0.95 {
-            let scale = 0.95 / height
-            width *= scale
-            height *= scale
-        }
-        return CGSize(width: width, height: height)
-    }
-
-    /// 限制小窗中心点，避免配置值越界后 UI、拖动起点和合成画面各自使用不同的位置。
-    static func clampedPiPCenter(_ center: CGPoint, cfg: Config) -> CGPoint {
-        let size = pipSizeNormalized(cfg: cfg)
-        let x = center.x.isFinite ? center.x : 0.76
-        let y = center.y.isFinite ? center.y : 0.20
-        return CGPoint(
-            x: min(max(x, size.width / 2), 1 - size.width / 2),
-            y: min(max(y, size.height / 2), 1 - size.height / 2)
-        )
-    }
-
     /// 小窗矩形。圆形强制 1:1，并保证整体落在画布内。
     static func pipRectNormalized(cfg: Config) -> CGRect {
-        let size = pipSizeNormalized(cfg: cfg)
-        let center = clampedPiPCenter(cfg.pipCenter, cfg: cfg)
-        return CGRect(
-            x: center.x - size.width / 2,
-            y: center.y - size.height / 2,
-            width: size.width,
-            height: size.height
-        )
+        let ratio: CGFloat = cfg.pipShape == .circle ? 1 : cfg.pipRatio.value
+        let canvasAspect = cfg.aspectRatio
+        var w = min(max(cfg.pipWidth, 0.1), 0.95) * pipWidthScale(aspect: canvasAspect)
+        var h = w * canvasAspect / ratio
+        if h > 0.95 {
+            let k = 0.95 / h
+            w *= k
+            h *= k
+        }
+        let cx = min(max(cfg.pipCenter.x, w / 2), 1 - w / 2)
+        let cy = min(max(cfg.pipCenter.y, h / 2), 1 - h / 2)
+        return CGRect(x: cx - w / 2, y: cy - h / 2, width: w, height: h)
     }
 
     /// 主画面和副画面各自占据的区域。
