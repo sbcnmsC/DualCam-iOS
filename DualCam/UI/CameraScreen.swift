@@ -1285,13 +1285,21 @@ struct PiPOverlay: View {
                 .background(Circle().fill(Color.black.opacity(0.45)))
                 .padding(4)
                 .contentShape(Circle())
-                .gesture(resizeGesture)
+                .highPriorityGesture(resizeGesture)
+                .accessibilityLabel("调整画中画大小")
         }
         // One measured frame and one position for the image and its resize control.
         .frame(width: rect.width, height: rect.height)
         .position(x: rect.midX, y: rect.midY)
         // The same transform moves both siblings together.
         .offset(dragTranslation)
+        // Direct manipulation must track the finger 1:1; implicit animation here
+        // creates the visible lag/jitter that was reported during fast dragging.
+        .transaction { transaction in
+            if isDraggingPiP || isResizingPiP {
+                transaction.animation = nil
+            }
+        }
         .animation(.smooth(duration: 0.26), value: size)
     }
 
@@ -1349,16 +1357,19 @@ struct PiPOverlay: View {
                 )
             }
             .onEnded { _ in
-                if let origin = dragOriginCenter {
-                    var next = cam.cfg
-                    let candidate = CGPoint(
-                        x: origin.x + dragTranslation.width / max(size.width, 1),
-                        y: origin.y + dragTranslation.height / max(size.height, 1)
-                    )
-                    next.pipCenter = boundedCenter(candidate, config: next)
-                    cam.cfg = next
-                    cam.snapPiP()
-                }
+                // The full-area drag recognizer can also receive the end of a child
+                // resize/pinch sequence. Only finalize when this recognizer actually
+                // started moving the PiP; otherwise it can reset another gesture's state.
+                guard let origin = dragOriginCenter else { return }
+
+                var next = cam.cfg
+                let candidate = CGPoint(
+                    x: origin.x + dragTranslation.width / max(size.width, 1),
+                    y: origin.y + dragTranslation.height / max(size.height, 1)
+                )
+                next.pipCenter = boundedCenter(candidate, config: next)
+                cam.cfg = next
+                cam.snapPiP()
 
                 dragTranslation = .zero
                 dragOriginCenter = nil
