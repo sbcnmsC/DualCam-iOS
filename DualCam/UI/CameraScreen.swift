@@ -1236,82 +1236,71 @@ struct PiPOverlay: View {
     var iconRotationDegrees: CGFloat = 0
 
     @State private var dragOriginCenter: CGPoint? = nil
-    @State private var dragCenter: CGPoint? = nil
+    @State private var dragTranslation: CGSize = .zero
     @State private var isDraggingPiP = false
     @State private var pinchStart: CGFloat? = nil
     @State private var resizeStart: CGFloat? = nil
     @State private var isResizingPiP = false
 
-    private var displayConfig: Config {
-        var config = cam.cfg
-        if let dragCenter {
-            config.pipCenter = Compositor.clampedPiPCenter(dragCenter, cfg: config)
-        }
-        return config
+    private var normalizedRect: CGRect {
+        Compositor.pipRectNormalized(cfg: cam.cfg)
     }
 
-    private var pipRect: CGRect {
-        let normalized = Compositor.pipRectNormalized(cfg: displayConfig)
-        return CGRect(
-            x: normalized.minX * size.width,
-            y: normalized.minY * size.height,
-            width: normalized.width * size.width,
-            height: normalized.height * size.height
-        )
+    private var previewRect: CGRect {
+        let n = normalizedRect
+        return CGRect(x: n.minX * size.width,
+                      y: n.minY * size.height,
+                      width: n.width * size.width,
+                      height: n.height * size.height)
     }
 
     var body: some View {
-        let rect = pipRect
-        ZStack(alignment: .topLeading) {
-            ZStack(alignment: .bottomTrailing) {
-                if isDraggingPiP {
-                    dragPlaceholder
-                }
-
-                // One hit surface owns tap-to-swap, move and pinch. This avoids a transparent
-                // drag layer sitting above (and swallowing) the previous sibling's tap target.
+        let rect = previewRect
+        ZStack(alignment: .bottomTrailing) {
+            if isDraggingPiP {
+                dragPlaceholder(in: rect)
+            } else {
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        guard !isDraggingPiP, !cam.isRecording, !cam.isCapturingPhoto else { return }
+                        guard !cam.isRecording && !cam.isCapturingPhoto else { return }
                         cam.swapCameras()
                     }
-                    .simultaneousGesture(moveGesture)
-                    .simultaneousGesture(pinchGesture)
-
-                Image(systemName: "arrow.up.left.and.arrow.down.right")
-                    .rotationEffect(.degrees(iconRotationDegrees))
-                    .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(Color.white)
-                    .frame(width: 24, height: 24)
-                    .background(Circle().fill(Color.black.opacity(0.45)))
-                    .padding(4)
-                    .contentShape(Circle())
-                    .accessibilityLabel("调整小窗大小")
-                    .highPriorityGesture(resizeGesture)
             }
-            .frame(width: rect.width, height: rect.height)
-            .position(x: rect.midX, y: rect.midY)
+
+            Color.clear
+                .contentShape(Rectangle())
+                .gesture(moveGesture)
+                .simultaneousGesture(pinchGesture)
+
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .rotationEffect(.degrees(iconRotationDegrees))
+                .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(Color.white)
+                .frame(width: 24, height: 24)
+                .background(Circle().fill(Color.black.opacity(0.45)))
+                .padding(4)
+                .contentShape(Circle())
+                .gesture(resizeGesture)
         }
-        // PiP position is expressed in full-preview normalized coordinates. Keep this overlay's
-        // bounds identical to PreviewStage so position(), gestures and the renderer share an origin.
-        .frame(width: size.width, height: size.height, alignment: .topLeading)
-        .clipped()
+        .frame(width: rect.width, height: rect.height)
+        .position(x: rect.midX, y: rect.midY)
+        .offset(dragTranslation)
         .animation(.smooth(duration: 0.26), value: size)
     }
 
     @ViewBuilder
-    private var dragPlaceholder: some View {
-        let corner = min(pipRect.width, pipRect.height) * min(max(displayConfig.pipCorner, 0), 0.5)
-        let border = max(0, displayConfig.pipBorder / 390.0 * size.width)
+    private func dragPlaceholder(in rect: CGRect) -> some View {
+        let corner = min(rect.width, rect.height) * min(max(cam.cfg.pipCorner, 0), 0.5)
+        let border = max(0, cam.cfg.pipBorder / 390.0 * size.width)
         let symbol = Image(systemName: "arrow.up.left.and.arrow.down.right")
             .rotationEffect(.degrees(iconRotationDegrees))
             .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
             .font(.system(size: 18))
             .foregroundStyle(.white.opacity(0.85))
 
-        if displayConfig.pipShape == .circle {
+        if cam.cfg.pipShape == .circle {
             Circle()
                 .fill(.ultraThinMaterial)
                 .overlay(Circle().fill(Color.white.opacity(0.12)))
@@ -1328,37 +1317,48 @@ struct PiPOverlay: View {
         }
     }
 
+    private func boundedCenter(_ candidate: CGPoint, config: Config) -> CGPoint {
+        let n = Compositor.pipRectNormalized(cfg: config)
+        return CGPoint(
+            x: min(max(candidate.x, n.width / 2), 1 - n.width / 2),
+            y: min(max(candidate.y, n.height / 2), 1 - n.height / 2)
+        )
+    }
+
     private var moveGesture: some Gesture {
-        DragGesture(minimumDistance: 4, coordinateSpace: .local)
+        DragGesture(minimumDistance: 4, coordinateSpace: .global)
             .onChanged { value in
-                // Pinch and handle-resize own their gestures; never let the same touch sequence
-                // also move the PiP center.
                 guard pinchStart == nil, !isResizingPiP else { return }
                 if dragOriginCenter == nil {
                     guard !cam.isRecording && !cam.isCapturingPhoto else { return }
-                    dragOriginCenter = Compositor.clampedPiPCenter(cam.cfg.pipCenter, cfg: cam.cfg)
+                    dragOriginCenter = CGPoint(x: normalizedRect.midX, y: normalizedRect.midY)
                     isDraggingPiP = true
                     cam.setPiPDragPreviewActive(true)
                     HapticFeedback.play(.button)
                 }
-                guard let origin = dragOriginCenter else { return }
-                let candidate = CGPoint(
-                    x: origin.x + value.translation.width / max(size.width, 1),
-                    y: origin.y + value.translation.height / max(size.height, 1)
+
+                let base = previewRect
+                dragTranslation = CGSize(
+                    width: min(max(value.translation.width, -base.minX), size.width - base.maxX),
+                    height: min(max(value.translation.height, -base.minY), size.height - base.maxY)
                 )
-                dragCenter = Compositor.clampedPiPCenter(candidate, cfg: cam.cfg)
             }
             .onEnded { _ in
-                if dragOriginCenter != nil, let finalCenter = dragCenter {
+                if let origin = dragOriginCenter {
                     var next = cam.cfg
-                    next.pipCenter = Compositor.clampedPiPCenter(finalCenter, cfg: next)
+                    let candidate = CGPoint(
+                        x: origin.x + dragTranslation.width / max(size.width, 1),
+                        y: origin.y + dragTranslation.height / max(size.height, 1)
+                    )
+                    next.pipCenter = boundedCenter(candidate, config: next)
                     cam.cfg = next
                     cam.snapPiP()
                 }
-                cam.clearPiPDragPreview()
-                dragCenter = nil
+
+                dragTranslation = .zero
                 dragOriginCenter = nil
                 isDraggingPiP = false
+                cam.clearPiPDragPreview()
             }
     }
 
@@ -1368,9 +1368,8 @@ struct PiPOverlay: View {
                 guard !cam.isRecording && !cam.isCapturingPhoto, !isResizingPiP else { return }
                 if pinchStart == nil {
                     pinchStart = cam.cfg.pipWidth
-                    // Cancel any one-finger movement that began before the magnification recognizer won.
                     dragOriginCenter = nil
-                    dragCenter = nil
+                    dragTranslation = .zero
                     isDraggingPiP = false
                     cam.clearPiPDragPreview()
                 }
@@ -1383,18 +1382,17 @@ struct PiPOverlay: View {
     }
 
     private var resizeGesture: some Gesture {
-        DragGesture(minimumDistance: 0)
+        DragGesture(minimumDistance: 0, coordinateSpace: .local)
             .onChanged { value in
                 guard !cam.isRecording && !cam.isCapturingPhoto, pinchStart == nil else { return }
                 if resizeStart == nil {
                     resizeStart = cam.cfg.pipWidth
                     isResizingPiP = true
                     dragOriginCenter = nil
-                    dragCenter = nil
+                    dragTranslation = .zero
                     isDraggingPiP = false
                     cam.clearPiPDragPreview()
                 }
-                // pipWidth uses the shorter canvas edge on landscape output ratios.
                 let scale = Compositor.pipWidthScale(aspect: cam.cfg.aspectRatio)
                 let delta = value.translation.width / max(size.width, 1) / max(scale, 0.1)
                 cam.cfg.pipWidth = min(max((resizeStart ?? 0.32) + delta, 0.16), 0.9)
@@ -1406,6 +1404,7 @@ struct PiPOverlay: View {
             }
     }
 }
+
 
 struct SplitDivider: View {
     @EnvironmentObject private var cam: CameraManager
