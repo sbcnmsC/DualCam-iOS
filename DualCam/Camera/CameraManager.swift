@@ -1603,15 +1603,19 @@ final class CameraManager: NSObject, ObservableObject {
         // Native still capture is used whenever Live Photo is off. Live Photos stay on the
         // existing still/movie pair path so their content identifiers and motion frames remain paired.
         let useHighResolutionCapture = !captureConfig.livePhoto
+        let primarySlot = captureConfig.swapped ? 1 : 0
+        // 后置高清静态照由 AVCapturePhotoOutput 直接触发硬件闪光灯，不提前点亮手电筒，
+        // 避免固定等待 450 ms；前置无闪光灯时仍保留屏幕补光和曝光等待。
+        let useScreenFlash = useFlash && (!useHighResolutionCapture || !slotInfos[primarySlot].hasTorch)
         // 快门黑场 + 「处理中」遮罩，盖住切换单摄会话时预览的短暂停顿
         shutterPulse &+= 1
         if useHighResolutionCapture {
             isCapturingPhoto = true
             captureStatus = "切换高清拍摄…"
         }
-        if useFlash { flash(on: true) }
+        if useScreenFlash { flash(on: true) }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + (useFlash ? 0.45 : 0)) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + (useScreenFlash ? 0.45 : 0)) { [weak self] in
             guard let self = self else { return }
             if useHighResolutionCapture {
                 self.videoQueue.async {
@@ -1619,7 +1623,6 @@ final class CameraManager: NSObject, ObservableObject {
                     // before the shutter fires used to delay every high-resolution capture by two
                     // full-frame encodes; now a frame is encoded only if its native still is missing.
                     let fallbackFrames = self.snapshotFallbackFrames()
-                    let primarySlot = captureConfig.swapped ? 1 : 0
                     let slots = captureConfig.outputMode.savesOriginal
                         ? [primarySlot, 1 - primarySlot]
                         : [primarySlot]
@@ -1631,7 +1634,7 @@ final class CameraManager: NSObject, ObservableObject {
                         // Do image composition and JPEG encoding off the main thread. A composite
                         // uses the native still from the displayed main camera and the other camera's
                         // most recent video frame, retaining detail where the sensor still is available.
-                        self.videoQueue.async {
+                        self.compositeRenderQueue.async {
                             self.setCaptureStatus("合成并保存…")
                             var datas: [Data] = []
                             var compositeDatas: [Data] = []
@@ -1678,7 +1681,7 @@ final class CameraManager: NSObject, ObservableObject {
                                 secondaryImages: compositeSecondaryDatas
                             )
                             DispatchQueue.main.async {
-                                self.flash(on: false)
+                                if useScreenFlash { self.flash(on: false) }
                                 guard !datas.isEmpty else {
                                     self.showToast("拍照失败：没有可保存的画面")
                                     self.isCapturingPhoto = false
@@ -1738,7 +1741,7 @@ final class CameraManager: NSObject, ObservableObject {
             flashSlot: flashEnabled ? primarySlot : nil,
             burstCompletion: { [weak self] primaryPhotos in
                 guard let self else { return }
-                self.videoQueue.async {
+                self.compositeRenderQueue.async {
                     var capturedPhotos = primaryPhotos
                     if capturedPhotos.isEmpty,
                        fallbackFrames.indices.contains(primarySlot),
@@ -1913,9 +1916,17 @@ final class CameraManager: NSObject, ObservableObject {
             self.session.commitConfiguration()
 
             self.devices = [nil, nil]
-            self.highResolutionSession = AVCaptureSession()
-            self.highResolutionPhotoOutput = AVCapturePhotoOutput()
-            self.highResolutionPhotoInput = nil
+            // Reuse the still-session graph and photo output across shutter presses.
+            // The MultiCam session owns the physical camera while previewing, so the still
+            // session remains stopped until MultiCam has released its inputs.
+            if self.highResolutionSession == nil {
+                self.highResolutionSession = AVCaptureSession()
+            }
+            if self.highResolutionPhotoOutput == nil {
+                self.highResolutionPhotoOutput = AVCapturePhotoOutput()
+            }
+            // The previous device input may remain attached to this stopped session; the
+            // preparation step replaces it only after MultiCam has released the hardware.
             self.highResolutionPreparedSlot = nil
             self.highResolutionBurstBytes = 0
             self.highResolutionBatchSlots = slots
@@ -2157,9 +2168,16 @@ final class CameraManager: NSObject, ObservableObject {
 
     private func finishHighResolutionCaptureBatch() {
         highResolutionSession?.stopRunning()
-        highResolutionSession = nil
-        highResolutionPhotoOutput = nil
+        // Keep the session and photo output allocated, but detach the physical camera input
+        // before restoring MultiCam. A capture device must not remain attached to two graphs.
+        if let stillSession = highResolutionSession,
+           let stillInput = highResolutionPhotoInput {
+            stillSession.beginConfiguration()
+            stillSession.removeInput(stillInput)
+            stillSession.commitConfiguration()
+        }
         highResolutionPhotoInput = nil
+        highResolutionPreparedSlot = nil
 
         let captured = highResolutionBatchData
         let completion = highResolutionBatchCompletion
@@ -2178,13 +2196,13 @@ final class CameraManager: NSObject, ObservableObject {
         highResolutionBatchFlashSlot = nil
         highResolutionBatchActive = false
 
-        // Restore the original MultiCam graph before returning data to the UI/save pipeline.
+        // Start full-resolution JPEG composition on compositeRenderQueue immediately.
+        // It can run in parallel with the sessionQueue rebuilding the MultiCam graph.
+        completion?(captured)
+        burstCompletion?(orderedBurstPhotos)
+
         setCaptureStatus("恢复双摄预览…")
         rebuild(resetStates: false)
-        DispatchQueue.main.async {
-            completion?(captured)
-            burstCompletion?(orderedBurstPhotos)
-        }
     }
 
     private func captureStill(includeOriginals: Bool = true, silentSave: Bool = false) {
