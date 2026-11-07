@@ -1467,16 +1467,9 @@ final class CameraManager: NSObject, ObservableObject {
     }
 
     func snapPiP() {
+        guard cfg.pipSnap else { return }
         let oldCenter = cfg.pipCenter
-        let boundedCenter = Compositor.clampedPiPCenter(oldCenter, cfg: cfg)
-        guard cfg.pipSnap else {
-            cfg.pipCenter = boundedCenter
-            return
-        }
-
-        var boundedConfig = cfg
-        boundedConfig.pipCenter = boundedCenter
-        let r = Compositor.pipRectNormalized(cfg: boundedConfig)
+        let r = Compositor.pipRectNormalized(cfg: cfg)
         let margin: CGFloat = 0.03
         let threshold: CGFloat = 0.07
         var cx = r.midX
@@ -1487,12 +1480,11 @@ final class CameraManager: NSObject, ObservableObject {
         if r.minY < threshold { cy = margin + r.height / 2 }
         else if 1 - r.maxY < threshold { cy = 1 - margin - r.height / 2 }
         else if abs(r.midY - 0.5) < 0.05 { cy = 0.5 }
-
-        let snapped = Compositor.clampedPiPCenter(CGPoint(x: cx, y: cy), cfg: boundedConfig)
-        if abs(oldCenter.x - snapped.x) > 0.001 || abs(oldCenter.y - snapped.y) > 0.001 {
+        let newCenter = CGPoint(x: cx, y: cy)
+        if abs(oldCenter.x - newCenter.x) > 0.001 || abs(oldCenter.y - newCenter.y) > 0.001 {
             HapticFeedback.play(.snap)
         }
-        cfg.pipCenter = snapped
+        cfg.pipCenter = newCenter
     }
 
     func cycleTimer() {
