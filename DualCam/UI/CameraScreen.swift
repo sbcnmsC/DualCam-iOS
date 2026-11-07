@@ -1240,6 +1240,7 @@ struct PiPOverlay: View {
     @State private var isDraggingPiP = false
     @State private var pinchStart: CGFloat? = nil
     @State private var resizeStart: CGFloat? = nil
+    @State private var isResizingPiP = false
 
     private var displayConfig: Config {
         var config = cam.cfg
@@ -1330,6 +1331,9 @@ struct PiPOverlay: View {
     private var moveGesture: some Gesture {
         DragGesture(minimumDistance: 4, coordinateSpace: .local)
             .onChanged { value in
+                // Pinch and handle-resize own their gestures; never let the same touch sequence
+                // also move the PiP center.
+                guard pinchStart == nil, !isResizingPiP else { return }
                 if dragOriginCenter == nil {
                     guard !cam.isRecording && !cam.isCapturingPhoto else { return }
                     dragOriginCenter = Compositor.clampedPiPCenter(cam.cfg.pipCenter, cfg: cam.cfg)
@@ -1361,8 +1365,15 @@ struct PiPOverlay: View {
     private var pinchGesture: some Gesture {
         MagnifyGesture()
             .onChanged { value in
-                guard !cam.isRecording && !cam.isCapturingPhoto else { return }
-                if pinchStart == nil { pinchStart = cam.cfg.pipWidth }
+                guard !cam.isRecording && !cam.isCapturingPhoto, !isResizingPiP else { return }
+                if pinchStart == nil {
+                    pinchStart = cam.cfg.pipWidth
+                    // Cancel any one-finger movement that began before the magnification recognizer won.
+                    dragOriginCenter = nil
+                    dragCenter = nil
+                    isDraggingPiP = false
+                    cam.clearPiPDragPreview()
+                }
                 cam.cfg.pipWidth = min(max((pinchStart ?? 0.32) * value.magnification, 0.16), 0.9)
             }
             .onEnded { _ in
@@ -1374,8 +1385,15 @@ struct PiPOverlay: View {
     private var resizeGesture: some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
-                guard !cam.isRecording && !cam.isCapturingPhoto else { return }
-                if resizeStart == nil { resizeStart = cam.cfg.pipWidth }
+                guard !cam.isRecording && !cam.isCapturingPhoto, pinchStart == nil else { return }
+                if resizeStart == nil {
+                    resizeStart = cam.cfg.pipWidth
+                    isResizingPiP = true
+                    dragOriginCenter = nil
+                    dragCenter = nil
+                    isDraggingPiP = false
+                    cam.clearPiPDragPreview()
+                }
                 // pipWidth uses the shorter canvas edge on landscape output ratios.
                 let scale = Compositor.pipWidthScale(aspect: cam.cfg.aspectRatio)
                 let delta = value.translation.width / max(size.width, 1) / max(scale, 0.1)
@@ -1384,6 +1402,7 @@ struct PiPOverlay: View {
             .onEnded { _ in
                 if resizeStart != nil { HapticFeedback.play(.selection) }
                 resizeStart = nil
+                isResizingPiP = false
             }
     }
 }
