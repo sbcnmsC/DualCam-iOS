@@ -2168,9 +2168,15 @@ final class CameraManager: NSObject, ObservableObject {
 
     private func finishHighResolutionCaptureBatch() {
         highResolutionSession?.stopRunning()
-        // Keep the configured AVCaptureSession, photo output and last input allocated.
-        // Reusing this graph avoids repeated object construction on the next still capture;
-        // prepareSingleCameraPhotoSession() swaps the input after MultiCam is stopped.
+        // Keep the session and photo output allocated, but detach the physical camera input
+        // before restoring MultiCam. A capture device must not remain attached to two graphs.
+        if let stillSession = highResolutionSession,
+           let stillInput = highResolutionPhotoInput {
+            stillSession.beginConfiguration()
+            stillSession.removeInput(stillInput)
+            stillSession.commitConfiguration()
+        }
+        highResolutionPhotoInput = nil
         highResolutionPreparedSlot = nil
 
         let captured = highResolutionBatchData
