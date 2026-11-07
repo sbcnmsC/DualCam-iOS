@@ -1916,9 +1916,17 @@ final class CameraManager: NSObject, ObservableObject {
             self.session.commitConfiguration()
 
             self.devices = [nil, nil]
-            self.highResolutionSession = AVCaptureSession()
-            self.highResolutionPhotoOutput = AVCapturePhotoOutput()
-            self.highResolutionPhotoInput = nil
+            // Reuse the still-session graph and photo output across shutter presses.
+            // The MultiCam session owns the physical camera while previewing, so the still
+            // session remains stopped until MultiCam has released its inputs.
+            if self.highResolutionSession == nil {
+                self.highResolutionSession = AVCaptureSession()
+            }
+            if self.highResolutionPhotoOutput == nil {
+                self.highResolutionPhotoOutput = AVCapturePhotoOutput()
+            }
+            // The previous device input may remain attached to this stopped session; the
+            // preparation step replaces it only after MultiCam has released the hardware.
             self.highResolutionPreparedSlot = nil
             self.highResolutionBurstBytes = 0
             self.highResolutionBatchSlots = slots
@@ -2160,9 +2168,10 @@ final class CameraManager: NSObject, ObservableObject {
 
     private func finishHighResolutionCaptureBatch() {
         highResolutionSession?.stopRunning()
-        highResolutionSession = nil
-        highResolutionPhotoOutput = nil
-        highResolutionPhotoInput = nil
+        // Keep the configured AVCaptureSession, photo output and last input allocated.
+        // Reusing this graph avoids repeated object construction on the next still capture;
+        // prepareSingleCameraPhotoSession() swaps the input after MultiCam is stopped.
+        highResolutionPreparedSlot = nil
 
         let captured = highResolutionBatchData
         let completion = highResolutionBatchCompletion
@@ -2181,13 +2190,13 @@ final class CameraManager: NSObject, ObservableObject {
         highResolutionBatchFlashSlot = nil
         highResolutionBatchActive = false
 
-        // Restore the original MultiCam graph before returning data to the UI/save pipeline.
+        // Start full-resolution JPEG composition on compositeRenderQueue immediately.
+        // It can run in parallel with the sessionQueue rebuilding the MultiCam graph.
+        completion?(captured)
+        burstCompletion?(orderedBurstPhotos)
+
         setCaptureStatus("恢复双摄预览…")
         rebuild(resetStates: false)
-        DispatchQueue.main.async {
-            completion?(captured)
-            burstCompletion?(orderedBurstPhotos)
-        }
     }
 
     private func captureStill(includeOriginals: Bool = true, silentSave: Bool = false) {
