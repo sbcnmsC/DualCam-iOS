@@ -1257,41 +1257,49 @@ struct PiPOverlay: View {
     var body: some View {
         let rect = previewRect
 
-        // Match the proven Build #92 layout: the preview surface, gesture surface and
-        // resize handle are direct siblings in one bottom-trailing aligned ZStack.
-        ZStack(alignment: .bottomTrailing) {
-            if isDraggingPiP {
-                dragPlaceholder(in: rect)
-            } else {
+        // Keep this overlay in the exact same full-canvas coordinate space as PreviewRepresentable.
+        // The PiP interaction surface is a local rectangle placed by its top-leading origin;
+        // avoid position(), whose implicit layout frame can diverge from the rendered preview.
+        ZStack(alignment: .topLeading) {
+            ZStack(alignment: .bottomTrailing) {
+                if isDraggingPiP {
+                    dragPlaceholder(in: rect)
+                } else {
+                    Color.clear
+                }
+
+                // Tap, move and pinch share the PiP surface; the resize handle is anchored
+                // to this same surface, so it cannot drift independently of the preview.
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture {
                         guard !cam.isRecording && !cam.isCapturingPhoto else { return }
                         cam.swapCameras()
                     }
+                    .gesture(moveGesture)
+                    .simultaneousGesture(pinchGesture)
+
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    .rotationEffect(.degrees(iconRotationDegrees))
+                    .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(Color.white)
+                    .frame(width: 24, height: 24)
+                    .background(Circle().fill(Color.black.opacity(0.45)))
+                    .padding(4)
+                    .contentShape(Circle())
+                    .highPriorityGesture(resizeGesture)
+                    .accessibilityLabel("调整画中画大小")
             }
-
-            Color.clear
-                .contentShape(Rectangle())
-                .gesture(moveGesture)
-                .simultaneousGesture(pinchGesture)
-
-            Image(systemName: "arrow.up.left.and.arrow.down.right")
-                .rotationEffect(.degrees(iconRotationDegrees))
-                .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(Color.white)
-                .frame(width: 24, height: 24)
-                .background(Circle().fill(Color.black.opacity(0.45)))
-                .padding(4)
-                .contentShape(Circle())
-                .gesture(resizeGesture)
+            .frame(width: rect.width, height: rect.height)
+            // Place the whole PiP interaction group from the canvas origin.
+            .offset(
+                x: rect.minX + dragTranslation.width,
+                y: rect.minY + dragTranslation.height
+            )
         }
-        // One measured frame and one position for the image and its resize control.
-        .frame(width: rect.width, height: rect.height)
-        .position(x: rect.midX, y: rect.midY)
-        // The same transform moves both siblings together.
-        .offset(dragTranslation)
+        // The outer overlay always matches the rendered preview canvas.
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
         .animation(.smooth(duration: 0.26), value: size)
     }
 
