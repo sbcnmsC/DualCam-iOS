@@ -713,7 +713,7 @@ final class CameraManager: NSObject, ObservableObject {
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             let snapshot = CameraSettingsPersistence.Snapshot(
-                version: 1,
+                version: 2,
                 config: self.cfg,
                 slotStates: self.slotStates,
                 flashEnabled: self.flashEnabled,
