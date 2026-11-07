@@ -1257,45 +1257,42 @@ struct PiPOverlay: View {
     var body: some View {
         let rect = previewRect
 
-        // The live PiP hit surface, the resize handle and the drag transform all live
-        // in this one fixed-size container. Nothing positions the handle independently.
+        // Match the proven Build #92 layout: the preview surface, gesture surface and
+        // resize handle are direct siblings in one bottom-trailing aligned ZStack.
         ZStack(alignment: .bottomTrailing) {
-            ZStack {
-                if isDraggingPiP {
-                    dragPlaceholder(in: rect)
-                } else {
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            guard !cam.isRecording && !cam.isCapturingPhoto else { return }
-                            cam.swapCameras()
-                        }
-                }
-
+            if isDraggingPiP {
+                dragPlaceholder(in: rect)
+            } else {
                 Color.clear
                     .contentShape(Rectangle())
-                    .gesture(moveGesture)
-                    .simultaneousGesture(pinchGesture)
+                    .onTapGesture {
+                        guard !cam.isRecording && !cam.isCapturingPhoto else { return }
+                        cam.swapCameras()
+                    }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            Color.clear
+                .contentShape(Rectangle())
+                .gesture(moveGesture)
+                .simultaneousGesture(pinchGesture)
 
             Image(systemName: "arrow.up.left.and.arrow.down.right")
                 .rotationEffect(.degrees(iconRotationDegrees))
+                .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(Color.white)
                 .frame(width: 24, height: 24)
                 .background(Circle().fill(Color.black.opacity(0.45)))
                 .padding(4)
                 .contentShape(Circle())
-                .highPriorityGesture(resizeGesture)
-                .accessibilityLabel("缩放小窗")
-                .zIndex(2)
+                .gesture(resizeGesture)
         }
-        // This is the single source of truth for the visible PiP bounds.
+        // One measured frame and one position for the image and its resize control.
         .frame(width: rect.width, height: rect.height)
         .position(x: rect.midX, y: rect.midY)
-        // Dragging translates the entire PiP group, including the resize handle.
+        // The same transform moves both siblings together.
         .offset(dragTranslation)
+        .animation(.smooth(duration: 0.26), value: size)
     }
 
     @ViewBuilder
