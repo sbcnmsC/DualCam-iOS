@@ -1236,35 +1236,45 @@ struct PiPOverlay: View {
     var iconRotationDegrees: CGFloat = 0
 
     @State private var dragOriginCenter: CGPoint? = nil
-    @State private var dragCenter: CGPoint? = nil
+    @State private var dragTranslation: CGSize = .zero
     @State private var isDraggingPiP = false
     @State private var pinchStart: CGFloat? = nil
     @State private var resizeStart: CGFloat? = nil
+    @State private var isResizingPiP = false
 
-    private var displayConfig: Config {
-        var config = cam.cfg
-        if let dragCenter { config.pipCenter = dragCenter }
-        return config
+    private var normalizedRect: CGRect {
+        Compositor.pipRectNormalized(cfg: cam.cfg)
+    }
+
+    private var previewRect: CGRect {
+        let n = normalizedRect
+        return CGRect(x: n.minX * size.width,
+                      y: n.minY * size.height,
+                      width: n.width * size.width,
+                      height: n.height * size.height)
     }
 
     var body: some View {
-        let n = Compositor.pipRectNormalized(cfg: displayConfig)
-        let rect = CGRect(x: n.minX * size.width, y: n.minY * size.height,
-                          width: n.width * size.width, height: n.height * size.height)
+        let rect = previewRect
+
+        // Match the proven Build #92 layout: the preview surface, gesture surface and
+        // resize handle are direct siblings in one bottom-trailing aligned ZStack.
         ZStack(alignment: .bottomTrailing) {
             if isDraggingPiP {
-                RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.ultraThinMaterial)
-                    .overlay(RoundedRectangle(cornerRadius: 16).fill(Color.white.opacity(0.12)))
-                    .overlay(Image(systemName: "arrow.up.left.and.arrow.down.right")
-                        .rotationEffect(.degrees(iconRotationDegrees))
-                        .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
-                        .font(.system(size: 18))
-                        .foregroundStyle(.white.opacity(0.85)))
-                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.35), lineWidth: 1))
+                dragPlaceholder(in: rect)
             } else {
-                Color.clear.contentShape(Rectangle()).onTapGesture { cam.swapCameras() }
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        guard !cam.isRecording && !cam.isCapturingPhoto else { return }
+                        cam.swapCameras()
+                    }
             }
-            Color.clear.contentShape(Rectangle()).gesture(moveGesture).simultaneousGesture(pinchGesture)
+
+            Color.clear
+                .contentShape(Rectangle())
+                .gesture(moveGesture)
+                .simultaneousGesture(pinchGesture)
 
             Image(systemName: "arrow.up.left.and.arrow.down.right")
                 .rotationEffect(.degrees(iconRotationDegrees))
@@ -1277,49 +1287,98 @@ struct PiPOverlay: View {
                 .contentShape(Circle())
                 .gesture(resizeGesture)
         }
+        // One measured frame and one position for the image and its resize control.
         .frame(width: rect.width, height: rect.height)
         .position(x: rect.midX, y: rect.midY)
+        // The same transform moves both siblings together.
+        .offset(dragTranslation)
         .animation(.smooth(duration: 0.26), value: size)
     }
 
+    @ViewBuilder
+    private func dragPlaceholder(in rect: CGRect) -> some View {
+        let corner = min(rect.width, rect.height) * min(max(cam.cfg.pipCorner, 0), 0.5)
+        let border = max(0, cam.cfg.pipBorder / 390.0 * size.width)
+        let symbol = Image(systemName: "arrow.up.left.and.arrow.down.right")
+            .rotationEffect(.degrees(iconRotationDegrees))
+            .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
+            .font(.system(size: 18))
+            .foregroundStyle(.white.opacity(0.85))
+
+        if cam.cfg.pipShape == .circle {
+            Circle()
+                .fill(.ultraThinMaterial)
+                .overlay(Circle().fill(Color.white.opacity(0.12)))
+                .overlay(Circle().stroke(Color.white.opacity(0.35), lineWidth: border))
+                .overlay(symbol)
+        } else {
+            RoundedRectangle(cornerRadius: corner, style: .circular)
+                .fill(.ultraThinMaterial)
+                .overlay(RoundedRectangle(cornerRadius: corner, style: .circular)
+                    .fill(Color.white.opacity(0.12)))
+                .overlay(RoundedRectangle(cornerRadius: corner, style: .circular)
+                    .stroke(Color.white.opacity(0.35), lineWidth: border))
+                .overlay(symbol)
+        }
+    }
+
+    private func boundedCenter(_ candidate: CGPoint, config: Config) -> CGPoint {
+        let n = Compositor.pipRectNormalized(cfg: config)
+        return CGPoint(
+            x: min(max(candidate.x, n.width / 2), 1 - n.width / 2),
+            y: min(max(candidate.y, n.height / 2), 1 - n.height / 2)
+        )
+    }
+
     private var moveGesture: some Gesture {
-        DragGesture(minimumDistance: 4, coordinateSpace: .local)
+        DragGesture(minimumDistance: 4, coordinateSpace: .global)
             .onChanged { value in
+                guard pinchStart == nil, !isResizingPiP else { return }
                 if dragOriginCenter == nil {
                     guard !cam.isRecording && !cam.isCapturingPhoto else { return }
-                    dragOriginCenter = cam.cfg.pipCenter
+                    dragOriginCenter = CGPoint(x: normalizedRect.midX, y: normalizedRect.midY)
                     isDraggingPiP = true
                     cam.setPiPDragPreviewActive(true)
                     HapticFeedback.play(.button)
                 }
-                guard let origin = dragOriginCenter else { return }
-                let next = CGPoint(
-                    x: origin.x + value.translation.width / max(size.width, 1),
-                    y: origin.y + value.translation.height / max(size.height, 1)
+
+                let base = previewRect
+                dragTranslation = CGSize(
+                    width: min(max(value.translation.width, -base.minX), size.width - base.maxX),
+                    height: min(max(value.translation.height, -base.minY), size.height - base.maxY)
                 )
-                // The render thread follows the live center; Config and parent view stay stable.
-                dragCenter = next
-                // Only the frosted-glass placeholder moves; the camera render stays still until release.
             }
             .onEnded { _ in
-                if let finalCenter = dragCenter {
+                if let origin = dragOriginCenter {
                     var next = cam.cfg
-                    next.pipCenter = finalCenter
+                    let candidate = CGPoint(
+                        x: origin.x + dragTranslation.width / max(size.width, 1),
+                        y: origin.y + dragTranslation.height / max(size.height, 1)
+                    )
+                    next.pipCenter = boundedCenter(candidate, config: next)
                     cam.cfg = next
                     cam.snapPiP()
                 }
-                cam.clearPiPDragPreview()
-                dragCenter = nil
+
+                dragTranslation = .zero
                 dragOriginCenter = nil
                 isDraggingPiP = false
+                cam.clearPiPDragPreview()
             }
     }
 
     private var pinchGesture: some Gesture {
         MagnifyGesture()
-            .onChanged { v in
-                if pinchStart == nil { pinchStart = cam.cfg.pipWidth }
-                cam.cfg.pipWidth = min(max((pinchStart ?? 0.32) * v.magnification, 0.16), 0.9)
+            .onChanged { value in
+                guard !cam.isRecording && !cam.isCapturingPhoto, !isResizingPiP else { return }
+                if pinchStart == nil {
+                    pinchStart = cam.cfg.pipWidth
+                    dragOriginCenter = nil
+                    dragTranslation = .zero
+                    isDraggingPiP = false
+                    cam.clearPiPDragPreview()
+                }
+                cam.cfg.pipWidth = min(max((pinchStart ?? 0.32) * value.magnification, 0.16), 0.9)
             }
             .onEnded { _ in
                 if pinchStart != nil { HapticFeedback.play(.selection) }
@@ -1328,20 +1387,29 @@ struct PiPOverlay: View {
     }
 
     private var resizeGesture: some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { v in
-                if resizeStart == nil { resizeStart = cam.cfg.pipWidth }
-                // pipWidth 在宽画幅下以短边为基准，屏幕上的位移要除回这个系数
+        DragGesture(minimumDistance: 0, coordinateSpace: .local)
+            .onChanged { value in
+                guard !cam.isRecording && !cam.isCapturingPhoto, pinchStart == nil else { return }
+                if resizeStart == nil {
+                    resizeStart = cam.cfg.pipWidth
+                    isResizingPiP = true
+                    dragOriginCenter = nil
+                    dragTranslation = .zero
+                    isDraggingPiP = false
+                    cam.clearPiPDragPreview()
+                }
                 let scale = Compositor.pipWidthScale(aspect: cam.cfg.aspectRatio)
-                let delta = v.translation.width / max(size.width, 1) / max(scale, 0.1)
+                let delta = value.translation.width / max(size.width, 1) / max(scale, 0.1)
                 cam.cfg.pipWidth = min(max((resizeStart ?? 0.32) + delta, 0.16), 0.9)
             }
             .onEnded { _ in
                 if resizeStart != nil { HapticFeedback.play(.selection) }
                 resizeStart = nil
+                isResizingPiP = false
             }
     }
 }
+
 
 struct SplitDivider: View {
     @EnvironmentObject private var cam: CameraManager

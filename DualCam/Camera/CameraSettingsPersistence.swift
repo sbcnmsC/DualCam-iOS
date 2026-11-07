@@ -4,7 +4,7 @@ import Foundation
 /// Transient activity (recording, countdowns, wireless sessions) is deliberately excluded.
 enum CameraSettingsPersistence {
     struct Snapshot: Codable {
-        let version: Int
+        var version: Int
         var config: Config
         var slotStates: [SlotState]
         var flashEnabled: Bool
@@ -18,11 +18,22 @@ enum CameraSettingsPersistence {
 
     static func load() -> Snapshot? {
         guard let data = UserDefaults.standard.data(forKey: key),
-              let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data),
-              snapshot.version == 1 else {
+              var snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) else {
             return nil
         }
-        return snapshot
+
+        switch snapshot.version {
+        case 1:
+            // Repair only the persisted PiP width. Preserve all other camera preferences.
+            snapshot.config.pipWidth = 0.32
+            snapshot.version = 2
+            save(snapshot)
+            return snapshot
+        case 2:
+            return snapshot
+        default:
+            return nil
+        }
     }
 
     static func save(_ snapshot: Snapshot) {

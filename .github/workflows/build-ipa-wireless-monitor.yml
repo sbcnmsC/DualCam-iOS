@@ -7,6 +7,7 @@ on:
       - ui/wireless-apple-refresh-2026-10-27
       - feature/persistent-camera-settings
       - perf/high-res-photo-speed-2026-11-07
+      - fix/pip-preview-overlay-2026-11-07 # PiP preview and gesture fixes
   workflow_dispatch:
 
 permissions:
