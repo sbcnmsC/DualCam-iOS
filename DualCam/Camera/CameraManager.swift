@@ -275,7 +275,10 @@ final class CameraManager: NSObject, ObservableObject {
 
     // 渲染线程与主线程共享（用 lock 保护）
     private let lock = NSLock()
-    private var sharedCfg = Config()
+    // 必须和 cfg 用同一份启动设置初始化：属性初始化时 cfg 的 didSet 不会触发，
+    // 如果这里仍是出厂默认值，重启后画面（小窗位置/大小、画幅、滤镜、布局）就会用默认值渲染，
+    // 而界面手势层用的是恢复的设置，两边对不上（手柄悬在小窗外、小窗被截掉一半）。
+    private var sharedCfg = launchSettings?.config ?? Config()
     /// Interface orientation shared with the real-time compositor (guarded by lock).
     private var sharedInterfaceOrientation: UIInterfaceOrientation = .portrait
     /// While PiP is dragged, omit the secondary image from idle preview rendering.
@@ -713,7 +716,7 @@ final class CameraManager: NSObject, ObservableObject {
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             let snapshot = CameraSettingsPersistence.Snapshot(
-                version: 2,
+                version: 3,
                 config: self.cfg,
                 slotStates: self.slotStates,
                 flashEnabled: self.flashEnabled,
