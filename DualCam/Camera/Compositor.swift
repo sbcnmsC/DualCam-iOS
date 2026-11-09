@@ -38,8 +38,8 @@ enum Compositor {
         return aspect > 1 ? 1 / aspect : 1
     }
 
-    /// 小窗矩形。圆形强制 1:1，并保证整体落在画布内。
-    static func pipRectNormalized(cfg: Config) -> CGRect {
+    /// 小窗尺寸（归一化）。与位置无关，拖动手柄拉伸时用它来保持左上角不动。
+    static func pipSizeNormalized(cfg: Config) -> CGSize {
         let ratio: CGFloat = cfg.pipShape == .circle ? 1 : cfg.pipRatio.value
         let canvasAspect = cfg.aspectRatio
         var w = min(max(cfg.pipWidth, 0.1), 0.95) * pipWidthScale(aspect: canvasAspect)
@@ -49,6 +49,14 @@ enum Compositor {
             w *= k
             h *= k
         }
+        return CGSize(width: w, height: h)
+    }
+
+    /// 小窗矩形。圆形强制 1:1，并保证整体落在画布内。
+    static func pipRectNormalized(cfg: Config) -> CGRect {
+        let size = pipSizeNormalized(cfg: cfg)
+        let w = size.width
+        let h = size.height
         let cx = min(max(cfg.pipCenter.x, w / 2), 1 - w / 2)
         let cy = min(max(cfg.pipCenter.y, h / 2), 1 - h / 2)
         return CGRect(x: cx - w / 2, y: cy - h / 2, width: w, height: h)

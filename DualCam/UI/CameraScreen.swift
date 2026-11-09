@@ -1239,8 +1239,14 @@ struct PiPOverlay: View {
     @State private var dragTranslation: CGSize = .zero
     @State private var isDraggingPiP = false
     @State private var pinchStart: CGFloat? = nil
-    @State private var resizeStart: CGFloat? = nil
     @State private var isResizingPiP = false
+    // 拉伸开始时小窗左上角（归一化）与宽度；拉伸全程锁定左上角，手柄就始终跟在手指下面。
+    @State private var resizeAnchor: CGPoint? = nil
+    @State private var resizeStartWidth: CGFloat = 0
+    @State private var resizeMoved = false
+    // 双指缩放结束后手指还没抬起时，再次进入拖动要以当前位置重新计起点，否则小窗会跳一下。
+    @State private var dragNeedsRebase = false
+    @State private var dragRebase: CGSize = .zero
 
     private var normalizedRect: CGRect {
         Compositor.pipRectNormalized(cfg: cam.cfg)
@@ -1345,15 +1351,19 @@ struct PiPOverlay: View {
                 if dragOriginCenter == nil {
                     guard !cam.isRecording && !cam.isCapturingPhoto else { return }
                     dragOriginCenter = CGPoint(x: normalizedRect.midX, y: normalizedRect.midY)
+                    dragRebase = dragNeedsRebase ? value.translation : .zero
+                    dragNeedsRebase = false
                     isDraggingPiP = true
                     cam.setPiPDragPreviewActive(true)
                     HapticFeedback.play(.button)
                 }
 
                 let base = previewRect
+                let dx = value.translation.width - dragRebase.width
+                let dy = value.translation.height - dragRebase.height
                 dragTranslation = CGSize(
-                    width: min(max(value.translation.width, -base.minX), size.width - base.maxX),
-                    height: min(max(value.translation.height, -base.minY), size.height - base.maxY)
+                    width: min(max(dx, -base.minX), size.width - base.maxX),
+                    height: min(max(dy, -base.minY), size.height - base.maxY)
                 )
             }
             .onEnded { _ in
@@ -1369,6 +1379,7 @@ struct PiPOverlay: View {
                 }
 
                 dragTranslation = .zero
+                dragRebase = .zero
                 dragOriginCenter = nil
                 isDraggingPiP = false
                 cam.clearPiPDragPreview()
@@ -1381,6 +1392,7 @@ struct PiPOverlay: View {
                 guard !cam.isRecording && !cam.isCapturingPhoto, !isResizingPiP else { return }
                 if pinchStart == nil {
                     pinchStart = cam.cfg.pipWidth
+                    dragNeedsRebase = true
                     dragOriginCenter = nil
                     dragTranslation = .zero
                     isDraggingPiP = false
@@ -1395,24 +1407,44 @@ struct PiPOverlay: View {
     }
 
     private var resizeGesture: some Gesture {
-        DragGesture(minimumDistance: 0, coordinateSpace: .local)
+        // 必须用 .global：手柄随小窗一起移动，.local 坐标会跟着手柄漂，拉伸会越拉越慢、不跟手。
+        DragGesture(minimumDistance: 0, coordinateSpace: .global)
             .onChanged { value in
                 guard !cam.isRecording && !cam.isCapturingPhoto, pinchStart == nil else { return }
-                if resizeStart == nil {
-                    resizeStart = cam.cfg.pipWidth
+                if resizeAnchor == nil {
+                    let r = normalizedRect
+                    resizeAnchor = CGPoint(x: r.minX, y: r.minY)
+                    resizeStartWidth = r.width
+                    resizeMoved = false
                     isResizingPiP = true
                     dragOriginCenter = nil
                     dragTranslation = .zero
                     isDraggingPiP = false
                     cam.clearPiPDragPreview()
                 }
-                let scale = Compositor.pipWidthScale(aspect: cam.cfg.aspectRatio)
-                let delta = value.translation.width / max(size.width, 1) / max(scale, 0.1)
-                cam.cfg.pipWidth = min(max((resizeStart ?? 0.32) + delta, 0.16), 0.9)
+                guard let anchor = resizeAnchor else { return }
+                if abs(value.translation.width) > 2 || abs(value.translation.height) > 2 { resizeMoved = true }
+
+                var next = cam.cfg
+                let scale = max(Compositor.pipWidthScale(aspect: next.aspectRatio), 0.1)
+                // 手柄在右下角：右下角跟着手指走，左上角保持不动。
+                let desired = resizeStartWidth + value.translation.width / max(size.width, 1)
+                next.pipWidth = min(max(desired / scale, 0.16), 0.9)
+
+                // 不允许从固定的左上角向外超出画布。
+                var s = Compositor.pipSizeNormalized(cfg: next)
+                let k = min(1, (1 - anchor.x) / max(s.width, 0.001), (1 - anchor.y) / max(s.height, 0.001))
+                if k < 1 {
+                    next.pipWidth = min(max(next.pipWidth * k, 0.16), 0.9)
+                    s = Compositor.pipSizeNormalized(cfg: next)
+                }
+                next.pipCenter = CGPoint(x: anchor.x + s.width / 2, y: anchor.y + s.height / 2)
+                cam.cfg = next
             }
             .onEnded { _ in
-                if resizeStart != nil { HapticFeedback.play(.selection) }
-                resizeStart = nil
+                if resizeAnchor != nil, resizeMoved { HapticFeedback.play(.selection) }
+                resizeAnchor = nil
+                resizeMoved = false
                 isResizingPiP = false
             }
     }
