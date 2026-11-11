@@ -101,19 +101,49 @@ enum FilterKind: String, CaseIterable, Identifiable, Codable {
             ])
             return colorControls(m, saturation: 1.0, brightness: -0.01, contrast: 1.15)
         case .nightVision:
-            // Software low-light enhancement: lift exposure/shadows, suppress color noise,
-            // then apply a restrained phosphor-green monochrome look.
-            let exposed = image.applyingFilter("CIExposureAdjust", parameters: [
-                kCIInputEVKey: 1.10
+            // Keep the live path lightweight: gamma lift brightens shadows without the
+            // more expensive multi-stage highlight/shadow adjustment. A single color matrix
+            // performs luma extraction, green phosphor tint, mild contrast and black lift.
+            // The caller blends this result with the original image using filterIntensity.
+            let lifted = image.applyingFilter("CIGammaAdjust", parameters: [
+                "inputPower": 0.70
             ])
-            let lifted = exposed.applyingFilter("CIHighlightShadowAdjust", parameters: [
-                "inputHighlightAmount": 0.96,
-                "inputShadowAmount": 0.72
-            ])
-            let subdued = colorControls(lifted, saturation: 0.14, brightness: 0.018, contrast: 1.12)
-            return subdued.applyingFilter("CIColorMonochrome", parameters: [
-                kCIInputColorKey: CIColor(red: 0.22, green: 0.92, blue: 0.44),
-                kCIInputIntensityKey: 0.82
+
+            let lumaR: CGFloat = 0.2126
+            let lumaG: CGFloat = 0.7152
+            let lumaB: CGFloat = 0.0722
+            let contrast: CGFloat = 1.08
+            let blackLift: CGFloat = 0.012
+            let greenR: CGFloat = 0.22
+            let greenG: CGFloat = 0.92
+            let greenB: CGFloat = 0.44
+
+            return lifted.applyingFilter("CIColorMatrix", parameters: [
+                "inputRVector": CIVector(
+                    x: greenR * contrast * lumaR,
+                    y: greenR * contrast * lumaG,
+                    z: greenR * contrast * lumaB,
+                    w: 0
+                ),
+                "inputGVector": CIVector(
+                    x: greenG * contrast * lumaR,
+                    y: greenG * contrast * lumaG,
+                    z: greenG * contrast * lumaB,
+                    w: 0
+                ),
+                "inputBVector": CIVector(
+                    x: greenB * contrast * lumaR,
+                    y: greenB * contrast * lumaG,
+                    z: greenB * contrast * lumaB,
+                    w: 0
+                ),
+                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+                "inputBiasVector": CIVector(
+                    x: greenR * blackLift,
+                    y: greenG * blackLift,
+                    z: greenB * blackLift,
+                    w: 0
+                )
             ])
         }
     }
