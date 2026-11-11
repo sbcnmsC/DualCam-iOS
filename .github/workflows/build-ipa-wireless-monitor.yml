@@ -9,6 +9,7 @@ on:
       - perf/high-res-photo-speed-2026-11-07
       - fix/pip-preview-overlay-2026-11-07 # PiP preview and gesture fixes
       - fix/pip-gesture-anchor-and-settings-2026-11-07 # PiP gesture and settings repair
+      - feature/night-vision-2026-11-11 # Night-vision enhancement and control
   workflow_dispatch:
 
 permissions:
