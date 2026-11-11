@@ -329,7 +329,9 @@ struct FilterTab: View {
                     Text(pendingFilter.rawValue)
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Color.yellow)
-                    Text("先选择风格和强度，再点击应用；调整过程中不会改变实时画面。")
+                    Text(pendingFilter == .nightVision
+                         ? "夜视增强会提亮暗部并叠加绿色夜视效果；仍需要少量可见光，不能替代红外夜视。"
+                         : "先选择风格和强度，再点击应用；调整过程中不会改变实时画面。")
                         .font(.system(size: 10))
                         .foregroundStyle(Color.white.opacity(0.62))
                         .lineLimit(2)
@@ -409,6 +411,15 @@ struct FilterTab: View {
                                     .foregroundStyle(Color.white.opacity(0.35))
                             }
                             .frame(width: 62, height: 82)
+                    }
+                    if let symbolName = kind.symbolName {
+                        Image(systemName: symbolName)
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(Color.green)
+                            .padding(5)
+                            .background(Circle().fill(Color.black.opacity(0.72)))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                            .padding(5)
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 8))
