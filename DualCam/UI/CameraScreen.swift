@@ -1625,7 +1625,13 @@ struct TimerSettingsOverlay: View {
 struct TopBar: View {
     @EnvironmentObject private var cam: CameraManager
     @AppStorage("dualcam.topbar.actions")
-    private var actionOrderValue = "flash,livePhoto,liveMotion,timer,swapCamera,wireless"
+    private var actionOrderValue = "flash,livePhoto,liveMotion,timer,swapCamera,nightVision,wireless"
+    @AppStorage("dualcam.topbar.nightVisionButtonMigrated")
+    private var nightVisionButtonMigrated = false
+    @AppStorage("dualcam.nightVision.previousFilter")
+    private var nightVisionPreviousFilter = FilterKind.original.rawValue
+    @AppStorage("dualcam.nightVision.previousIntensity")
+    private var nightVisionPreviousIntensity = 1.0
     @State private var isCustomizing = false
 
     let onTimerTap: () -> Void
@@ -1638,7 +1644,7 @@ struct TopBar: View {
     var iconRotationDegrees: CGFloat = 90
     var compactLayout = false
 
-    private static let baseActionKeys = ["flash", "livePhoto", "liveMotion", "timer", "swapCamera", "wireless", "shareComposite"]
+    private static let baseActionKeys = ["flash", "livePhoto", "liveMotion", "timer", "swapCamera", "nightVision", "wireless", "shareComposite"]
     private static var allActionKeys: [String] {
         baseActionKeys + QuickParameter.allCases.map { "param.\($0.shortcutKey)" }
     }
@@ -1743,6 +1749,29 @@ struct TopBar: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            // Add the new night-vision control to existing user layouts once, without
+            // overriding a layout where the user deliberately hid the entire top bar.
+            if !nightVisionButtonMigrated {
+                if actionOrderValue != "none" {
+                    var keys = actionOrderValue.split(separator: ",").map(String.init)
+                    if !keys.contains("nightVision") {
+                        keys.append("nightVision")
+                        actionOrderValue = keys.joined(separator: ",")
+                    }
+                }
+                nightVisionButtonMigrated = true
+            }
+            if cam.cfg.filter != .nightVision {
+                nightVisionPreviousFilter = cam.cfg.filter.rawValue
+                nightVisionPreviousIntensity = Double(cam.cfg.filterIntensity)
+            }
+        }
+        .onChange(of: cam.cfg.filter) { _, newValue in
+            guard newValue != .nightVision else { return }
+            nightVisionPreviousFilter = newValue.rawValue
+            nightVisionPreviousIntensity = Double(cam.cfg.filterIntensity)
+        }
     }
 
     @ViewBuilder
@@ -1801,6 +1830,28 @@ struct TopBar: View {
                 HapticFeedback.play(.button)
                 onShareCompositeTap()
             }
+        case "nightVision":
+            let enabled = cam.cfg.filter == .nightVision
+            iconButton(actionKey: key, icon: "moon.stars.fill", active: enabled,
+                       label: enabled ? "关闭夜视增强" : "开启夜视增强",
+                       activeTint: .green) {
+                HapticFeedback.play(.selection)
+                if enabled {
+                    let savedFilter = FilterKind(rawValue: nightVisionPreviousFilter)
+                    let restoreFilter: FilterKind
+                    if let savedFilter, savedFilter != .nightVision {
+                        restoreFilter = savedFilter
+                    } else {
+                        restoreFilter = .original
+                    }
+                    let restoreIntensity = CGFloat(min(max(nightVisionPreviousIntensity, 0), 1))
+                    cam.applyFilter(restoreFilter, intensity: restoreIntensity)
+                } else {
+                    nightVisionPreviousFilter = cam.cfg.filter.rawValue
+                    nightVisionPreviousIntensity = Double(cam.cfg.filterIntensity)
+                    cam.applyFilter(.nightVision, intensity: 1)
+                }
+            }
         default:
             if key.hasPrefix("param."),
                let parameter = QuickParameter.fromShortcutKey(String(key.dropFirst("param.".count))) {
@@ -1816,7 +1867,8 @@ struct TopBar: View {
 
     private func iconButton(
         actionKey: String, icon: String, active: Bool, dimmed: Bool = false,
-        label: String, badge: String? = nil, action: @escaping () -> Void
+        label: String, badge: String? = nil, activeTint: Color = .yellow,
+        action: @escaping () -> Void
     ) -> some View {
         Button {
             if isCustomizing { removeAction(actionKey) } else { action() }
@@ -1825,9 +1877,9 @@ struct TopBar: View {
                 .rotationEffect(.degrees(iconRotationDegrees))
                 .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
                 .font(.system(size: compactLayout ? 16 : 18, weight: .semibold))
-                .foregroundStyle(active ? Color.yellow : Color.white)
+                .foregroundStyle(active ? activeTint : Color.white)
                 .frame(width: actionIconSize, height: actionIconSize)
-                .background(Circle().fill(active ? Color.yellow.opacity(0.14) : Color.white.opacity(0.07)))
+                .background(Circle().fill(active ? activeTint.opacity(0.14) : Color.white.opacity(0.07)))
                 .overlay(Circle().stroke(Color.white.opacity(active ? 0.2 : 0.1), lineWidth: 0.6))
                 .overlay(alignment: .topTrailing) {
                     if let badge, !isCustomizing {
@@ -1897,6 +1949,7 @@ struct TopBar: View {
         case "swapCamera": return "切换摄像头"
         case "wireless": return "无线监看"
         case "shareComposite": return "共享本机合成画面"
+        case "nightVision": return "夜视增强"
         default:
             if key.hasPrefix("param."),
                let parameter = QuickParameter.fromShortcutKey(String(key.dropFirst("param.".count))) {
@@ -1915,6 +1968,7 @@ struct TopBar: View {
         case "swapCamera": return "arrow.triangle.2.circlepath"
         case "wireless": return "dot.radiowaves.left.and.right"
         case "shareComposite": return "airplayvideo"
+        case "nightVision": return "moon.stars.fill"
         default:
             if key.hasPrefix("param."),
                let parameter = QuickParameter.fromShortcutKey(String(key.dropFirst("param.".count))) {
