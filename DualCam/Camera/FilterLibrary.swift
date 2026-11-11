@@ -15,8 +15,17 @@ enum FilterKind: String, CaseIterable, Identifiable, Codable {
     case chrome = "铬黄"
     case mono = "黑白"
     case blackGold = "黑金"
+    case nightVision = "夜视"
 
     var id: String { rawValue }
+
+    /// SF Symbol displayed on the night-vision filter tile.
+    var symbolName: String? {
+        switch self {
+        case .nightVision: return "moon.stars.fill"
+        default: return nil
+        }
+    }
 
     /// 对合成后的整幅画面应用滤镜。intensity 为 0...1，1 为完全应用。
     func apply(to image: CIImage, intensity: CGFloat) -> CIImage {
@@ -91,6 +100,21 @@ enum FilterKind: String, CaseIterable, Identifiable, Codable {
                 kCIInputIntensityKey: 1.0
             ])
             return colorControls(m, saturation: 1.0, brightness: -0.01, contrast: 1.15)
+        case .nightVision:
+            // Software low-light enhancement: lift exposure/shadows, suppress color noise,
+            // then apply a restrained phosphor-green monochrome look.
+            let exposed = image.applyingFilter("CIExposureAdjust", parameters: [
+                kCIInputEVKey: 1.10
+            ])
+            let lifted = exposed.applyingFilter("CIHighlightShadowAdjust", parameters: [
+                "inputHighlightAmount": 0.96,
+                "inputShadowAmount": 0.72
+            ])
+            let subdued = colorControls(lifted, saturation: 0.14, brightness: 0.018, contrast: 1.12)
+            return subdued.applyingFilter("CIColorMonochrome", parameters: [
+                kCIInputColorKey: CIColor(red: 0.22, green: 0.92, blue: 0.44),
+                kCIInputIntensityKey: 0.82
+            ])
         }
     }
 }
