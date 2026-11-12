@@ -116,24 +116,29 @@ struct CameraScreen: View {
                         .animation(.smooth(duration: 0.22), value: screenFillEnabled)
                 }
 
-                VStack(alignment: .trailing, spacing: 10) {
+                // Close the illumination panel from the unused preview area. Keep this
+                // hit target below the top bar and below the panel itself so camera controls
+                // and the panel's own sliders remain interactive.
+                if showNightAssistControls && dismissOnBlankTap {
                     Button {
-                        withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
-                            showNightAssistControls.toggle()
+                        withAnimation(.easeInOut(duration: 0.20)) {
+                            showNightAssistControls = false
                         }
-                        HapticFeedback.play(.selection)
+                        HapticFeedback.play(.button)
                     } label: {
-                        Image(systemName: "moon.stars.fill")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 42, height: 42)
-                            .background(.ultraThinMaterial, in: Circle())
-                            .overlay(Circle().stroke(Color.white.opacity(0.18), lineWidth: 1))
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .frame(width: canvasSize.width, height: canvasSize.height)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("夜间补光设置")
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .offset(x: canvasOffset.width, y: canvasOffset.height)
+                    .zIndex(4.5)
+                    .accessibilityLabel("点击空白处关闭辅助补光面板")
+                }
 
-                    if showNightAssistControls {
+                if showNightAssistControls {
+                    VStack(alignment: .trailing, spacing: 0) {
                         NightAssistControlPanel(
                             rearTorchEnabled: $rearTorchEnabled,
                             screenFillEnabled: $screenFillEnabled,
@@ -141,14 +146,14 @@ struct CameraScreen: View {
                             rearTorchLevel: $rearTorchLevel
                         )
                         .transition(.move(edge: .top).combined(with: .opacity))
+                        Spacer(minLength: 0)
                     }
-                    Spacer(minLength: 0)
+                    .padding(.top, topControlsBottom + 8)
+                    .padding(.trailing, 14)
+                    .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topTrailing)
+                    .offset(x: canvasOffset.width, y: canvasOffset.height)
+                    .zIndex(8)
                 }
-                .padding(.top, topControlsBottom + 8)
-                .padding(.trailing, 14)
-                .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topTrailing)
-                .offset(x: canvasOffset.width, y: canvasOffset.height)
-                .zIndex(8)
 
                 // The setting toggle is stored in AppStorage; honor it on the actual tool panel
                 // too. A full-screen backdrop below controls catches only taps outside the panel.
