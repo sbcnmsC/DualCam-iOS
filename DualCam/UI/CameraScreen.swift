@@ -29,6 +29,7 @@ struct CameraScreen: View {
     @State private var currentOrientation: UIInterfaceOrientation = .portrait
     @State private var showNightAssistControls = false
     @State private var rearTorchEnabled = false
+    @State private var rearTorchLevel = 0.72
     @State private var screenFillEnabled = false
     @State private var screenFillIntensity = 0.92
     @State private var originalScreenBrightness: CGFloat? = nil
@@ -136,7 +137,8 @@ struct CameraScreen: View {
                         NightAssistControlPanel(
                             rearTorchEnabled: $rearTorchEnabled,
                             screenFillEnabled: $screenFillEnabled,
-                            screenFillIntensity: $screenFillIntensity
+                            screenFillIntensity: $screenFillIntensity,
+                            rearTorchLevel: $rearTorchLevel
                         )
                         .transition(.move(edge: .top).combined(with: .opacity))
                     }
@@ -480,6 +482,11 @@ struct CameraScreen: View {
         }
         .onChange(of: rearTorchEnabled) { _, enabled in
             cam.setNightAssistTorch(enabled: enabled)
+        }
+        .onChange(of: rearTorchLevel) { _, value in
+            if rearTorchEnabled {
+                cam.setNightAssistTorch(enabled: true, level: Float(value))
+            }
         }
         .onChange(of: screenFillEnabled) { _, enabled in
             if enabled {
