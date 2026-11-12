@@ -178,6 +178,12 @@ struct CameraScreen: View {
                                 timerDraft = cam.timerSeconds > 0 ? cam.timerSeconds : 5
                                 showTimerSettings = true
                             },
+                            onNightAssistTap: {
+                                withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
+                                    showNightAssistControls.toggle()
+                                }
+                                HapticFeedback.play(.selection)
+                            },
                             onWirelessMonitorTap: {
                                 // A single tap opens the wireless feature's own mode screen.
                                 if wirelessSession.isSecurelyPaired {
@@ -1731,16 +1737,11 @@ struct TimerSettingsOverlay: View {
 struct TopBar: View {
     @EnvironmentObject private var cam: CameraManager
     @AppStorage("dualcam.topbar.actions")
-    private var actionOrderValue = "flash,livePhoto,liveMotion,timer,swapCamera,nightVision,wireless"
-    @AppStorage("dualcam.topbar.nightVisionButtonMigrated")
-    private var nightVisionButtonMigrated = false
-    @AppStorage("dualcam.nightVision.previousFilter")
-    private var nightVisionPreviousFilter = FilterKind.original.rawValue
-    @AppStorage("dualcam.nightVision.previousIntensity")
-    private var nightVisionPreviousIntensity = 1.0
+    private var actionOrderValue = "flash,livePhoto,liveMotion,timer,swapCamera,nightAssist,wireless"
     @State private var isCustomizing = false
 
     let onTimerTap: () -> Void
+    let onNightAssistTap: () -> Void
     let onWirelessMonitorTap: () -> Void
     let onWirelessReceiveTap: () -> Void
     let onWirelessShareTap: () -> Void
@@ -1750,7 +1751,7 @@ struct TopBar: View {
     var iconRotationDegrees: CGFloat = 90
     var compactLayout = false
 
-    private static let baseActionKeys = ["flash", "livePhoto", "liveMotion", "timer", "swapCamera", "nightVision", "wireless", "shareComposite"]
+    private static let baseActionKeys = ["flash", "livePhoto", "liveMotion", "timer", "swapCamera", "nightAssist", "wireless", "shareComposite"]
     private static var allActionKeys: [String] {
         baseActionKeys + QuickParameter.allCases.map { "param.\($0.shortcutKey)" }
     }
@@ -1856,27 +1857,14 @@ struct TopBar: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
-            // Add the new night-vision control to existing user layouts once, without
-            // overriding a layout where the user deliberately hid the entire top bar.
-            if !nightVisionButtonMigrated {
-                if actionOrderValue != "none" {
-                    var keys = actionOrderValue.split(separator: ",").map(String.init)
-                    if !keys.contains("nightVision") {
-                        keys.append("nightVision")
-                        actionOrderValue = keys.joined(separator: ",")
-                    }
-                }
-                nightVisionButtonMigrated = true
+            // Migrate the former filter shortcut to the real illumination controls.
+            if actionOrderValue != "none", actionOrderValue.contains("nightVision") {
+                actionOrderValue = actionOrderValue
+                    .replacingOccurrences(of: "nightVision", with: "nightAssist")
             }
-            if cam.cfg.filter != .nightVision {
-                nightVisionPreviousFilter = cam.cfg.filter.rawValue
-                nightVisionPreviousIntensity = Double(cam.cfg.filterIntensity)
+            if cam.cfg.filter == .nightVision {
+                cam.applyFilter(.original, intensity: 1)
             }
-        }
-        .onChange(of: cam.cfg.filter) { _, newValue in
-            guard newValue != .nightVision else { return }
-            nightVisionPreviousFilter = newValue.rawValue
-            nightVisionPreviousIntensity = Double(cam.cfg.filterIntensity)
         }
     }
 
@@ -1936,27 +1924,11 @@ struct TopBar: View {
                 HapticFeedback.play(.button)
                 onShareCompositeTap()
             }
-        case "nightVision":
-            let enabled = cam.cfg.filter == .nightVision
-            iconButton(actionKey: key, icon: "moon.stars.fill", active: enabled,
-                       label: enabled ? "关闭夜视增强" : "开启夜视增强",
-                       activeTint: .green) {
+        case "nightAssist":
+            iconButton(actionKey: key, icon: "moon.stars.fill", active: false,
+                       label: "夜间补光设置") {
                 HapticFeedback.play(.selection)
-                if enabled {
-                    let savedFilter = FilterKind(rawValue: nightVisionPreviousFilter)
-                    let restoreFilter: FilterKind
-                    if let savedFilter, savedFilter != .nightVision {
-                        restoreFilter = savedFilter
-                    } else {
-                        restoreFilter = .original
-                    }
-                    let restoreIntensity = CGFloat(min(max(nightVisionPreviousIntensity, 0), 1))
-                    cam.applyFilter(restoreFilter, intensity: restoreIntensity)
-                } else {
-                    nightVisionPreviousFilter = cam.cfg.filter.rawValue
-                    nightVisionPreviousIntensity = Double(cam.cfg.filterIntensity)
-                    cam.applyFilter(.nightVision, intensity: 1)
-                }
+                onNightAssistTap()
             }
         default:
             if key.hasPrefix("param."),
@@ -2055,7 +2027,7 @@ struct TopBar: View {
         case "swapCamera": return "切换摄像头"
         case "wireless": return "无线监看"
         case "shareComposite": return "共享本机合成画面"
-        case "nightVision": return "夜视增强"
+        case "nightAssist": return "夜间补光"
         default:
             if key.hasPrefix("param."),
                let parameter = QuickParameter.fromShortcutKey(String(key.dropFirst("param.".count))) {
@@ -2074,7 +2046,7 @@ struct TopBar: View {
         case "swapCamera": return "arrow.triangle.2.circlepath"
         case "wireless": return "dot.radiowaves.left.and.right"
         case "shareComposite": return "airplayvideo"
-        case "nightVision": return "moon.stars.fill"
+        case "nightAssist": return "moon.stars.fill"
         default:
             if key.hasPrefix("param."),
                let parameter = QuickParameter.fromShortcutKey(String(key.dropFirst("param.".count))) {
