@@ -1515,7 +1515,7 @@ struct PiPOverlay: View {
                     isDraggingPiP = false
                     cam.clearPiPDragPreview()
                 }
-                cam.cfg.pipWidth = min(max((pinchStart ?? 0.32) * value.magnification, 0.16), 0.9)
+                cam.cfg.pipWidth = min(max((pinchStart ?? 0.28) * value.magnification, 0.16), 0.55)
             }
             .onEnded { _ in
                 if pinchStart != nil { HapticFeedback.play(.selection) }
@@ -1546,7 +1546,7 @@ struct PiPOverlay: View {
                 let scale = max(Compositor.pipWidthScale(aspect: next.aspectRatio), 0.1)
                 // 手柄在右下角：右下角跟着手指走，左上角保持不动。
                 let desired = resizeStartWidth + value.translation.width / max(size.width, 1)
-                next.pipWidth = min(max(desired / scale, 0.16), 0.9)
+                next.pipWidth = min(max(desired / scale, 0.16), 0.55)
 
                 // 不允许从固定的左上角向外超出画布。
                 var s = Compositor.pipSizeNormalized(cfg: next)
