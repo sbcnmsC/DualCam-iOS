@@ -32,6 +32,7 @@ struct CameraScreen: View {
     @State private var rearTorchLevel = 0.72
     @State private var screenFillEnabled = false
     @State private var screenFillIntensity = 0.92
+    @State private var fillLightPhase: Double = 0
     @State private var screenFillRingWidth = 0.10
     @State private var originalScreenBrightness: CGFloat? = nil
 
@@ -103,29 +104,46 @@ struct CameraScreen: View {
                 if wirelessSession.mode != .receiving {
                     if screenFillEnabled {
                         ZStack {
+                            // A solid, evenly lit base creates a real four-sided screen-fill
+                            // band around the inset preview (top, bottom, left and right).
                             RoundedRectangle(cornerRadius: fillCornerRadius, style: .continuous)
                                 .fill(Color.white)
-                                .shadow(color: .white.opacity(0.62), radius: fillRingThickness * 0.9)
-                                .shadow(color: Color.cyan.opacity(0.22), radius: fillRingThickness * 1.25)
+                                .shadow(color: .white.opacity(0.72), radius: fillRingThickness * 0.85)
+                                .shadow(color: Color.cyan.opacity(0.18), radius: fillRingThickness * 1.15)
 
+                            // The animated angular gradient follows the complete closed
+                            // rounded-rectangle path. Its moving highlight is visible on all
+                            // four edges and remains continuous through every corner.
                             RoundedRectangle(cornerRadius: fillCornerRadius, style: .continuous)
-                                .strokeBorder(
+                                .stroke(
                                     AngularGradient(
                                         colors: [
-                                            .white, Color(red: 0.78, green: 0.94, blue: 1.0),
-                                            .white, Color(red: 0.91, green: 0.86, blue: 1.0), .white
+                                            .white, Color(red: 0.72, green: 0.94, blue: 1.0),
+                                            .white, Color(red: 0.78, green: 0.72, blue: 1.0),
+                                            .white, Color(red: 0.72, green: 0.94, blue: 1.0),
+                                            .white
                                         ],
-                                        center: .center
+                                        center: .center,
+                                        startAngle: .degrees(fillLightPhase),
+                                        endAngle: .degrees(fillLightPhase + 360)
                                     ),
-                                    lineWidth: max(2, fillRingThickness * 0.10)
+                                    lineWidth: max(4, min(10, fillRingThickness * 0.22))
                                 )
-                                .blur(radius: max(1, fillRingThickness * 0.12))
+                                .shadow(color: .white.opacity(0.95), radius: max(5, fillRingThickness * 0.42))
+                                .shadow(color: Color.cyan.opacity(0.48), radius: max(7, fillRingThickness * 0.58))
                         }
                         .frame(width: previewSize.width, height: previewSize.height)
                         .frame(width: canvasSize.width, height: canvasSize.height, alignment: .top)
                         .offset(x: canvasOffset.width, y: canvasOffset.height + previewTop)
                         .transition(.opacity)
                         .allowsHitTesting(false)
+                        .onAppear {
+                            fillLightPhase = 0
+                            withAnimation(.linear(duration: 2.6).repeatForever(autoreverses: false)) {
+                                fillLightPhase = 360
+                            }
+                        }
+
                     }
 
                     // PiP and split composition live inside the uniformly scaled preview.
