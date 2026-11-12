@@ -15,14 +15,19 @@ enum FilterKind: String, CaseIterable, Identifiable, Codable {
     case chrome = "铬黄"
     case mono = "黑白"
     case blackGold = "黑金"
+    /// Legacy persisted value retained only so older settings decode safely; it is not a filter.
     case nightVision = "夜视"
+
+    static var allCases: [FilterKind] {
+        [.original, .vivid, .warm, .cool, .fresh, .beach, .humanistic, .cinema, .film, .retro, .faded, .chrome, .mono, .blackGold]
+    }
 
     var id: String { rawValue }
 
     /// SF Symbol displayed on the night-vision filter tile.
     var symbolName: String? {
         switch self {
-        case .nightVision: return "moon.stars.fill"
+        case .nightVision: return nil
         default: return nil
         }
     }
@@ -101,50 +106,8 @@ enum FilterKind: String, CaseIterable, Identifiable, Codable {
             ])
             return colorControls(m, saturation: 1.0, brightness: -0.01, contrast: 1.15)
         case .nightVision:
-            // Keep the live path lightweight: gamma lift brightens shadows without the
-            // more expensive multi-stage highlight/shadow adjustment. A single color matrix
-            // performs luma extraction, green phosphor tint, mild contrast and black lift.
-            // The caller blends this result with the original image using filterIntensity.
-            let lifted = image.applyingFilter("CIGammaAdjust", parameters: [
-                "inputPower": 0.70
-            ])
-
-            let lumaR: CGFloat = 0.2126
-            let lumaG: CGFloat = 0.7152
-            let lumaB: CGFloat = 0.0722
-            let contrast: CGFloat = 1.08
-            let blackLift: CGFloat = 0.012
-            let greenR: CGFloat = 0.22
-            let greenG: CGFloat = 0.92
-            let greenB: CGFloat = 0.44
-
-            return lifted.applyingFilter("CIColorMatrix", parameters: [
-                "inputRVector": CIVector(
-                    x: greenR * contrast * lumaR,
-                    y: greenR * contrast * lumaG,
-                    z: greenR * contrast * lumaB,
-                    w: 0
-                ),
-                "inputGVector": CIVector(
-                    x: greenG * contrast * lumaR,
-                    y: greenG * contrast * lumaG,
-                    z: greenG * contrast * lumaB,
-                    w: 0
-                ),
-                "inputBVector": CIVector(
-                    x: greenB * contrast * lumaR,
-                    y: greenB * contrast * lumaG,
-                    z: greenB * contrast * lumaB,
-                    w: 0
-                ),
-                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
-                "inputBiasVector": CIVector(
-                    x: greenR * blackLift,
-                    y: greenG * blackLift,
-                    z: greenB * blackLift,
-                    w: 0
-                )
-            ])
+            // Legacy persisted value only. No image enhancement is applied.
+            return image
         }
     }
 }
