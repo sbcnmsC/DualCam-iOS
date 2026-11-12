@@ -410,15 +410,6 @@ struct FilterTab: View {
                             }
                             .frame(width: 62, height: 82)
                     }
-                    if let symbolName = kind.symbolName {
-                        Image(systemName: symbolName)
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(Color.green)
-                            .padding(5)
-                            .background(Circle().fill(Color.black.opacity(0.72)))
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                            .padding(5)
-                    }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .overlay(
