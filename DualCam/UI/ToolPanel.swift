@@ -329,9 +329,7 @@ struct FilterTab: View {
                     Text(pendingFilter.rawValue)
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Color.yellow)
-                    Text(pendingFilter == .nightVision
-                         ? "夜视增强会提亮暗部并叠加绿色夜视效果；仍需要少量可见光，不能替代红外夜视。"
-                         : "先选择风格和强度，再点击应用；调整过程中不会改变实时画面。")
+                    Text("先选择风格和强度，再点击应用；调整过程中不会改变实时画面。")
                         .font(.system(size: 10))
                         .foregroundStyle(Color.white.opacity(0.62))
                         .lineLimit(2)
