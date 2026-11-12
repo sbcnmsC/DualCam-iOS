@@ -1589,6 +1589,28 @@ final class CameraManager: NSObject, ObservableObject {
         }
     }
 
+    /// Continuous rear LED fill for night-assist mode. Always targets an active rear lens,
+    /// never the front camera; device configuration remains serialized on sessionQueue.
+    func setNightAssistTorch(enabled: Bool, level: Float = 0.72) {
+        let targetSlot = slotInfos.firstIndex(where: { !$0.isFront })
+        guard let slot = targetSlot else {
+            if enabled { showToast("当前镜头组合没有可用的后置补光灯") }
+            return
+        }
+        withDevice(slot) { device in
+            guard device.position == .back, device.hasTorch, device.isTorchAvailable else { return }
+            do {
+                if enabled {
+                    try device.setTorchModeOn(level: min(max(level, 0.05), 1.0))
+                } else {
+                    device.torchMode = .off
+                }
+            } catch {
+                DispatchQueue.main.async { self.showToast("后置补光灯暂不可用：\\(error.localizedDescription)") }
+            }
+        }
+    }
+
     private func flash(on: Bool) {
         let slot = mainSlot
         if slotInfos[slot].hasTorch {
