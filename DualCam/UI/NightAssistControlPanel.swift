@@ -5,6 +5,7 @@ struct NightAssistControlPanel: View {
     @Binding var rearTorchEnabled: Bool
     @Binding var screenFillEnabled: Bool
     @Binding var screenFillIntensity: Double
+    @Binding var screenFillRingBrightness: Double
     @Binding var screenFillRingWidth: Double
     @Binding var rearTorchLevel: Double
 
@@ -42,6 +43,19 @@ struct NightAssistControlPanel: View {
 
             if screenFillEnabled {
                 VStack(alignment: .leading, spacing: 7) {
+                    HStack {
+                        Text("静态光带亮度")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.white.opacity(0.75))
+                        Spacer()
+                        Text("\(Int(screenFillRingBrightness * 100))%")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(.white)
+                    }
+                    Slider(value: $screenFillRingBrightness, in: 0.10...1.0)
+                        .tint(.white)
+
                     HStack {
                         Text("补光范围")
                             .font(.system(size: 11))
