@@ -497,6 +497,17 @@ struct CameraScreen: View {
                 UIScreen.main.brightness = CGFloat(value)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+            if let original = originalScreenBrightness {
+                UIScreen.main.brightness = original
+                originalScreenBrightness = nil
+            }
+            screenFillEnabled = false
+            if rearTorchEnabled {
+                rearTorchEnabled = false
+                cam.setNightAssistTorch(enabled: false)
+            }
+        }
         .onDisappear {
             if let original = originalScreenBrightness {
                 UIScreen.main.brightness = original
