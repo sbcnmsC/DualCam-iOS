@@ -1606,7 +1606,7 @@ final class CameraManager: NSObject, ObservableObject {
                     device.torchMode = .off
                 }
             } catch {
-                DispatchQueue.main.async { self.showToast("后置补光灯暂不可用：\\(error.localizedDescription)") }
+                DispatchQueue.main.async { self.showToast("后置补光灯暂不可用：\(error.localizedDescription)") }
             }
         }
     }
