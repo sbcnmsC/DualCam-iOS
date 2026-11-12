@@ -32,6 +32,7 @@ struct CameraScreen: View {
     @State private var rearTorchLevel = 0.72
     @State private var screenFillEnabled = false
     @State private var screenFillIntensity = 0.92
+    @State private var screenFillRingBrightness = 0.85
     @State private var fillLightPhase: Double = 0
     @State private var screenFillRingWidth = 0.10
     @State private var originalScreenBrightness: CGFloat? = nil
@@ -107,9 +108,9 @@ struct CameraScreen: View {
                             // A solid, evenly lit base creates a real four-sided screen-fill
                             // band around the inset preview (top, bottom, left and right).
                             RoundedRectangle(cornerRadius: fillCornerRadius, style: .continuous)
-                                .fill(Color.white)
-                                .shadow(color: .white.opacity(0.72), radius: fillRingThickness * 0.85)
-                                .shadow(color: Color.cyan.opacity(0.18), radius: fillRingThickness * 1.15)
+                                .fill(Color.white.opacity(screenFillRingBrightness))
+                                .shadow(color: .white.opacity(0.72 * screenFillRingBrightness), radius: fillRingThickness * 0.85)
+                                .shadow(color: Color.cyan.opacity(0.18 * screenFillRingBrightness), radius: fillRingThickness * 1.15)
 
                             // The animated angular gradient follows the complete closed
                             // rounded-rectangle path. Its moving highlight is visible on all
@@ -129,8 +130,8 @@ struct CameraScreen: View {
                                     ),
                                     lineWidth: max(4, min(10, fillRingThickness * 0.22))
                                 )
-                                .shadow(color: .white.opacity(0.95), radius: max(5, fillRingThickness * 0.42))
-                                .shadow(color: Color.cyan.opacity(0.48), radius: max(7, fillRingThickness * 0.58))
+                                .shadow(color: .white.opacity(0.95 * screenFillRingBrightness), radius: max(5, fillRingThickness * 0.42))
+                                .shadow(color: Color.cyan.opacity(0.48 * screenFillRingBrightness), radius: max(7, fillRingThickness * 0.58))
                         }
                         .frame(width: previewSize.width, height: previewSize.height)
                         .frame(width: canvasSize.width, height: canvasSize.height, alignment: .top)
@@ -188,6 +189,7 @@ struct CameraScreen: View {
                             rearTorchEnabled: $rearTorchEnabled,
                             screenFillEnabled: $screenFillEnabled,
                             screenFillIntensity: $screenFillIntensity,
+                            screenFillRingBrightness: $screenFillRingBrightness,
                             screenFillRingWidth: $screenFillRingWidth,
                             rearTorchLevel: $rearTorchLevel
                         )
