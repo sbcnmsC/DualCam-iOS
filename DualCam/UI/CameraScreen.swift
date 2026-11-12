@@ -27,6 +27,11 @@ struct CameraScreen: View {
     @State private var zoomControlBottom: CGFloat = 0
     @State private var shutterButtonTop: CGFloat = 0
     @State private var currentOrientation: UIInterfaceOrientation = .portrait
+    @State private var showNightAssistControls = false
+    @State private var rearTorchEnabled = false
+    @State private var screenFillEnabled = false
+    @State private var screenFillIntensity = 0.92
+    @State private var originalScreenBrightness: CGFloat? = nil
 
     private let topBarHeight: CGFloat = 56
 
@@ -76,18 +81,72 @@ struct CameraScreen: View {
                 topLimit: topControlsBottom + 14,
                 bottomLimit: previewBottomLimit
             )
+            // Screen fill uses a genuinely smaller live preview. The surrounding white
+            // panel is emitted by the display itself and acts as a soft front-camera fill.
+            let screenFillPreviewSize = screenFillEnabled
+                ? CGSize(width: previewSize.width * 0.76, height: previewSize.height * 0.76)
+                : previewSize
+            let screenFillPreviewTop = previewOriginY(
+                previewHeight: screenFillPreviewSize.height,
+                topLimit: topControlsBottom + 14,
+                bottomLimit: previewBottomLimit
+            )
 
             ZStack(alignment: .topLeading) {
                 Color.black.ignoresSafeArea()
 
                 if wirelessSession.mode != .receiving {
-                    PreviewStage(size: previewSize, iconRotationDegrees: iconRotationDegrees)
-                        .frame(width: previewSize.width, height: previewSize.height)
+                    if screenFillEnabled {
+                        RoundedRectangle(cornerRadius: 26, style: .continuous)
+                            .fill(Color.white)
+                            .frame(width: screenFillPreviewSize.width + 44,
+                                   height: screenFillPreviewSize.height + 44)
+                            .frame(width: canvasSize.width, height: canvasSize.height, alignment: .top)
+                            .offset(x: canvasOffset.width,
+                                    y: canvasOffset.height + screenFillPreviewTop - 22)
+                            .shadow(color: .white.opacity(0.24), radius: 12)
+                    }
+
+                    PreviewStage(size: screenFillPreviewSize, iconRotationDegrees: iconRotationDegrees)
+                        .frame(width: screenFillPreviewSize.width, height: screenFillPreviewSize.height)
                         .frame(width: canvasSize.width, height: canvasSize.height, alignment: .top)
-                        .offset(x: canvasOffset.width, y: canvasOffset.height + previewTop)
-                        // 切换画幅时取景框平滑伸缩 / 移动，而不是瞬间跳变
+                        .offset(x: canvasOffset.width, y: canvasOffset.height + screenFillPreviewTop)
                         .animation(.smooth(duration: 0.3), value: cam.cfg.aspect)
+                        .animation(.smooth(duration: 0.22), value: screenFillEnabled)
                 }
+
+                VStack(alignment: .trailing, spacing: 10) {
+                    Button {
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
+                            showNightAssistControls.toggle()
+                        }
+                        HapticFeedback.play(.selection)
+                    } label: {
+                        Image(systemName: "moon.stars.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 42, height: 42)
+                            .background(.ultraThinMaterial, in: Circle())
+                            .overlay(Circle().stroke(Color.white.opacity(0.18), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("夜间补光设置")
+
+                    if showNightAssistControls {
+                        NightAssistControlPanel(
+                            rearTorchEnabled: $rearTorchEnabled,
+                            screenFillEnabled: $screenFillEnabled,
+                            screenFillIntensity: $screenFillIntensity
+                        )
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.top, topControlsBottom + 8)
+                .padding(.trailing, 14)
+                .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topTrailing)
+                .offset(x: canvasOffset.width, y: canvasOffset.height)
+                .zIndex(8)
 
                 // The setting toggle is stored in AppStorage; honor it on the actual tool panel
                 // too. A full-screen backdrop below controls catches only taps outside the panel.
@@ -418,6 +477,34 @@ struct CameraScreen: View {
         .fullScreenCover(isPresented: $showCreativeGallery) {
             CreativeGalleryView()
                 .environmentObject(cam)
+        }
+        .onChange(of: rearTorchEnabled) { _, enabled in
+            cam.setNightAssistTorch(enabled: enabled)
+        }
+        .onChange(of: screenFillEnabled) { _, enabled in
+            if enabled {
+                if originalScreenBrightness == nil {
+                    originalScreenBrightness = UIScreen.main.brightness
+                }
+                UIScreen.main.brightness = CGFloat(screenFillIntensity)
+            } else if let original = originalScreenBrightness {
+                UIScreen.main.brightness = original
+                originalScreenBrightness = nil
+            }
+        }
+        .onChange(of: screenFillIntensity) { _, value in
+            if screenFillEnabled {
+                UIScreen.main.brightness = CGFloat(value)
+            }
+        }
+        .onDisappear {
+            if let original = originalScreenBrightness {
+                UIScreen.main.brightness = original
+                originalScreenBrightness = nil
+            }
+            if rearTorchEnabled {
+                cam.setNightAssistTorch(enabled: false)
+            }
         }
         .modifier(HardwareCameraCaptureModifier())
     }
