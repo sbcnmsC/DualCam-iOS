@@ -2017,11 +2017,12 @@ final class CameraManager: NSObject, ObservableObject {
         } else {
             settings = AVCapturePhotoSettings()
         }
-        // Keep the largest supported sensor still dimensions, but use balanced processing:
-        // it substantially reduces capture latency compared with .quality while preserving the
-        // native photo pixel dimensions. The capture output has already prepared this profile.
+        // Use Apple's highest-quality still-photo processing for single captures. AVFoundation
+        // can apply device-supported noise reduction and low-light detail preservation here;
+        // this is not the private Night mode pipeline from Apple's Camera app. Keep burst capture
+        // balanced so repeated full-resolution frames remain responsive.
         settings.maxPhotoDimensions = dimensions
-        settings.photoQualityPrioritization = .balanced
+        settings.photoQualityPrioritization = highResolutionBurstMode ? .balanced : .quality
         // The preview torch isn't guaranteed to survive tearing down the MultiCam graph, so ask the
         // photo pipeline itself to fire the flash for the main camera. Front cameras have no flash
         // and keep using the screen flash.
@@ -2167,12 +2168,12 @@ final class CameraManager: NSObject, ObservableObject {
             singleSession.addOutput(output)
         }
         output.maxPhotoDimensions = dimensions
-        // Prepare the highest-resolution balanced profile before the shutter is pressed.
-        // Preparation must happen before capture; reusing this settings object for capture is invalid.
+        // Prepare the high-quality still profile before the shutter is pressed. Burst requests
+        // still select .balanced per capture to protect responsiveness.
         output.maxPhotoQualityPrioritization = .quality
         let preparedSettings = AVCapturePhotoSettings()
         preparedSettings.maxPhotoDimensions = dimensions
-        preparedSettings.photoQualityPrioritization = .balanced
+        preparedSettings.photoQualityPrioritization = .quality
         output.setPreparedPhotoSettingsArray([preparedSettings], completionHandler: nil)
         singleSession.commitConfiguration()
 
