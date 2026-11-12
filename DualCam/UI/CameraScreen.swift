@@ -82,36 +82,41 @@ struct CameraScreen: View {
                 topLimit: topControlsBottom + 14,
                 bottomLimit: previewBottomLimit
             )
-            // Screen fill uses a genuinely smaller live preview. The surrounding white
-            // panel is emitted by the display itself and acts as a soft front-camera fill.
-            let screenFillPreviewSize = screenFillEnabled
-                ? CGSize(width: previewSize.width * 0.76, height: previewSize.height * 0.76)
-                : previewSize
-            let screenFillPreviewTop = previewOriginY(
-                previewHeight: screenFillPreviewSize.height,
-                topLimit: topControlsBottom + 14,
-                bottomLimit: previewBottomLimit
-            )
+            // Screen-fill ring is an outer frame around the unchanged preview.
+            // Its thickness scales with the shorter preview edge, so portrait, square,
+            // and landscape aspect ratios keep a balanced border without moving PiP.
+            let fillRingThickness = min(max(min(previewSize.width, previewSize.height) * 0.035, 10), 20)
 
             ZStack(alignment: .topLeading) {
                 Color.black.ignoresSafeArea()
 
                 if wirelessSession.mode != .receiving {
                     if screenFillEnabled {
-                        RoundedRectangle(cornerRadius: 26, style: .continuous)
-                            .fill(Color.white)
-                            .frame(width: screenFillPreviewSize.width + 44,
-                                   height: screenFillPreviewSize.height + 44)
-                            .frame(width: canvasSize.width, height: canvasSize.height, alignment: .top)
-                            .offset(x: canvasOffset.width,
-                                    y: canvasOffset.height + screenFillPreviewTop - 22)
-                            .shadow(color: .white.opacity(0.24), radius: 12)
+                        RoundedRectangle(
+                            cornerRadius: min(max(min(previewSize.width, previewSize.height) * 0.065, 22), 34),
+                            style: .continuous
+                        )
+                        .fill(Color.white)
+                        .frame(
+                            width: previewSize.width + fillRingThickness * 2,
+                            height: previewSize.height + fillRingThickness * 2
+                        )
+                        .frame(width: canvasSize.width, height: canvasSize.height, alignment: .top)
+                        .offset(
+                            x: canvasOffset.width,
+                            y: canvasOffset.height + previewTop - fillRingThickness
+                        )
+                        .shadow(color: .white.opacity(0.30), radius: fillRingThickness * 0.8)
+                        .transition(.opacity)
+                        .allowsHitTesting(false)
                     }
 
-                    PreviewStage(size: screenFillPreviewSize, iconRotationDegrees: iconRotationDegrees)
-                        .frame(width: screenFillPreviewSize.width, height: screenFillPreviewSize.height)
+                    // Keep the preview's exact original bounds: the ring is decorative
+                    // hardware-style screen fill and must never recalculate the PiP anchor.
+                    PreviewStage(size: previewSize, iconRotationDegrees: iconRotationDegrees)
+                        .frame(width: previewSize.width, height: previewSize.height)
                         .frame(width: canvasSize.width, height: canvasSize.height, alignment: .top)
-                        .offset(x: canvasOffset.width, y: canvasOffset.height + screenFillPreviewTop)
+                        .offset(x: canvasOffset.width, y: canvasOffset.height + previewTop)
                         .animation(.smooth(duration: 0.3), value: cam.cfg.aspect)
                         .animation(.smooth(duration: 0.22), value: screenFillEnabled)
                 }
