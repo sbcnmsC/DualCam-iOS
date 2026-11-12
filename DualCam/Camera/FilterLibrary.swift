@@ -24,14 +24,6 @@ enum FilterKind: String, CaseIterable, Identifiable, Codable {
 
     var id: String { rawValue }
 
-    /// SF Symbol displayed on the night-vision filter tile.
-    var symbolName: String? {
-        switch self {
-        case .nightVision: return nil
-        default: return nil
-        }
-    }
-
     /// 对合成后的整幅画面应用滤镜。intensity 为 0...1，1 为完全应用。
     func apply(to image: CIImage, intensity: CGFloat) -> CIImage {
         guard self != .original else { return image }
