@@ -481,7 +481,7 @@ struct CameraScreen: View {
                 .environmentObject(cam)
         }
         .onChange(of: rearTorchEnabled) { _, enabled in
-            cam.setNightAssistTorch(enabled: enabled)
+            cam.setNightAssistTorch(enabled: enabled, level: Float(rearTorchLevel))
         }
         .onChange(of: rearTorchLevel) { _, value in
             if rearTorchEnabled {
@@ -522,6 +522,7 @@ struct CameraScreen: View {
             }
             if rearTorchEnabled {
                 cam.setNightAssistTorch(enabled: false)
+                rearTorchEnabled = false
             }
         }
         .modifier(HardwareCameraCaptureModifier())
