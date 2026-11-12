@@ -5,6 +5,7 @@ struct NightAssistControlPanel: View {
     @Binding var rearTorchEnabled: Bool
     @Binding var screenFillEnabled: Bool
     @Binding var screenFillIntensity: Double
+    @Binding var rearTorchLevel: Double
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -18,6 +19,16 @@ struct NightAssistControlPanel: View {
                     .foregroundStyle(.white)
             }
             .tint(.green)
+
+            if rearTorchEnabled {
+                HStack {
+                    Text("LED 亮度")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.75))
+                    Slider(value: $rearTorchLevel, in: 0.15...1.0)
+                        .tint(.green)
+                }
+            }
 
             Divider().overlay(Color.white.opacity(0.16))
 
