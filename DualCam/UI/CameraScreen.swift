@@ -1552,7 +1552,7 @@ struct PiPOverlay: View {
                 var s = Compositor.pipSizeNormalized(cfg: next)
                 let k = min(1, (1 - anchor.x) / max(s.width, 0.001), (1 - anchor.y) / max(s.height, 0.001))
                 if k < 1 {
-                    next.pipWidth = min(max(next.pipWidth * k, 0.16), 0.9)
+                    next.pipWidth = min(max(next.pipWidth * k, 0.16), 0.55)
                     s = Compositor.pipSizeNormalized(cfg: next)
                 }
                 next.pipCenter = CGPoint(x: anchor.x + s.width / 2, y: anchor.y + s.height / 2)
