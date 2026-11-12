@@ -9,7 +9,7 @@ struct NightAssistControlPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("夜间补光")
+            Text("辅助补光")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.white)
 
@@ -49,7 +49,7 @@ struct NightAssistControlPanel: View {
                 }
             }
 
-            Text("补光是可见光照明；夜视增强滤镜仍需环境中存在可见光。")
+            Text("此处仅控制 LED 和屏幕补光，不是 iPhone 原生相机的 Night mode。iOS 未向第三方 App 开放系统相机夜间模式的直接控制接口。")
                 .font(.system(size: 10))
                 .foregroundStyle(.white.opacity(0.58))
                 .fixedSize(horizontal: false, vertical: true)
