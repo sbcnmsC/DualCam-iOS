@@ -32,6 +32,7 @@ struct CameraScreen: View {
     @State private var rearTorchLevel = 0.72
     @State private var screenFillEnabled = false
     @State private var screenFillIntensity = 0.92
+    @State private var screenFillRingWidth = 0.10
     @State private var originalScreenBrightness: CGFloat? = nil
 
     private let topBarHeight: CGFloat = 56
@@ -82,43 +83,64 @@ struct CameraScreen: View {
                 topLimit: topControlsBottom + 14,
                 bottomLimit: previewBottomLimit
             )
-            // Screen-fill ring is an outer frame around the unchanged preview.
-            // Its thickness scales with the shorter preview edge, so portrait, square,
-            // and landscape aspect ratios keep a balanced border without moving PiP.
-            let fillRingThickness = min(max(min(previewSize.width, previewSize.height) * 0.035, 10), 20)
+            // The screen-fill surface occupies the original preview rectangle.
+            // When enabled, the complete camera composition scales uniformly inward,
+            // leaving an adjustable illuminated perimeter on all four sides.
+            let fillShortEdge = min(previewSize.width, previewSize.height)
+            let fillRingThickness = screenFillEnabled
+                ? min(max(fillShortEdge * screenFillRingWidth, 8), fillShortEdge * 0.22)
+                : 0
+            let activePreviewSize = CGSize(
+                width: max(1, previewSize.width - fillRingThickness * 2),
+                height: max(1, previewSize.height - fillRingThickness * 2)
+            )
+            let activePreviewTop = previewTop + (previewSize.height - activePreviewSize.height) / 2
+            let fillCornerRadius = min(max(fillShortEdge * 0.075, 20), 36)
 
             ZStack(alignment: .topLeading) {
                 Color.black.ignoresSafeArea()
 
                 if wirelessSession.mode != .receiving {
                     if screenFillEnabled {
-                        RoundedRectangle(
-                            cornerRadius: min(max(min(previewSize.width, previewSize.height) * 0.065, 22), 34),
-                            style: .continuous
-                        )
-                        .fill(Color.white)
-                        .frame(
-                            width: previewSize.width + fillRingThickness * 2,
-                            height: previewSize.height + fillRingThickness * 2
-                        )
+                        ZStack {
+                            RoundedRectangle(cornerRadius: fillCornerRadius, style: .continuous)
+                                .fill(Color.white)
+                                .shadow(color: .white.opacity(0.62), radius: fillRingThickness * 0.9)
+                                .shadow(color: Color.cyan.opacity(0.22), radius: fillRingThickness * 1.25)
+
+                            RoundedRectangle(cornerRadius: fillCornerRadius, style: .continuous)
+                                .strokeBorder(
+                                    AngularGradient(
+                                        colors: [
+                                            .white, Color(red: 0.78, green: 0.94, blue: 1.0),
+                                            .white, Color(red: 0.91, green: 0.86, blue: 1.0), .white
+                                        ],
+                                        center: .center
+                                    ),
+                                    lineWidth: max(2, fillRingThickness * 0.10)
+                                )
+                                .blur(radius: max(1, fillRingThickness * 0.12))
+                        }
+                        .frame(width: previewSize.width, height: previewSize.height)
                         .frame(width: canvasSize.width, height: canvasSize.height, alignment: .top)
-                        .offset(
-                            x: canvasOffset.width,
-                            y: canvasOffset.height + previewTop - fillRingThickness
-                        )
-                        .shadow(color: .white.opacity(0.30), radius: fillRingThickness * 0.8)
+                        .offset(x: canvasOffset.width, y: canvasOffset.height + previewTop)
                         .transition(.opacity)
                         .allowsHitTesting(false)
                     }
 
-                    // Keep the preview's exact original bounds: the ring is decorative
-                    // hardware-style screen fill and must never recalculate the PiP anchor.
-                    PreviewStage(size: previewSize, iconRotationDegrees: iconRotationDegrees)
-                        .frame(width: previewSize.width, height: previewSize.height)
+                    // PiP and split composition live inside the uniformly scaled preview.
+                    // Its normalized placement is retained by PreviewStage; only its canvas
+                    // bounds change while fill is active, and the original layout returns on exit.
+                    PreviewStage(size: activePreviewSize, iconRotationDegrees: iconRotationDegrees)
+                        .frame(width: activePreviewSize.width, height: activePreviewSize.height)
                         .frame(width: canvasSize.width, height: canvasSize.height, alignment: .top)
-                        .offset(x: canvasOffset.width, y: canvasOffset.height + previewTop)
+                        .offset(
+                            x: canvasOffset.width + (previewSize.width - activePreviewSize.width) / 2,
+                            y: canvasOffset.height + activePreviewTop
+                        )
                         .animation(.smooth(duration: 0.3), value: cam.cfg.aspect)
                         .animation(.smooth(duration: 0.22), value: screenFillEnabled)
+                        .animation(.easeInOut(duration: 0.16), value: screenFillRingWidth)
                 }
 
                 // Close the illumination panel from the unused preview area. Keep this
@@ -148,6 +170,7 @@ struct CameraScreen: View {
                             rearTorchEnabled: $rearTorchEnabled,
                             screenFillEnabled: $screenFillEnabled,
                             screenFillIntensity: $screenFillIntensity,
+                            screenFillRingWidth: $screenFillRingWidth,
                             rearTorchLevel: $rearTorchLevel
                         )
                         .transition(.move(edge: .top).combined(with: .opacity))
