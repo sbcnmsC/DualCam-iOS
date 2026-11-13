@@ -1593,6 +1593,7 @@ final class CameraManager: NSObject, ObservableObject {
                   let device = self.devices[slot], device.hasTorch, device.isTorchAvailable else { return }
             do {
                 try device.lockForConfiguration()
+                defer { device.unlockForConfiguration() }
                 if on {
                     device.torchMode = .on
                 } else if self.nightAssistTorchRequested && !self.highResolutionBatchActive {
@@ -1601,7 +1602,6 @@ final class CameraManager: NSObject, ObservableObject {
                 } else {
                     device.torchMode = .off
                 }
-                device.unlockForConfiguration()
             } catch {
                 DispatchQueue.main.async { self.showToast("闪光灯暂不可用：\\(error.localizedDescription)") }
             }
@@ -1615,12 +1615,12 @@ final class CameraManager: NSObject, ObservableObject {
               device.hasTorch, device.isTorchAvailable else { return }
         do {
             try device.lockForConfiguration()
+            defer { device.unlockForConfiguration() }
             if nightAssistTorchRequested && session.isRunning && !monitorReceiverSuspendsCamera {
                 try device.setTorchModeOn(level: min(max(nightAssistTorchLevel, 0.05), 1.0))
             } else {
                 device.torchMode = .off
             }
-            device.unlockForConfiguration()
         } catch {
             DispatchQueue.main.async { self.showToast("后置补光灯暂不可用：\\(error.localizedDescription)") }
         }
