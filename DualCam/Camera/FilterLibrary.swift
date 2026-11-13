@@ -15,6 +15,12 @@ enum FilterKind: String, CaseIterable, Identifiable, Codable {
     case chrome = "铬黄"
     case mono = "黑白"
     case blackGold = "黑金"
+    /// Legacy persisted value retained only so older settings decode safely; it is not a filter.
+    case nightVision = "夜视"
+
+    static var allCases: [FilterKind] {
+        [.original, .vivid, .warm, .cool, .fresh, .beach, .humanistic, .cinema, .film, .retro, .faded, .chrome, .mono, .blackGold]
+    }
 
     var id: String { rawValue }
 
@@ -91,6 +97,9 @@ enum FilterKind: String, CaseIterable, Identifiable, Codable {
                 kCIInputIntensityKey: 1.0
             ])
             return colorControls(m, saturation: 1.0, brightness: -0.01, contrast: 1.15)
+        case .nightVision:
+            // Legacy persisted value only. No image enhancement is applied.
+            return image
         }
     }
 }

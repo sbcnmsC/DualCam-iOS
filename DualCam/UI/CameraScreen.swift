@@ -27,6 +27,14 @@ struct CameraScreen: View {
     @State private var zoomControlBottom: CGFloat = 0
     @State private var shutterButtonTop: CGFloat = 0
     @State private var currentOrientation: UIInterfaceOrientation = .portrait
+    @State private var showNightAssistControls = false
+    @State private var rearTorchEnabled = false
+    @State private var rearTorchLevel = 0.72
+    @State private var screenFillEnabled = false
+    @State private var screenFillIntensity = 0.92
+    @State private var screenFillRingBrightness = 0.85
+    @State private var screenFillRingWidth = 0.10
+    @State private var originalScreenBrightness: CGFloat? = nil
 
     private let topBarHeight: CGFloat = 56
 
@@ -76,17 +84,108 @@ struct CameraScreen: View {
                 topLimit: topControlsBottom + 14,
                 bottomLimit: previewBottomLimit
             )
+            // The screen-fill surface occupies the original preview rectangle.
+            // When enabled, the complete camera composition scales uniformly inward,
+            // leaving an adjustable illuminated perimeter on all four sides.
+            let fillShortEdge = min(previewSize.width, previewSize.height)
+            // Ring width is measured against the original short edge. Apply one uniform
+            // scale factor to both dimensions; subtracting the same points from width/height
+            // would distort the selected aspect ratio (especially 9:16 and 21:9).
+            let fillRingThickness = screenFillEnabled
+                ? min(max(fillShortEdge * screenFillRingWidth, 8), fillShortEdge * 0.22)
+                : 0
+            let previewScale = screenFillEnabled
+                ? max(0.56, (fillShortEdge - fillRingThickness * 2) / max(fillShortEdge, 1))
+                : 1
+            let activePreviewSize = CGSize(
+                width: max(1, previewSize.width * previewScale),
+                height: max(1, previewSize.height * previewScale)
+            )
+            let activePreviewTop = previewTop + (previewSize.height - activePreviewSize.height) / 2
+            let fillCornerRadius = min(max(fillShortEdge * 0.075, 20), 36)
 
             ZStack(alignment: .topLeading) {
                 Color.black.ignoresSafeArea()
 
                 if wirelessSession.mode != .receiving {
-                    PreviewStage(size: previewSize, iconRotationDegrees: iconRotationDegrees)
+                    if screenFillEnabled {
+                        ZStack {
+                            // A solid, evenly lit base creates a real four-sided screen-fill
+                            // band around the inset preview (top, bottom, left and right).
+                            RoundedRectangle(cornerRadius: fillCornerRadius, style: .continuous)
+                                .fill(Color.white.opacity(screenFillRingBrightness))
+                                .shadow(color: .white.opacity(0.72 * screenFillRingBrightness), radius: fillRingThickness * 0.85)
+                                .shadow(color: Color.cyan.opacity(0.18 * screenFillRingBrightness), radius: fillRingThickness * 1.15)
+
+                        }
                         .frame(width: previewSize.width, height: previewSize.height)
                         .frame(width: canvasSize.width, height: canvasSize.height, alignment: .top)
                         .offset(x: canvasOffset.width, y: canvasOffset.height + previewTop)
-                        // 切换画幅时取景框平滑伸缩 / 移动，而不是瞬间跳变
-                        .animation(.smooth(duration: 0.3), value: cam.cfg.aspect)
+                        .transition(.opacity)
+                        .allowsHitTesting(false)
+
+                    }
+
+                    // PiP and split composition live inside the uniformly scaled preview.
+                    // Its normalized placement is retained by PreviewStage; only its canvas
+                    // bounds change while fill is active, and the original layout returns on exit.
+                    PreviewStage(size: activePreviewSize, iconRotationDegrees: iconRotationDegrees)
+                        .frame(width: activePreviewSize.width, height: activePreviewSize.height)
+                        .frame(width: canvasSize.width, height: canvasSize.height, alignment: .top)
+                        // The full-width parent frame already centers its child horizontally.
+                        // Adding another half-difference offset would shift the preview off-center.
+                        .offset(
+                            x: canvasOffset.width,
+                            y: canvasOffset.height + activePreviewTop
+                        )
+                        // Animate the actual fitted geometry, not just the aspect enum.
+                        // This keeps width, height and vertical centering moving as one unit.
+                        .geometryGroup()
+                        .animation(.smooth(duration: 0.38), value: activePreviewSize)
+                        .animation(.smooth(duration: 0.38), value: activePreviewTop)
+                        .animation(.smooth(duration: 0.22), value: screenFillEnabled)
+                        .animation(.easeInOut(duration: 0.18), value: screenFillRingWidth)
+                }
+
+                // Close the illumination panel from the unused preview area. Keep this
+                // hit target below the top bar and below the panel itself so camera controls
+                // and the panel's own sliders remain interactive.
+                if showNightAssistControls && dismissOnBlankTap {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.20)) {
+                            showNightAssistControls = false
+                        }
+                        HapticFeedback.play(.button)
+                    } label: {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .frame(width: canvasSize.width, height: canvasSize.height)
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .offset(x: canvasOffset.width, y: canvasOffset.height)
+                    .zIndex(4.5)
+                    .accessibilityLabel("点击空白处关闭辅助补光面板")
+                }
+
+                if showNightAssistControls {
+                    VStack(alignment: .trailing, spacing: 0) {
+                        NightAssistControlPanel(
+                            rearTorchEnabled: $rearTorchEnabled,
+                            screenFillEnabled: $screenFillEnabled,
+                            screenFillIntensity: $screenFillIntensity,
+                            screenFillRingBrightness: $screenFillRingBrightness,
+                            screenFillRingWidth: $screenFillRingWidth,
+                            rearTorchLevel: $rearTorchLevel
+                        )
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.top, topControlsBottom + 8)
+                    .padding(.trailing, 14)
+                    .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topTrailing)
+                    .offset(x: canvasOffset.width, y: canvasOffset.height)
+                    .zIndex(8)
                 }
 
                 // The setting toggle is stored in AppStorage; honor it on the actual tool panel
@@ -116,6 +215,12 @@ struct CameraScreen: View {
                             onTimerTap: {
                                 timerDraft = cam.timerSeconds > 0 ? cam.timerSeconds : 5
                                 showTimerSettings = true
+                            },
+                            onNightAssistTap: {
+                                withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
+                                    showNightAssistControls.toggle()
+                                }
+                                HapticFeedback.play(.selection)
                             },
                             onWirelessMonitorTap: {
                                 // A single tap opens the wireless feature's own mode screen.
@@ -418,6 +523,51 @@ struct CameraScreen: View {
         .fullScreenCover(isPresented: $showCreativeGallery) {
             CreativeGalleryView()
                 .environmentObject(cam)
+        }
+        .onChange(of: rearTorchEnabled) { _, enabled in
+            cam.setNightAssistTorch(enabled: enabled, level: Float(rearTorchLevel))
+        }
+        .onChange(of: rearTorchLevel) { _, value in
+            if rearTorchEnabled {
+                cam.setNightAssistTorch(enabled: true, level: Float(value))
+            }
+        }
+        .onChange(of: screenFillEnabled) { _, enabled in
+            if enabled {
+                if originalScreenBrightness == nil {
+                    originalScreenBrightness = UIScreen.main.brightness
+                }
+                UIScreen.main.brightness = CGFloat(screenFillIntensity)
+            } else if let original = originalScreenBrightness {
+                UIScreen.main.brightness = original
+                originalScreenBrightness = nil
+            }
+        }
+        .onChange(of: screenFillIntensity) { _, value in
+            if screenFillEnabled {
+                UIScreen.main.brightness = CGFloat(value)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+            if let original = originalScreenBrightness {
+                UIScreen.main.brightness = original
+                originalScreenBrightness = nil
+            }
+            screenFillEnabled = false
+            if rearTorchEnabled {
+                rearTorchEnabled = false
+                cam.setNightAssistTorch(enabled: false)
+            }
+        }
+        .onDisappear {
+            if let original = originalScreenBrightness {
+                UIScreen.main.brightness = original
+                originalScreenBrightness = nil
+            }
+            if rearTorchEnabled {
+                cam.setNightAssistTorch(enabled: false)
+                rearTorchEnabled = false
+            }
         }
         .modifier(HardwareCameraCaptureModifier())
     }
@@ -1398,7 +1548,7 @@ struct PiPOverlay: View {
                     isDraggingPiP = false
                     cam.clearPiPDragPreview()
                 }
-                cam.cfg.pipWidth = min(max((pinchStart ?? 0.32) * value.magnification, 0.16), 0.9)
+                cam.cfg.pipWidth = min(max((pinchStart ?? 0.28) * value.magnification, 0.16), 0.55)
             }
             .onEnded { _ in
                 if pinchStart != nil { HapticFeedback.play(.selection) }
@@ -1429,13 +1579,13 @@ struct PiPOverlay: View {
                 let scale = max(Compositor.pipWidthScale(aspect: next.aspectRatio), 0.1)
                 // 手柄在右下角：右下角跟着手指走，左上角保持不动。
                 let desired = resizeStartWidth + value.translation.width / max(size.width, 1)
-                next.pipWidth = min(max(desired / scale, 0.16), 0.9)
+                next.pipWidth = min(max(desired / scale, 0.16), 0.55)
 
                 // 不允许从固定的左上角向外超出画布。
                 var s = Compositor.pipSizeNormalized(cfg: next)
                 let k = min(1, (1 - anchor.x) / max(s.width, 0.001), (1 - anchor.y) / max(s.height, 0.001))
                 if k < 1 {
-                    next.pipWidth = min(max(next.pipWidth * k, 0.16), 0.9)
+                    next.pipWidth = min(max(next.pipWidth * k, 0.16), 0.55)
                     s = Compositor.pipSizeNormalized(cfg: next)
                 }
                 next.pipCenter = CGPoint(x: anchor.x + s.width / 2, y: anchor.y + s.height / 2)
@@ -1625,10 +1775,11 @@ struct TimerSettingsOverlay: View {
 struct TopBar: View {
     @EnvironmentObject private var cam: CameraManager
     @AppStorage("dualcam.topbar.actions")
-    private var actionOrderValue = "flash,livePhoto,liveMotion,timer,swapCamera,wireless"
+    private var actionOrderValue = "flash,livePhoto,liveMotion,timer,swapCamera,nightAssist,wireless"
     @State private var isCustomizing = false
 
     let onTimerTap: () -> Void
+    let onNightAssistTap: () -> Void
     let onWirelessMonitorTap: () -> Void
     let onWirelessReceiveTap: () -> Void
     let onWirelessShareTap: () -> Void
@@ -1638,7 +1789,7 @@ struct TopBar: View {
     var iconRotationDegrees: CGFloat = 90
     var compactLayout = false
 
-    private static let baseActionKeys = ["flash", "livePhoto", "liveMotion", "timer", "swapCamera", "wireless", "shareComposite"]
+    private static let baseActionKeys = ["flash", "livePhoto", "liveMotion", "timer", "swapCamera", "nightAssist", "wireless", "shareComposite"]
     private static var allActionKeys: [String] {
         baseActionKeys + QuickParameter.allCases.map { "param.\($0.shortcutKey)" }
     }
@@ -1743,6 +1894,16 @@ struct TopBar: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            // Migrate the former filter shortcut to the real illumination controls.
+            if actionOrderValue != "none", actionOrderValue.contains("nightVision") {
+                actionOrderValue = actionOrderValue
+                    .replacingOccurrences(of: "nightVision", with: "nightAssist")
+            }
+            if cam.cfg.filter == .nightVision {
+                cam.applyFilter(.original, intensity: 1)
+            }
+        }
     }
 
     @ViewBuilder
@@ -1801,6 +1962,12 @@ struct TopBar: View {
                 HapticFeedback.play(.button)
                 onShareCompositeTap()
             }
+        case "nightAssist":
+            iconButton(actionKey: key, icon: "moon.stars.fill", active: false,
+                       label: "夜间补光设置") {
+                HapticFeedback.play(.selection)
+                onNightAssistTap()
+            }
         default:
             if key.hasPrefix("param."),
                let parameter = QuickParameter.fromShortcutKey(String(key.dropFirst("param.".count))) {
@@ -1816,7 +1983,8 @@ struct TopBar: View {
 
     private func iconButton(
         actionKey: String, icon: String, active: Bool, dimmed: Bool = false,
-        label: String, badge: String? = nil, action: @escaping () -> Void
+        label: String, badge: String? = nil, activeTint: Color = .yellow,
+        action: @escaping () -> Void
     ) -> some View {
         Button {
             if isCustomizing { removeAction(actionKey) } else { action() }
@@ -1825,9 +1993,9 @@ struct TopBar: View {
                 .rotationEffect(.degrees(iconRotationDegrees))
                 .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
                 .font(.system(size: compactLayout ? 16 : 18, weight: .semibold))
-                .foregroundStyle(active ? Color.yellow : Color.white)
+                .foregroundStyle(active ? activeTint : Color.white)
                 .frame(width: actionIconSize, height: actionIconSize)
-                .background(Circle().fill(active ? Color.yellow.opacity(0.14) : Color.white.opacity(0.07)))
+                .background(Circle().fill(active ? activeTint.opacity(0.14) : Color.white.opacity(0.07)))
                 .overlay(Circle().stroke(Color.white.opacity(active ? 0.2 : 0.1), lineWidth: 0.6))
                 .overlay(alignment: .topTrailing) {
                     if let badge, !isCustomizing {
@@ -1897,6 +2065,7 @@ struct TopBar: View {
         case "swapCamera": return "切换摄像头"
         case "wireless": return "无线监看"
         case "shareComposite": return "共享本机合成画面"
+        case "nightAssist": return "夜间补光"
         default:
             if key.hasPrefix("param."),
                let parameter = QuickParameter.fromShortcutKey(String(key.dropFirst("param.".count))) {
@@ -1915,6 +2084,7 @@ struct TopBar: View {
         case "swapCamera": return "arrow.triangle.2.circlepath"
         case "wireless": return "dot.radiowaves.left.and.right"
         case "shareComposite": return "airplayvideo"
+        case "nightAssist": return "moon.stars.fill"
         default:
             if key.hasPrefix("param."),
                let parameter = QuickParameter.fromShortcutKey(String(key.dropFirst("param.".count))) {

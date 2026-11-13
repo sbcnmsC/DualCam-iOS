@@ -34,13 +34,14 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
     private var videoSource: RTCVideoSource?
     private var frameCapturer: CompositedVideoCapturer?
     private var lastAdaptedSize = CGSize.zero
-    /// Live monitoring prioritizes motion clarity over pushing full-res preview frames through
-    /// the real-time encoder.
+    /// Keep mobile-to-mobile monitoring within a sustainable hardware-encoder budget.
+    /// 1080p-class output at 30 fps is substantially easier to encode/decode than 60 fps,
+    /// while WebRTC's congestion controller can vary bitrate between these bounds.
     private let maximumStreamingLongEdge = 1920
-    private let streamingFrameRate = 60
-    private let streamingMaximumBitrateBps = 12_000_000
-    private let streamingStartBitrateKbps = 6_000
-    private let streamingMinimumBitrateKbps = 2_500
+    private let streamingFrameRate = 30
+    private let streamingMaximumBitrateBps = 8_000_000
+    private let streamingStartBitrateKbps = 4_000
+    private let streamingMinimumBitrateKbps = 1_000
     private static let maxPendingRemoteCandidates = 128
 
     // Everything below is main-thread only. WebRTC completion handlers hop back to main first.
@@ -111,8 +112,8 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
         }
     }
 
-    /// Hints LibWebRTC to start near 6 Mbps and permit up to 12 Mbps on a fast local network.
-    /// A low bitrate floor avoids an overly soft default image; congestion control can still adapt.
+    /// Give WebRTC a practical mobile-Wi-Fi bitrate envelope. The controller can reduce
+    /// bitrate under loss/congestion instead of trying to sustain a 6–12 Mbps stream.
     private func addVideoBitrateHints(to sdp: String) -> String {
         let lines = sdp.components(separatedBy: "\r\n")
         let maxKbps = streamingMaximumBitrateBps / 1_000
@@ -166,11 +167,11 @@ final class LiveMonitorRTCService: NSObject, ObservableObject {
             frameLock.unlock()
             return
         }
-        // Allow up to 60 fps when the source supplies it. The threshold is slightly below 1/60 s
-        // to tolerate timestamp jitter; the latest-frame drain still drops stale work under load.
+        // Cap source submissions at approximately 30 fps. This avoids feeding duplicate
+        // 60 fps camera work into the mobile encoder when the negotiated stream is 30 fps.
         if frame.presentationTime.isValid, lastQueuedPTS.isValid {
             let delta = CMTimeGetSeconds(CMTimeSubtract(frame.presentationTime, lastQueuedPTS))
-            if delta >= 0, delta < (0.8 / 60.0) {
+            if delta >= 0, delta < (0.8 / 30.0) {
                 frameLock.unlock()
                 return
             }

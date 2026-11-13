@@ -140,7 +140,7 @@ struct Config: Equatable, Codable {
         aspect == .free ? min(max(freeAspect, 0.2), 4.0) : aspect.value
     }
     var pipCenter = CGPoint(x: 0.76, y: 0.20)   // 归一化，左上角为原点
-    var pipWidth: CGFloat = 0.32                // 占画布宽度的比例
+    var pipWidth: CGFloat = 0.28                // 默认占画布宽度 28%，给主画面留出更多空间
     var pipRatio: PiPRatio = .r34
     var pipShape: PiPShape = .rounded
     var pipCorner: CGFloat = 0.14               // 0...0.5，占小窗短边的比例

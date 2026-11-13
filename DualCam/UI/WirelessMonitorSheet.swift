@@ -215,16 +215,16 @@ final class WirelessMonitorSession: ObservableObject {
         }
     }
 
-    /// During wireless sharing use a bounded 1080p/60fps capture preset instead of encoding a
-    /// large still-oriented preview at the camera's usual 30fps setting. Preserve the user's
-    /// choices and restore them when sharing ends.
+    /// During wireless sharing use a bounded 1080p/30fps capture preset. Match camera/compositor
+    /// production to the WebRTC sender's 30fps target so frames are not rendered only to be
+    /// discarded at the transport boundary. Preserve the user's choices and restore them later.
     private func applyWirelessStreamPreset(to cameraManager: CameraManager) {
         guard preShareResolution == nil, preShareFPS == nil else { return }
         preShareResolution = cameraManager.cfg.resolution
         preShareFPS = cameraManager.cfg.fps
         var streamConfig = cameraManager.cfg
         streamConfig.resolution = .p1080
-        streamConfig.fps = 60
+        streamConfig.fps = 30
         if streamConfig != cameraManager.cfg {
             cameraManager.cfg = streamConfig
         }
@@ -238,7 +238,7 @@ final class WirelessMonitorSession: ObservableObject {
         // Restore only fields still carrying our temporary stream values, so later user changes
         // aren't overwritten if the parameter panel was used during a share session.
         if restored.resolution == .p1080 { restored.resolution = oldResolution }
-        if restored.fps == 60 { restored.fps = oldFPS }
+        if restored.fps == 30 { restored.fps = oldFPS }
         if restored != cameraManager.cfg {
             cameraManager.cfg = restored
         }
