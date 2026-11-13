@@ -102,7 +102,6 @@ struct CameraScreen: View {
                 width: max(1, previewSize.width * previewScale),
                 height: max(1, previewSize.height * previewScale)
             )
-            let activePreviewLeft = (previewSize.width - activePreviewSize.width) / 2
             let activePreviewTop = previewTop + (previewSize.height - activePreviewSize.height) / 2
             let fillCornerRadius = min(max(fillShortEdge * 0.075, 20), 36)
 
@@ -160,8 +159,10 @@ struct CameraScreen: View {
                     PreviewStage(size: activePreviewSize, iconRotationDegrees: iconRotationDegrees)
                         .frame(width: activePreviewSize.width, height: activePreviewSize.height)
                         .frame(width: canvasSize.width, height: canvasSize.height, alignment: .top)
+                        // The full-width parent frame already centers its child horizontally.
+                        // Adding another half-difference offset would shift the preview off-center.
                         .offset(
-                            x: canvasOffset.width + (previewSize.width - activePreviewSize.width) / 2,
+                            x: canvasOffset.width,
                             y: canvasOffset.height + activePreviewTop
                         )
                         .animation(.smooth(duration: 0.3), value: cam.cfg.aspect)
