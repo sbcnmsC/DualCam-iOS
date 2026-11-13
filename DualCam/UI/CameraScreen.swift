@@ -89,13 +89,20 @@ struct CameraScreen: View {
             // When enabled, the complete camera composition scales uniformly inward,
             // leaving an adjustable illuminated perimeter on all four sides.
             let fillShortEdge = min(previewSize.width, previewSize.height)
+            // Ring width is measured against the original short edge. Apply one uniform
+            // scale factor to both dimensions; subtracting the same points from width/height
+            // would distort the selected aspect ratio (especially 9:16 and 21:9).
             let fillRingThickness = screenFillEnabled
                 ? min(max(fillShortEdge * screenFillRingWidth, 8), fillShortEdge * 0.22)
                 : 0
+            let previewScale = screenFillEnabled
+                ? max(0.56, (fillShortEdge - fillRingThickness * 2) / max(fillShortEdge, 1))
+                : 1
             let activePreviewSize = CGSize(
-                width: max(1, previewSize.width - fillRingThickness * 2),
-                height: max(1, previewSize.height - fillRingThickness * 2)
+                width: max(1, previewSize.width * previewScale),
+                height: max(1, previewSize.height * previewScale)
             )
+            let activePreviewLeft = (previewSize.width - activePreviewSize.width) / 2
             let activePreviewTop = previewTop + (previewSize.height - activePreviewSize.height) / 2
             let fillCornerRadius = min(max(fillShortEdge * 0.075, 20), 36)
 
