@@ -470,12 +470,10 @@ private struct ExposureRuler: View {
                     HStack(spacing: 0) {
                         ForEach(-4...4, id: \.self) { offset in
                             let tickIndex = currentIndex + offset
-                            let isCenter = offset == 0
                             let inRange = tickIndex >= minIndex && tickIndex <= maxIndex
                             Rectangle()
-                                .fill(isCenter ? Color.yellow : Color.white.opacity(inRange ? (offset.isMultiple(of: 2) ? 0.48 : 0.28) : 0.08))
-                                .frame(width: isCenter ? 3 : 2,
-                                       height: isCenter ? 42 : (offset.isMultiple(of: 2) ? 27 : 18))
+                                .fill(Color.white.opacity(inRange ? (offset.isMultiple(of: 2) ? 0.48 : 0.28) : 0.08))
+                                .frame(width: 2, height: offset.isMultiple(of: 2) ? 27 : 18)
                                 .frame(width: tickSpacing, height: 48, alignment: .center)
                         }
                     }
@@ -487,7 +485,7 @@ private struct ExposureRuler: View {
                         .fill(Color.yellow)
                         .frame(width: 3, height: 42)
                         .position(x: center, y: 24)
-                        .opacity(0)
+                        .allowsHitTesting(false)
                 }
                 .contentShape(Rectangle())
                 .gesture(
@@ -583,7 +581,6 @@ struct ParamsTab: View {
                 ExposureRuler(
                     value: dbl(i, \.exposureBias) { cam.applyExposure($0) },
                     range: Double(info.minBias)...Double(max(info.maxBias, info.minBias + 0.1)),
-                    valueText: String(format: "%+.1f EV", Double(st.exposureBias)),
                     disabled: st.manualExposure || st.locked
                 )
 
@@ -1378,7 +1375,7 @@ VStack(alignment: .leading, spacing: 9) {
             HStack {
                 Text("定时器").font(.system(size: 12, weight: .semibold))
                 Picker("定时器", selection: $cam.timerSeconds) {
-                    Text("关闭").tag(0)
+                    Text("关").tag(0)
                     Text("3 秒").tag(3)
                     Text("10 秒").tag(10)
                 }
