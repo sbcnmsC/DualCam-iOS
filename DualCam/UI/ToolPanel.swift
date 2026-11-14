@@ -434,9 +434,9 @@ private struct ExposureRuler: View {
     let range: ClosedRange<Double>
     var disabled = false
 
-    @State private var dragStartValue: Double?
+    @State private var dragStartIndex: Int?
+    @State private var dragOffset: CGFloat = 0
     @State private var lastHapticIndex: Int?
-    @State private var dragRemainder: CGFloat = 0
 
     private let step = 0.1
     private let tickSpacing: CGFloat = 34
@@ -469,7 +469,7 @@ private struct ExposureRuler: View {
                 ZStack {
                     HStack(spacing: 0) {
                         ForEach(-4...4, id: \.self) { offset in
-                            let tickIndex = currentIndex + offset
+                            let tickIndex = (dragStartIndex ?? currentIndex) + offset
                             let inRange = tickIndex >= minIndex && tickIndex <= maxIndex
                             Rectangle()
                                 .fill(Color.white.opacity(inRange ? (offset.isMultiple(of: 2) ? 0.48 : 0.28) : 0.08))
@@ -478,7 +478,7 @@ private struct ExposureRuler: View {
                         }
                     }
                     .frame(width: tickSpacing * 9, height: 48)
-                    .offset(x: dragRemainder)
+                    .offset(x: dragOffset)
                     .position(x: center, y: 24)
 
                     Capsule()
@@ -492,13 +492,17 @@ private struct ExposureRuler: View {
                     DragGesture(minimumDistance: 0)
                         .onChanged { gesture in
                             guard !disabled else { return }
-                            if dragStartValue == nil { dragStartValue = value }
-                            guard let start = dragStartValue else { return }
-                            // Swipe left to increase exposure; the scale moves right-to-left
-                            // beneath the fixed center marker.
-                            let delta = Int((gesture.translation.width / tickSpacing).rounded())
-                            dragRemainder = gesture.translation.width - CGFloat(delta) * tickSpacing
-                            let nextIndex = min(max(Int((start / step).rounded()) - delta, minIndex), maxIndex)
+                            if dragStartIndex == nil {
+                                dragStartIndex = currentIndex
+                                lastHapticIndex = currentIndex
+                            }
+                            guard let startIndex = dragStartIndex else { return }
+                            // Keep tick identities fixed for the duration of the drag.
+                            // The ruler itself follows the finger; on release it snaps
+                            // the selected detent back under the stationary center marker.
+                            dragOffset = gesture.translation.width
+                            let delta = Int((-gesture.translation.width / tickSpacing).rounded())
+                            let nextIndex = min(max(startIndex + delta, minIndex), maxIndex)
                             let nextValue = min(max(Double(nextIndex) * step, range.lowerBound), range.upperBound)
                             if abs(nextValue - value) >= 0.0001 {
                                 value = nextValue
@@ -509,9 +513,9 @@ private struct ExposureRuler: View {
                             }
                         }
                         .onEnded { _ in
-                            dragStartValue = nil
+                            dragStartIndex = nil
+                            dragOffset = 0
                             lastHapticIndex = nil
-                            dragRemainder = 0
                         }
                 )
             }
