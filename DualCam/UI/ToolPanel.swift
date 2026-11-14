@@ -575,9 +575,12 @@ struct ParamsTab: View {
                         .opacity(st.manualExposure || st.locked ? 0.4 : 1)
                 }
 
-                ExposureRuler(
+                LabeledSlider(
+                    icon: "sun.max",
+                    title: "曝光",
                     value: dbl(i, \.exposureBias) { cam.applyExposure($0) },
                     range: Double(info.minBias)...Double(max(info.maxBias, info.minBias + 0.1)),
+                    valueText: String(format: "%+.1f EV", st.exposureBias),
                     disabled: st.manualExposure || st.locked
                 )
 
