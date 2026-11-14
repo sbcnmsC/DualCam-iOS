@@ -437,9 +437,9 @@ private struct ExposureRuler: View {
     @State private var lastHapticIndex: Int?
 
     private let step = 0.1
-    private let tickSpacing: CGFloat = 14
-    private let rulerHeight: CGFloat = 112
-    private let rulerWidth: CGFloat = 46
+    private let tickSpacing: CGFloat = 13
+    private let rulerHeight: CGFloat = 96
+    private let rulerWidth: CGFloat = 38
 
     private var minIndex: Int { Int(ceil(range.lowerBound / step)) }
     private var maxIndex: Int { Int(floor(range.upperBound / step)) }
@@ -455,7 +455,7 @@ private struct ExposureRuler: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.white.opacity(0.82))
                 Text(displayValue)
-                    .font(.system(size: 19, weight: .semibold, design: .rounded).monospacedDigit())
+                    .font(.system(size: 17, weight: .semibold, design: .rounded).monospacedDigit())
                     .foregroundStyle(.white)
                     .contentTransition(.numericText())
                     .lineLimit(1)
@@ -470,25 +470,25 @@ private struct ExposureRuler: View {
                 let centerY = proxy.size.height / 2
                 ZStack {
                     VStack(spacing: 0) {
-                        ForEach(-4...4, id: \.self) { offset in
+                        ForEach(-3...3, id: \.self) { offset in
                             let tickIndex = (dragStartIndex ?? currentIndex) + offset
                             let inRange = tickIndex >= minIndex && tickIndex <= maxIndex
                             HStack(spacing: 0) {
                                 Spacer(minLength: 0)
                                 Rectangle()
                                     .fill(Color.white.opacity(inRange ? (offset.isMultiple(of: 2) ? 0.68 : 0.36) : 0.10))
-                                    .frame(width: offset.isMultiple(of: 2) ? 27 : 16, height: 2)
+                                    .frame(width: offset.isMultiple(of: 2) ? 22 : 12, height: 1.5)
                             }
                             .frame(width: rulerWidth, height: tickSpacing)
                         }
                     }
-                    .frame(width: rulerWidth, height: tickSpacing * 9)
+                    .frame(width: rulerWidth, height: tickSpacing * 7)
                     .offset(y: dragOffset)
                     .position(x: proxy.size.width / 2, y: centerY)
 
                     Rectangle()
                         .fill(Color.yellow)
-                        .frame(width: rulerWidth, height: 3)
+                        .frame(width: 25, height: 2.5)
                         .position(x: proxy.size.width / 2, y: centerY)
                         .allowsHitTesting(false)
                 }
