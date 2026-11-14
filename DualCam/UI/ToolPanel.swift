@@ -439,7 +439,7 @@ private struct ExposureRuler: View {
     @State private var lastHapticIndex: Int?
 
     private let step = 0.1
-    private let tickSpacing: CGFloat = 34
+    private let tickSpacing: CGFloat = 22
 
     private var minIndex: Int { Int(ceil(range.lowerBound / step)) }
     private var maxIndex: Int { Int(floor(range.upperBound / step)) }
@@ -448,21 +448,23 @@ private struct ExposureRuler: View {
     }
 
     private var displayValue: String {
-        String(format: "%.1f", value)
+        String(format: "%+.1f EV", value)
     }
 
     var body: some View {
-        VStack(spacing: 8) {
+        HStack(spacing: 10) {
             Text("曝光")
-                .font(.system(size: 23, weight: .medium))
-                .foregroundStyle(.white)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.white.opacity(0.82))
+                .frame(width: 38, alignment: .leading)
 
             Text(displayValue)
-                .font(.system(size: 54, weight: .regular, design: .rounded).monospacedDigit())
+                .font(.system(size: 17, weight: .semibold, design: .rounded).monospacedDigit())
                 .foregroundStyle(.white)
                 .contentTransition(.numericText())
-                .frame(maxWidth: .infinity)
-                .padding(.top, 1)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(width: 82, alignment: .leading)
 
             GeometryReader { proxy in
                 let center = proxy.size.width / 2
@@ -471,20 +473,22 @@ private struct ExposureRuler: View {
                         ForEach(-4...4, id: \.self) { offset in
                             let tickIndex = (dragStartIndex ?? currentIndex) + offset
                             let inRange = tickIndex >= minIndex && tickIndex <= maxIndex
-                            Rectangle()
-                                .fill(Color.white.opacity(inRange ? (offset.isMultiple(of: 2) ? 0.48 : 0.28) : 0.08))
-                                .frame(width: 2, height: offset.isMultiple(of: 2) ? 27 : 18)
-                                .frame(width: tickSpacing, height: 48, alignment: .center)
+                            VStack(spacing: 3) {
+                                Rectangle()
+                                    .fill(Color.white.opacity(inRange ? (offset.isMultiple(of: 2) ? 0.66 : 0.34) : 0.10))
+                                    .frame(width: 2, height: offset.isMultiple(of: 2) ? 27 : 17)
+                            }
+                            .frame(width: tickSpacing, height: 42, alignment: .center)
                         }
                     }
-                    .frame(width: tickSpacing * 9, height: 48)
+                    .frame(width: tickSpacing * 9, height: 42)
                     .offset(x: dragOffset)
-                    .position(x: center, y: 24)
+                    .position(x: center, y: 21)
 
                     Capsule()
                         .fill(Color.yellow)
-                        .frame(width: 3, height: 42)
-                        .position(x: center, y: 24)
+                        .frame(width: 3, height: 38)
+                        .position(x: center, y: 21)
                         .allowsHitTesting(false)
                 }
                 .contentShape(Rectangle())
@@ -497,11 +501,10 @@ private struct ExposureRuler: View {
                                 lastHapticIndex = currentIndex
                             }
                             guard let startIndex = dragStartIndex else { return }
-                            // Keep tick identities fixed for the duration of the drag.
-                            // The ruler itself follows the finger; on release it snaps
-                            // the selected detent back under the stationary center marker.
-                            dragOffset = gesture.translation.width
-                            let delta = Int((-gesture.translation.width / tickSpacing).rounded())
+                            // Vertical finger movement scrolls the horizontal EV scale.
+                            // Drag upward advances EV; the yellow center marker stays fixed.
+                            dragOffset = gesture.translation.height
+                            let delta = Int((-gesture.translation.height / tickSpacing).rounded())
                             let nextIndex = min(max(startIndex + delta, minIndex), maxIndex)
                             let nextValue = min(max(Double(nextIndex) * step, range.lowerBound), range.upperBound)
                             if abs(nextValue - value) >= 0.0001 {
@@ -519,10 +522,10 @@ private struct ExposureRuler: View {
                         }
                 )
             }
-            .frame(height: 48)
+            .frame(height: 46)
             .accessibilityElement()
             .accessibilityLabel("曝光补偿")
-            .accessibilityValue(String(format: "%+.1f EV", value))
+            .accessibilityValue(displayValue)
             .accessibilityAdjustableAction { direction in
                 guard !disabled else { return }
                 switch direction {
@@ -532,18 +535,8 @@ private struct ExposureRuler: View {
                 }
                 HapticFeedback.play(.selection)
             }
-
-            HStack {
-                Text(String(format: "%.1f", range.lowerBound))
-                Spacer()
-                Text("每格 0.1 EV")
-                Spacer()
-                Text(String(format: "%+.1f", range.upperBound))
-            }
-            .font(.system(size: 10, design: .monospaced))
-            .foregroundStyle(Color.white.opacity(0.48))
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, minHeight: 48)
         .opacity(disabled ? 0.4 : 1)
         .disabled(disabled)
     }
