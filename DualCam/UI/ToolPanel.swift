@@ -425,80 +425,88 @@ struct FilterTab: View {
     }
 }
 
-/// A tactile exposure-compensation ruler. Each 0.1 EV notch is a discrete detent;
-/// haptics fire only when the finger crosses into a new detent, not on every render frame.
-/// Camera-style exposure ruler: the center pointer stays fixed while the tick scale
-/// moves beneath the finger. One detent equals 0.1 EV.
+/// Vertical camera-style EV ruler. The yellow horizontal pointer stays fixed
+/// while the tick scale moves vertically beneath the user's finger.
 private struct ExposureRuler: View {
     @Binding var value: Double
     let range: ClosedRange<Double>
     var disabled = false
 
-    @State private var dragStartValue: Double?
+    @State private var dragStartIndex: Int?
+    @State private var dragOffset: CGFloat = 0
     @State private var lastHapticIndex: Int?
-    @State private var dragRemainder: CGFloat = 0
 
     private let step = 0.1
-    private let tickSpacing: CGFloat = 34
+    private let tickSpacing: CGFloat = 13
+    private let rulerHeight: CGFloat = 96
+    private let rulerWidth: CGFloat = 38
 
     private var minIndex: Int { Int(ceil(range.lowerBound / step)) }
     private var maxIndex: Int { Int(floor(range.upperBound / step)) }
     private var currentIndex: Int {
         min(max(Int((value / step).rounded()), minIndex), maxIndex)
     }
-
-    private var displayValue: String {
-        String(format: "%.1f", value)
-    }
+    private var displayValue: String { String(format: "%+.1f EV", value) }
 
     var body: some View {
-        VStack(spacing: 8) {
-            Text("曝光")
-                .font(.system(size: 23, weight: .medium))
-                .foregroundStyle(.white)
-
-            Text(displayValue)
-                .font(.system(size: 54, weight: .regular, design: .rounded).monospacedDigit())
-                .foregroundStyle(.white)
-                .contentTransition(.numericText())
-                .frame(maxWidth: .infinity)
-                .padding(.top, 1)
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 7) {
+                Text("曝光")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.82))
+                Text(displayValue)
+                    .font(.system(size: 17, weight: .semibold, design: .rounded).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .contentTransition(.numericText())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                Text("0.1 EV / 格")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.48))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             GeometryReader { proxy in
-                let center = proxy.size.width / 2
+                let centerY = proxy.size.height / 2
                 ZStack {
-                    HStack(spacing: 0) {
-                        ForEach(-4...4, id: \.self) { offset in
-                            let tickIndex = currentIndex + offset
+                    VStack(spacing: 0) {
+                        ForEach(-3...3, id: \.self) { offset in
+                            let tickIndex = (dragStartIndex ?? currentIndex) + offset
                             let inRange = tickIndex >= minIndex && tickIndex <= maxIndex
-                            Rectangle()
-                                .fill(Color.white.opacity(inRange ? (offset.isMultiple(of: 2) ? 0.48 : 0.28) : 0.08))
-                                .frame(width: 2, height: offset.isMultiple(of: 2) ? 27 : 18)
-                                .frame(width: tickSpacing, height: 48, alignment: .center)
+                            HStack(spacing: 0) {
+                                Spacer(minLength: 0)
+                                Rectangle()
+                                    .fill(Color.white.opacity(inRange ? (offset.isMultiple(of: 2) ? 0.68 : 0.36) : 0.10))
+                                    .frame(width: offset.isMultiple(of: 2) ? 22 : 12, height: 1.5)
+                            }
+                            .frame(width: rulerWidth, height: tickSpacing)
                         }
                     }
-                    .frame(width: tickSpacing * 9, height: 48)
-                    .offset(x: dragRemainder)
-                    .position(x: center, y: 24)
+                    .frame(width: rulerWidth, height: tickSpacing * 7)
+                    .offset(y: dragOffset)
+                    .position(x: proxy.size.width / 2, y: centerY)
 
-                    Capsule()
+                    Rectangle()
                         .fill(Color.yellow)
-                        .frame(width: 3, height: 42)
-                        .position(x: center, y: 24)
+                        .frame(width: 25, height: 2.5)
+                        .position(x: proxy.size.width / 2, y: centerY)
                         .allowsHitTesting(false)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
+                .clipped()
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { gesture in
                             guard !disabled else { return }
-                            if dragStartValue == nil { dragStartValue = value }
-                            guard let start = dragStartValue else { return }
-                            // Swipe left to increase exposure; the scale moves right-to-left
-                            // beneath the fixed center marker.
-                            let delta = Int((gesture.translation.width / tickSpacing).rounded())
-                            dragRemainder = gesture.translation.width - CGFloat(delta) * tickSpacing
-                            let nextIndex = min(max(Int((start / step).rounded()) - delta, minIndex), maxIndex)
+                            if dragStartIndex == nil {
+                                dragStartIndex = currentIndex
+                                lastHapticIndex = currentIndex
+                            }
+                            guard let startIndex = dragStartIndex else { return }
+                            dragOffset = gesture.translation.height
+                            let delta = Int((-gesture.translation.height / tickSpacing).rounded())
+                            let nextIndex = min(max(startIndex + delta, minIndex), maxIndex)
                             let nextValue = min(max(Double(nextIndex) * step, range.lowerBound), range.upperBound)
                             if abs(nextValue - value) >= 0.0001 {
                                 value = nextValue
@@ -509,16 +517,16 @@ private struct ExposureRuler: View {
                             }
                         }
                         .onEnded { _ in
-                            dragStartValue = nil
+                            dragStartIndex = nil
+                            dragOffset = 0
                             lastHapticIndex = nil
-                            dragRemainder = 0
                         }
                 )
             }
-            .frame(height: 48)
+            .frame(width: rulerWidth, height: rulerHeight)
             .accessibilityElement()
             .accessibilityLabel("曝光补偿")
-            .accessibilityValue(String(format: "%+.1f EV", value))
+            .accessibilityValue(displayValue)
             .accessibilityAdjustableAction { direction in
                 guard !disabled else { return }
                 switch direction {
@@ -528,18 +536,8 @@ private struct ExposureRuler: View {
                 }
                 HapticFeedback.play(.selection)
             }
-
-            HStack {
-                Text(String(format: "%.1f", range.lowerBound))
-                Spacer()
-                Text("每格 0.1 EV")
-                Spacer()
-                Text(String(format: "%+.1f", range.upperBound))
-            }
-            .font(.system(size: 10, design: .monospaced))
-            .foregroundStyle(Color.white.opacity(0.48))
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, minHeight: rulerHeight)
         .opacity(disabled ? 0.4 : 1)
         .disabled(disabled)
     }
@@ -578,9 +576,12 @@ struct ParamsTab: View {
                         .opacity(st.manualExposure || st.locked ? 0.4 : 1)
                 }
 
-                ExposureRuler(
+                LabeledSlider(
+                    icon: "sun.max",
+                    title: "曝光",
                     value: dbl(i, \.exposureBias) { cam.applyExposure($0) },
                     range: Double(info.minBias)...Double(max(info.maxBias, info.minBias + 0.1)),
+                    valueText: String(format: "%+.1f EV", st.exposureBias),
                     disabled: st.manualExposure || st.locked
                 )
 

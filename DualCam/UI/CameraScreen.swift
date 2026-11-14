@@ -278,22 +278,6 @@ struct CameraScreen: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .zIndex(5)
 
-                // Keep the switch in the upper-left camera-control band, but inside
-                // the GeometryReader's active hit-test bounds. Offsetting it into the
-                // unsafe status-bar area makes it visible while UIKit can reject touches.
-                if !showPanel && wirelessSession.mode != .receiving {
-                    OutputModePill()
-                        .frame(width: 144, height: 52, alignment: .leading)
-                        .contentShape(Rectangle())
-                        .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topLeading)
-                        .offset(
-                            x: canvasOffset.width + 10,
-                            y: canvasOffset.height + topControlsBottom + 6
-                        )
-                        .zIndex(100)
-                        .allowsHitTesting(true)
-                }
-
                 // When the device is physically landscape, render a real landscape-sized
                 // parameter canvas and rotate that panel as one unit. The camera interface and
                 // its preview remain portrait-locked underneath.
@@ -1446,22 +1430,6 @@ struct PiPOverlay: View {
                     .gesture(moveGesture)
                     .simultaneousGesture(pinchGesture)
 
-                Rectangle()
-                    .fill(Color.clear)
-                    .frame(width: 64, height: 64)
-                    .overlay {
-                        Image(systemName: "arrow.up.left.and.arrow.down.right")
-                            .rotationEffect(.degrees(iconRotationDegrees))
-                            .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(Color.white)
-                            .frame(width: 34, height: 34)
-                            .background(Circle().fill(Color.black.opacity(0.78)))
-                            .overlay(Circle().stroke(Color.white.opacity(0.34), lineWidth: 0.9))
-                    }
-                    .contentShape(Rectangle())
-                    .highPriorityGesture(resizeGesture, including: .all)
-                    .accessibilityLabel("拖动放大或缩小画中画")
             }
             .frame(width: rect.width, height: rect.height)
             // Place the whole PiP interaction group from the canvas origin.
@@ -1471,6 +1439,30 @@ struct PiPOverlay: View {
             )
         }
         // The outer overlay always matches the rendered preview canvas.
+        .overlay(alignment: .topLeading) {
+            // The hit target belongs to the full preview canvas, not the smaller PiP
+            // surface. A child extending beyond the PiP frame may draw but not receive touches.
+            Rectangle()
+                .fill(Color.clear)
+                .frame(width: 64, height: 64)
+                .overlay {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .rotationEffect(.degrees(iconRotationDegrees))
+                        .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(Color.white)
+                        .frame(width: 34, height: 34)
+                        .background(Circle().fill(Color.black.opacity(0.78)))
+                        .overlay(Circle().stroke(Color.white.opacity(0.34), lineWidth: 0.9))
+                }
+                .contentShape(Rectangle())
+                .position(
+                    x: min(max(rect.maxX - 32 + dragTranslation.width, 32), max(size.width - 32, 32)),
+                    y: min(max(rect.maxY - 32 + dragTranslation.height, 32), max(size.height - 32, 32))
+                )
+                .highPriorityGesture(resizeGesture, including: .all)
+                .accessibilityLabel("拖动放大或缩小画中画")
+        }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
         .animation(.smooth(duration: 0.26), value: size)
     }
@@ -1821,7 +1813,7 @@ struct TimerSettingsOverlay: View {
 struct TopBar: View {
     @EnvironmentObject private var cam: CameraManager
     @AppStorage("dualcam.topbar.actions")
-    private var actionOrderValue = "flash,livePhoto,liveMotion,timer,swapCamera,nightAssist,wireless"
+    private var actionOrderValue = "flash,livePhoto,liveMotion,outputMode,timer,swapCamera,nightAssist,wireless"
     @State private var isCustomizing = false
 
     let onTimerTap: () -> Void
@@ -1835,7 +1827,7 @@ struct TopBar: View {
     var iconRotationDegrees: CGFloat = 90
     var compactLayout = false
 
-    private static let baseActionKeys = ["flash", "livePhoto", "liveMotion", "timer", "swapCamera", "nightAssist", "wireless", "shareComposite"]
+    private static let baseActionKeys = ["flash", "livePhoto", "liveMotion", "outputMode", "timer", "swapCamera", "nightAssist", "wireless", "shareComposite"]
     private static var allActionKeys: [String] {
         baseActionKeys + QuickParameter.allCases.map { "param.\($0.shortcutKey)" }
     }
@@ -1946,6 +1938,12 @@ struct TopBar: View {
                 actionOrderValue = actionOrderValue
                     .replacingOccurrences(of: "nightVision", with: "nightAssist")
             }
+            if actionOrderValue != "none", !actionKeys.contains("outputMode") {
+                var migratedKeys = actionKeys
+                let insertionIndex = migratedKeys.firstIndex(of: "timer").map { $0 } ?? migratedKeys.endIndex
+                migratedKeys.insert("outputMode", at: insertionIndex)
+                saveActionKeys(migratedKeys)
+            }
             if cam.cfg.filter == .nightVision {
                 cam.applyFilter(.original, intensity: 1)
             }
@@ -1984,6 +1982,26 @@ struct TopBar: View {
                 }
             } else {
                 EmptyView()
+            }
+        case "outputMode":
+            let modeBadge: String = {
+                switch cam.cfg.outputMode {
+                case .original: return "原"
+                case .composite: return "合"
+                case .both: return "双"
+                }
+            }()
+            iconButton(
+                actionKey: key,
+                icon: "viewfinder",
+                active: cam.cfg.outputMode == .original,
+                label: "保存模式：\(cam.cfg.outputMode.rawValue)，点击切换",
+                badge: modeBadge
+            ) {
+                let all = OutputMode.allCases
+                let index = all.firstIndex(of: cam.cfg.outputMode) ?? 0
+                cam.cfg.outputMode = all[(index + 1) % all.count]
+                HapticFeedback.play(.selection)
             }
         case "timer":
             iconButton(actionKey: key, icon: cam.timerSeconds == 0 ? "timer" : "timer.circle.fill",
@@ -2107,6 +2125,7 @@ struct TopBar: View {
         case "flash": return "闪光灯"
         case "livePhoto": return "实况照片"
         case "liveMotion": return "实况动态来源"
+        case "outputMode": return "保存模式"
         case "timer": return "倒计时"
         case "swapCamera": return "切换摄像头"
         case "wireless": return "无线监看"
@@ -2126,6 +2145,7 @@ struct TopBar: View {
         case "flash": return "bolt.fill"
         case "livePhoto": return "livephoto"
         case "liveMotion": return "waveform"
+        case "outputMode": return "viewfinder"
         case "timer": return "timer"
         case "swapCamera": return "arrow.triangle.2.circlepath"
         case "wireless": return "dot.radiowaves.left.and.right"
