@@ -285,10 +285,12 @@ struct CameraScreen: View {
                     OutputModePill()
                         .frame(width: 144, height: 52, alignment: .leading)
                         .contentShape(Rectangle())
-                        .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topLeading)
-                        .offset(
-                            x: canvasOffset.width + 10,
-                            y: canvasOffset.height + topControlsBottom + 6
+                        // Position the compact control directly in the canvas coordinate
+                        // space. Avoid a full-canvas frame followed by offset: that creates
+                        // a large transformed hit region which can diverge from the pill.
+                        .position(
+                            x: canvasOffset.width + 10 + 72,
+                            y: canvasOffset.height + topControlsBottom + 32
                         )
                         .zIndex(100)
                         .allowsHitTesting(true)
