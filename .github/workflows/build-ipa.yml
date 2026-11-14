@@ -5,7 +5,7 @@ name: Build IPA
 # - 没配置 → 产出「未签名」IPA，用 Sideloadly / AltStore 用自己的 Apple ID 签名后安装
 on:
   push:
-    branches: [main, optimize/high-res-preview-app-icon, fix/wireless-black-screen-latest-ipa-2026-10-27]
+    branches: [main, optimize/high-res-preview-app-icon, fix/wireless-black-screen-latest-ipa-2026-10-27, feature/night-vision-2026-11-11, fix/flash-fill-coordination-2026-11-14]
   workflow_dispatch:
 
 permissions:
@@ -207,6 +207,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish GitHub Release
+        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
           SIGNED: ${{ steps.sign.outputs.enabled }}
