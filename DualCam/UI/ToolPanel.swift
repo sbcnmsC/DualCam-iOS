@@ -436,6 +436,7 @@ private struct ExposureRuler: View {
 
     @State private var dragStartValue: Double?
     @State private var lastHapticIndex: Int?
+    @State private var dragRemainder: CGFloat = 0
 
     private let step = 0.1
     private let tickSpacing: CGFloat = 34
@@ -479,6 +480,7 @@ private struct ExposureRuler: View {
                         }
                     }
                     .frame(width: tickSpacing * 9, height: 48)
+                    .offset(x: dragRemainder)
                     .position(x: center, y: 24)
 
                     Capsule()
@@ -497,6 +499,7 @@ private struct ExposureRuler: View {
                             // Swipe left to increase exposure; the scale moves right-to-left
                             // beneath the fixed center marker.
                             let delta = Int((gesture.translation.width / tickSpacing).rounded())
+                            dragRemainder = gesture.translation.width - CGFloat(delta) * tickSpacing
                             let nextIndex = min(max(Int((start / step).rounded()) - delta, minIndex), maxIndex)
                             let nextValue = min(max(Double(nextIndex) * step, range.lowerBound), range.upperBound)
                             if abs(nextValue - value) >= 0.0001 {
@@ -510,6 +513,7 @@ private struct ExposureRuler: View {
                         .onEnded { _ in
                             dragStartValue = nil
                             lastHapticIndex = nil
+                            dragRemainder = 0
                         }
                 )
             }
