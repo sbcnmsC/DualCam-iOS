@@ -1375,7 +1375,7 @@ VStack(alignment: .leading, spacing: 9) {
             HStack {
                 Text("定时器").font(.system(size: 12, weight: .semibold))
                 Picker("定时器", selection: $cam.timerSeconds) {
-                    Text("关").tag(0)
+                    Text("关闭").tag(0)
                     Text("3 秒").tag(3)
                     Text("10 秒").tag(10)
                 }
