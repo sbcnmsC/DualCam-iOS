@@ -246,6 +246,10 @@ final class CameraManager: NSObject, ObservableObject {
     private var highResolutionBatchActive = false
     private var highResolutionBatchToken: UInt64 = 0
     private var highResolutionBatchFlashSlot: Int? = nil
+    /// Desired night-assist state survives temporary high-resolution session handoffs.
+    /// All access is serialized on sessionQueue.
+    private var nightAssistTorchRequested = false
+    private var nightAssistTorchLevel: Float = 0.72
     /// If a still never reports back (interruption, camera taken by another app), give up on that
     /// lens after this many seconds so the MultiCam preview is always restored.
     private static let highResolutionCaptureTimeout: TimeInterval = 8
@@ -548,6 +552,8 @@ final class CameraManager: NSObject, ObservableObject {
                 Self.allowHapticsDuringAudioCapture()
             }
         }
+        // Restore continuous fill after any graph rebuild, including full-resolution still capture.
+        applyNightAssistTorchOnSessionQueue()
         restartCount = 0
         let running = session.isRunning
         DispatchQueue.main.async {
@@ -1582,32 +1588,71 @@ final class CameraManager: NSObject, ObservableObject {
     }
 
     private func setTorch(slot: Int, on: Bool) {
-        withDevice(slot) { d in
-            if d.hasTorch, d.isTorchAvailable {
-                d.torchMode = on ? .on : .off
-            }
-        }
-    }
-
-    /// Continuous rear LED fill for night-assist mode. Always targets an active rear lens,
-    /// never the front camera; device configuration remains serialized on sessionQueue.
-    func setNightAssistTorch(enabled: Bool, level: Float = 0.72) {
-        let targetSlot = slotInfos.firstIndex(where: { !$0.isFront })
-        guard let slot = targetSlot else {
-            if enabled { showToast("当前镜头组合没有可用的后置补光灯") }
-            return
-        }
-        withDevice(slot) { device in
-            guard device.position == .back, device.hasTorch, device.isTorchAvailable else { return }
+        sessionQueue.async { [weak self] in
+            guard let self = self, self.devices.indices.contains(slot),
+                  let device = self.devices[slot], device.hasTorch, device.isTorchAvailable else { return }
             do {
-                if enabled {
-                    try device.setTorchModeOn(level: min(max(level, 0.05), 1.0))
+                try device.lockForConfiguration()
+                defer { device.unlockForConfiguration() }
+                if on {
+                    device.torchMode = .on
+                } else if self.nightAssistTorchRequested && !self.highResolutionBatchActive {
+                    // Temporary flash/recording light has priority; restore the selected fill level after it ends.
+                    try device.setTorchModeOn(level: min(max(self.nightAssistTorchLevel, 0.05), 1.0))
                 } else {
                     device.torchMode = .off
                 }
             } catch {
-                DispatchQueue.main.async { self.showToast("后置补光灯暂不可用：\(error.localizedDescription)") }
+                DispatchQueue.main.async { self.showToast("闪光灯暂不可用：\\(error.localizedDescription)") }
             }
+        }
+    }
+
+    /// Apply the requested continuous fill to the active rear camera. sessionQueue-only.
+    private func applyNightAssistTorchOnSessionQueue() {
+        guard !highResolutionBatchActive else { return }
+        guard let device = devices.compactMap({ $0 }).first(where: { $0.position == .back }),
+              device.hasTorch, device.isTorchAvailable else { return }
+        do {
+            try device.lockForConfiguration()
+            defer { device.unlockForConfiguration() }
+            if nightAssistTorchRequested && session.isRunning && !monitorReceiverSuspendsCamera {
+                try device.setTorchModeOn(level: min(max(nightAssistTorchLevel, 0.05), 1.0))
+            } else {
+                device.torchMode = .off
+            }
+        } catch {
+            DispatchQueue.main.async { self.showToast("后置补光灯暂不可用：\\(error.localizedDescription)") }
+        }
+    }
+
+    /// Release the preview LED before AVCapturePhotoOutput fires the exposure flash.
+    /// Keep the requested state intact; rebuild() restores it after the still capture.
+    private func suspendNightAssistTorchForStillCapture() {
+        for device in devices.compactMap({ $0 }) where device.position == .back && device.hasTorch {
+            do {
+                try device.lockForConfiguration()
+                defer { device.unlockForConfiguration() }
+                device.torchMode = .off
+            } catch {
+                NSLog("[DualCam] Could not suspend night-assist torch before still capture: %@", error.localizedDescription)
+            }
+        }
+    }
+
+    /// Continuous rear LED fill survives temporary still-photo sessions; the hardware flash
+    /// gets priority during exposure and the fill returns when the MultiCam graph is restored.
+    func setNightAssistTorch(enabled: Bool, level: Float = 0.72) {
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
+            self.nightAssistTorchRequested = enabled
+            self.nightAssistTorchLevel = min(max(level, 0.05), 1.0)
+            guard !self.highResolutionBatchActive else { return }
+            if enabled && !self.devices.compactMap({ $0 }).contains(where: { $0.position == .back && $0.hasTorch }) {
+                DispatchQueue.main.async { self.showToast("当前镜头组合没有可用的后置补光灯") }
+                return
+            }
+            self.applyNightAssistTorchOnSessionQueue()
         }
     }
 
@@ -1927,6 +1972,10 @@ final class CameraManager: NSObject, ObservableObject {
             self.highResolutionBatchActive = true
             self.highResolutionBatchToken &+= 1
             self.highResolutionBatchFlashSlot = flashSlot
+
+            // The continuous LED is preview fill, not the exposure flash. Release it before
+            // the native photo pipeline fires so the hardware flash has clean priority.
+            self.suspendNightAssistTorchForStillCapture()
 
             // Drain coalesced device writes and release the MultiCam inputs before opening the
             // single-camera session. The previous video frames were already snapshotted for fallback.
