@@ -427,90 +427,96 @@ struct FilterTab: View {
 
 /// A tactile exposure-compensation ruler. Each 0.1 EV notch is a discrete detent;
 /// haptics fire only when the finger crosses into a new detent, not on every render frame.
+/// Camera-style exposure ruler: the center pointer stays fixed while the tick scale
+/// moves beneath the finger. One detent equals 0.1 EV.
 private struct ExposureRuler: View {
     @Binding var value: Double
     let range: ClosedRange<Double>
-    let valueText: String
     var disabled = false
-    @State private var lastHapticStep: Int?
+
+    @State private var dragStartValue: Double?
+    @State private var lastHapticIndex: Int?
 
     private let step = 0.1
-    private let sideInset: CGFloat = 12
+    private let tickSpacing: CGFloat = 34
 
-    private var stepCount: Int {
-        max(1, Int(((range.upperBound - range.lowerBound) / step).rounded()))
+    private var minIndex: Int { Int(ceil(range.lowerBound / step)) }
+    private var maxIndex: Int { Int(floor(range.upperBound / step)) }
+    private var currentIndex: Int {
+        min(max(Int((value / step).rounded()), minIndex), maxIndex)
     }
 
-    private var currentStep: Int {
-        min(max(Int(((value - range.lowerBound) / step).rounded()), 0), stepCount)
+    private var displayValue: String {
+        String(format: "%.1f", value)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 4) {
-                Image(systemName: "plusminus.circle")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.yellow)
-                    .frame(width: 16)
-                Text("曝光补偿")
-                    .font(.system(size: 13))
-                Spacer(minLength: 4)
-                Text(valueText)
-                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(Color.yellow)
-                    .frame(minWidth: 58, alignment: .trailing)
-            }
+        VStack(spacing: 8) {
+            Text("曝光")
+                .font(.system(size: 23, weight: .medium))
+                .foregroundStyle(.white)
+
+            Text(displayValue)
+                .font(.system(size: 54, weight: .regular, design: .rounded).monospacedDigit())
+                .foregroundStyle(.white)
+                .contentTransition(.numericText())
+                .frame(maxWidth: .infinity)
+                .padding(.top, 1)
 
             GeometryReader { proxy in
-                let width = max(proxy.size.width - sideInset * 2, 1)
-                let progress = CGFloat(currentStep) / CGFloat(stepCount)
-                ZStack(alignment: .topLeading) {
-                    Capsule()
-                        .fill(Color.white.opacity(0.12))
-                        .frame(height: 2)
-                        .offset(y: 19)
-
+                let center = proxy.size.width / 2
+                ZStack {
                     HStack(spacing: 0) {
-                        ForEach(0...stepCount, id: \.self) { index in
+                        ForEach(-4...4, id: \.self) { offset in
+                            let tickIndex = currentIndex + offset
+                            let isCenter = offset == 0
+                            let inRange = tickIndex >= minIndex && tickIndex <= maxIndex
                             Rectangle()
-                                .fill(index == currentStep ? Color.yellow : Color.white.opacity(index.isMultiple(of: 5) ? 0.72 : 0.34))
-                                .frame(width: index.isMultiple(of: 5) ? 1.5 : 1,
-                                       height: index.isMultiple(of: 5) ? 15 : 8)
-                            if index < stepCount { Spacer(minLength: 0) }
+                                .fill(isCenter ? Color.yellow : Color.white.opacity(inRange ? (offset.isMultiple(of: 2) ? 0.48 : 0.28) : 0.08))
+                                .frame(width: isCenter ? 3 : 2,
+                                       height: isCenter ? 42 : (offset.isMultiple(of: 2) ? 27 : 18))
+                                .frame(width: tickSpacing, height: 48, alignment: .center)
                         }
                     }
-                    .frame(width: width, height: 24, alignment: .top)
-                    .offset(x: sideInset)
+                    .frame(width: tickSpacing * 9, height: 48)
+                    .position(x: center, y: 24)
 
                     Capsule()
                         .fill(Color.yellow)
-                        .frame(width: 3, height: 27)
-                        .shadow(color: Color.yellow.opacity(0.45), radius: 4)
-                        .offset(x: sideInset + width * progress - 1.5, y: 5)
+                        .frame(width: 3, height: 42)
+                        .position(x: center, y: 24)
+                        .opacity(0)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .contentShape(Rectangle())
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { gesture in
                             guard !disabled else { return }
-                            let position = min(max(gesture.location.x - sideInset, 0), width)
-                            let nextStep = min(max(Int((position / width * CGFloat(stepCount)).rounded()), 0), stepCount)
-                            if nextStep != currentStep {
-                                value = min(max(range.lowerBound + Double(nextStep) * step, range.lowerBound), range.upperBound)
-                                if lastHapticStep != nextStep {
+                            if dragStartValue == nil { dragStartValue = value }
+                            guard let start = dragStartValue else { return }
+                            // Swipe left to increase exposure; the scale moves right-to-left
+                            // beneath the fixed center marker.
+                            let delta = Int((gesture.translation.width / tickSpacing).rounded())
+                            let nextIndex = min(max(Int((start / step).rounded()) - delta, minIndex), maxIndex)
+                            let nextValue = min(max(Double(nextIndex) * step, range.lowerBound), range.upperBound)
+                            if abs(nextValue - value) >= 0.0001 {
+                                value = nextValue
+                                if lastHapticIndex != nextIndex {
                                     HapticFeedback.play(.selection)
-                                    lastHapticStep = nextStep
+                                    lastHapticIndex = nextIndex
                                 }
                             }
                         }
-                        .onEnded { _ in lastHapticStep = nil }
+                        .onEnded { _ in
+                            dragStartValue = nil
+                            lastHapticIndex = nil
+                        }
                 )
             }
-            .frame(height: 31)
+            .frame(height: 48)
             .accessibilityElement()
             .accessibilityLabel("曝光补偿")
-            .accessibilityValue(valueText)
+            .accessibilityValue(String(format: "%+.1f EV", value))
             .accessibilityAdjustableAction { direction in
                 guard !disabled else { return }
                 switch direction {
@@ -524,13 +530,14 @@ private struct ExposureRuler: View {
             HStack {
                 Text(String(format: "%.1f", range.lowerBound))
                 Spacer()
-                Text("0 EV")
+                Text("每格 0.1 EV")
                 Spacer()
-                Text(String(format: "+%.1f", range.upperBound))
+                Text(String(format: "%+.1f", range.upperBound))
             }
-            .font(.system(size: 9, design: .monospaced))
+            .font(.system(size: 10, design: .monospaced))
             .foregroundStyle(Color.white.opacity(0.48))
         }
+        .frame(maxWidth: .infinity)
         .opacity(disabled ? 0.4 : 1)
         .disabled(disabled)
     }
@@ -1249,20 +1256,19 @@ VStack(alignment: .leading, spacing: 9) {
         switch parameter {
         case .exposure:
             HStack {
-                Label("曝光补偿", systemImage: "sun.max").font(.system(size: 12, weight: .semibold))
                 Spacer()
-                Text(String(format: "%+.1f EV", Double(st.exposureBias)))
-                    .font(.system(size: 11, design: .monospaced)).foregroundStyle(Color.yellow)
                 Button("归零") {
                     HapticFeedback.play(.selection)
                     cam.resetExposureBias(i)
                 }
-                    .font(.system(size: 11, weight: .semibold)).tint(.yellow)
+                .font(.system(size: 11, weight: .semibold))
+                .tint(.yellow)
             }
-            LabeledSlider(title: "EV", value: numberBinding(i, \.exposureBias) { cam.applyExposure($0) },
-                          range: Double(info.minBias)...Double(max(info.maxBias, info.minBias + 0.1)),
-                          valueText: String(format: "%+.1f", Double(st.exposureBias)),
-                          disabled: st.manualExposure || st.locked)
+            ExposureRuler(
+                value: numberBinding(i, \.exposureBias) { cam.applyExposure($0) },
+                range: Double(info.minBias)...Double(max(info.maxBias, info.minBias + 0.1)),
+                disabled: st.manualExposure || st.locked
+            )
         case .iso:
             if !st.manualExposure {
                 Button {
