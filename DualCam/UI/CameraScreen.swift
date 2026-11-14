@@ -1446,22 +1446,6 @@ struct PiPOverlay: View {
                     .gesture(moveGesture)
                     .simultaneousGesture(pinchGesture)
 
-                Rectangle()
-                    .fill(Color.clear)
-                    .frame(width: 64, height: 64)
-                    .overlay {
-                        Image(systemName: "arrow.up.left.and.arrow.down.right")
-                            .rotationEffect(.degrees(iconRotationDegrees))
-                            .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(Color.white)
-                            .frame(width: 34, height: 34)
-                            .background(Circle().fill(Color.black.opacity(0.78)))
-                            .overlay(Circle().stroke(Color.white.opacity(0.34), lineWidth: 0.9))
-                    }
-                    .contentShape(Rectangle())
-                    .highPriorityGesture(resizeGesture, including: .all)
-                    .accessibilityLabel("拖动放大或缩小画中画")
             }
             .frame(width: rect.width, height: rect.height)
             // Place the whole PiP interaction group from the canvas origin.
@@ -1471,6 +1455,30 @@ struct PiPOverlay: View {
             )
         }
         // The outer overlay always matches the rendered preview canvas.
+        .overlay(alignment: .topLeading) {
+            // The hit target belongs to the full preview canvas, not the smaller PiP
+            // surface. A child extending beyond the PiP frame may draw but not receive touches.
+            Rectangle()
+                .fill(Color.clear)
+                .frame(width: 64, height: 64)
+                .overlay {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .rotationEffect(.degrees(iconRotationDegrees))
+                        .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(Color.white)
+                        .frame(width: 34, height: 34)
+                        .background(Circle().fill(Color.black.opacity(0.78)))
+                        .overlay(Circle().stroke(Color.white.opacity(0.34), lineWidth: 0.9))
+                }
+                .contentShape(Rectangle())
+                .position(
+                    x: min(max(rect.maxX - 32 + dragTranslation.width, 32), max(size.width - 32, 32)),
+                    y: min(max(rect.maxY - 32 + dragTranslation.height, 32), max(size.height - 32, 32))
+                )
+                .highPriorityGesture(resizeGesture, including: .all)
+                .accessibilityLabel("拖动放大或缩小画中画")
+        }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
         .animation(.smooth(duration: 0.26), value: size)
     }
