@@ -278,19 +278,19 @@ struct CameraScreen: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .zIndex(5)
 
-                // Place the compact output switch in the upper-left safe band,
-                // vertically centered with the Dynamic Island. It sits above the preview
-                // and outside the top-bar hit-test region, including full-screen ratios.
+                // Keep the switch in the upper-left camera-control band, but inside
+                // the GeometryReader's active hit-test bounds. Offsetting it into the
+                // unsafe status-bar area makes it visible while UIKit can reject touches.
                 if !showPanel && wirelessSession.mode != .receiving {
                     OutputModePill()
-                        .frame(width: 144, height: 44, alignment: .leading)
+                        .frame(width: 144, height: 52, alignment: .leading)
                         .contentShape(Rectangle())
                         .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topLeading)
                         .offset(
                             x: canvasOffset.width + 10,
-                            y: canvasOffset.height + max((insets.top - 44) / 2, 6)
+                            y: canvasOffset.height + topControlsBottom + 6
                         )
-                        .zIndex(30)
+                        .zIndex(100)
                         .allowsHitTesting(true)
                 }
 
@@ -1446,15 +1446,19 @@ struct PiPOverlay: View {
                     .gesture(moveGesture)
                     .simultaneousGesture(pinchGesture)
 
-                Image(systemName: "arrow.up.left.and.arrow.down.right")
-                    .rotationEffect(.degrees(iconRotationDegrees))
-                    .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(Color.white)
-                    .frame(width: 32, height: 32)
-                    .background(Circle().fill(Color.black.opacity(0.72)))
-                    .overlay(Circle().stroke(Color.white.opacity(0.30), lineWidth: 0.9))
-                    .frame(width: 52, height: 52)
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(width: 64, height: 64)
+                    .overlay {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                            .rotationEffect(.degrees(iconRotationDegrees))
+                            .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(Color.white)
+                            .frame(width: 34, height: 34)
+                            .background(Circle().fill(Color.black.opacity(0.78)))
+                            .overlay(Circle().stroke(Color.white.opacity(0.34), lineWidth: 0.9))
+                    }
                     .contentShape(Rectangle())
                     .highPriorityGesture(resizeGesture, including: .all)
                     .accessibilityLabel("拖动放大或缩小画中画")
@@ -1576,7 +1580,10 @@ struct PiPOverlay: View {
                 if resizeAnchor == nil {
                     let r = normalizedRect
                     resizeAnchor = CGPoint(x: r.minX, y: r.minY)
-                    resizeStartWidth = r.width
+                    // Store the compositor's source width, not the aspect-scaled
+                    // normalized rect width. The gesture converts canvas travel back
+                    // into this same configuration unit on every aspect ratio.
+                    resizeStartWidth = cam.cfg.pipWidth
                     resizeMoved = false
                     isResizingPiP = true
                     dragOriginCenter = nil
@@ -1597,8 +1604,8 @@ struct PiPOverlay: View {
                 let horizontalDelta = value.translation.width / max(size.width, 1)
                 let verticalDelta = value.translation.height / max(size.height, 1)
                     * pipRatio / aspect
-                let renderedWidth = resizeStartWidth + (horizontalDelta + verticalDelta) * 0.5
-                let requestedWidth = min(max(renderedWidth / widthScale, 0.10), 0.55)
+                let configWidthDelta = (horizontalDelta + verticalDelta) * 0.5 / widthScale
+                let requestedWidth = min(max(resizeStartWidth + configWidthDelta, 0.10), 0.55)
 
                 // Clamp growth against the compositor's exact geometry while allowing
                 // shrinking to track the finger directly. Keep the top-left corner fixed
