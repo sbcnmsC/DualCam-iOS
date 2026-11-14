@@ -278,6 +278,22 @@ struct CameraScreen: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .zIndex(5)
 
+                // Keep the switch in the upper-left camera-control band, but inside
+                // the GeometryReader's active hit-test bounds. Offsetting it into the
+                // unsafe status-bar area makes it visible while UIKit can reject touches.
+                if !showPanel && wirelessSession.mode != .receiving {
+                    OutputModePill()
+                        .frame(width: 144, height: 52, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topLeading)
+                        .offset(
+                            x: canvasOffset.width + 10,
+                            y: canvasOffset.height + topControlsBottom + 6
+                        )
+                        .zIndex(100)
+                        .allowsHitTesting(true)
+                }
+
                 // When the device is physically landscape, render a real landscape-sized
                 // parameter canvas and rotate that panel as one unit. The camera interface and
                 // its preview remain portrait-locked underneath.
@@ -995,15 +1011,6 @@ struct PreviewStage: View {
                 .transition(.opacity)
             }
 
-            VStack {
-                HStack {
-                    OutputModePill()
-                    Spacer()
-                }
-                .padding(10)
-                Spacer()
-            }
-
             // 拍照处理 / 切换镜头 / 重建会话时的「处理中」遮罩（先于快门黑场，两者叠加）
             CaptureProcessingMask()
 
@@ -1172,10 +1179,14 @@ struct OutputModePill: View {
             Text(cam.cfg.outputMode.rawValue)
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Color.yellow)
-                .padding(.horizontal, 10)
-                .frame(height: 24)
-                .background(Capsule().fill(Color.black.opacity(0.45)))
+                .padding(.horizontal, 12)
+                .frame(minWidth: 112, minHeight: 36)
+                .background(Capsule().fill(Color.black.opacity(0.58)))
+                .overlay(Capsule().stroke(Color.white.opacity(0.16), lineWidth: 0.8))
+                .contentShape(Capsule())
         }
+        .frame(minWidth: 120, minHeight: 44, alignment: .leading)
+        .contentShape(Rectangle())
         .buttonStyle(.plain)
         .disabled(cam.isRecording)
         .opacity(cam.isRecording ? 0.5 : 1)
@@ -1435,17 +1446,22 @@ struct PiPOverlay: View {
                     .gesture(moveGesture)
                     .simultaneousGesture(pinchGesture)
 
-                Image(systemName: "arrow.up.left.and.arrow.down.right")
-                    .rotationEffect(.degrees(iconRotationDegrees))
-                    .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(Color.white)
-                    .frame(width: 24, height: 24)
-                    .background(Circle().fill(Color.black.opacity(0.45)))
-                    .padding(4)
-                    .contentShape(Circle())
-                    .highPriorityGesture(resizeGesture)
-                    .accessibilityLabel("调整画中画大小")
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(width: 64, height: 64)
+                    .overlay {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                            .rotationEffect(.degrees(iconRotationDegrees))
+                            .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(Color.white)
+                            .frame(width: 34, height: 34)
+                            .background(Circle().fill(Color.black.opacity(0.78)))
+                            .overlay(Circle().stroke(Color.white.opacity(0.34), lineWidth: 0.9))
+                    }
+                    .contentShape(Rectangle())
+                    .highPriorityGesture(resizeGesture, including: .all)
+                    .accessibilityLabel("拖动放大或缩小画中画")
             }
             .frame(width: rect.width, height: rect.height)
             // Place the whole PiP interaction group from the canvas origin.
@@ -1564,7 +1580,10 @@ struct PiPOverlay: View {
                 if resizeAnchor == nil {
                     let r = normalizedRect
                     resizeAnchor = CGPoint(x: r.minX, y: r.minY)
-                    resizeStartWidth = r.width
+                    // Store the compositor's source width, not the aspect-scaled
+                    // normalized rect width. The gesture converts canvas travel back
+                    // into this same configuration unit on every aspect ratio.
+                    resizeStartWidth = cam.cfg.pipWidth
                     resizeMoved = false
                     isResizingPiP = true
                     dragOriginCenter = nil
@@ -1576,19 +1595,46 @@ struct PiPOverlay: View {
                 if abs(value.translation.width) > 2 || abs(value.translation.height) > 2 { resizeMoved = true }
 
                 var next = cam.cfg
-                let scale = max(Compositor.pipWidthScale(aspect: next.aspectRatio), 0.1)
-                // 手柄在右下角：右下角跟着手指走，左上角保持不动。
-                let desired = resizeStartWidth + value.translation.width / max(size.width, 1)
-                next.pipWidth = min(max(desired / scale, 0.16), 0.55)
+                let aspect = max(next.aspectRatio, 0.1)
+                let pipRatio = next.pipShape == .circle ? CGFloat(1) : next.pipRatio.value
+                let widthScale = max(Compositor.pipWidthScale(aspect: aspect), 0.1)
 
-                // 不允许从固定的左上角向外超出画布。
-                var s = Compositor.pipSizeNormalized(cfg: next)
-                let k = min(1, (1 - anchor.x) / max(s.width, 0.001), (1 - anchor.y) / max(s.height, 0.001))
-                if k < 1 {
-                    next.pipWidth = min(max(next.pipWidth * k, 0.16), 0.55)
-                    s = Compositor.pipSizeNormalized(cfg: next)
+                // Convert diagonal handle travel into a normalized width delta.
+                // Vertical movement is converted using the current preview/PiP ratios.
+                let horizontalDelta = value.translation.width / max(size.width, 1)
+                let verticalDelta = value.translation.height / max(size.height, 1)
+                    * pipRatio / aspect
+                let configWidthDelta = (horizontalDelta + verticalDelta) * 0.5 / widthScale
+                let requestedWidth = min(max(resizeStartWidth + configWidthDelta, 0.10), 0.55)
+
+                // Clamp growth against the compositor's exact geometry while allowing
+                // shrinking to track the finger directly. Keep the top-left corner fixed
+                // unless the minimum legal size itself would extend beyond the canvas.
+                let currentWidth = cam.cfg.pipWidth
+                var low: CGFloat = 0.10
+                var high: CGFloat = max(requestedWidth, low)
+                for _ in 0..<16 {
+                    let candidateWidth = (low + high) * 0.5
+                    var candidate = next
+                    candidate.pipWidth = candidateWidth
+                    let candidateSize = Compositor.pipSizeNormalized(cfg: candidate)
+                    let fits = anchor.x + candidateSize.width <= 1.0001 &&
+                        anchor.y + candidateSize.height <= 1.0001
+                    if fits { low = candidateWidth } else { high = candidateWidth }
                 }
-                next.pipCenter = CGPoint(x: anchor.x + s.width / 2, y: anchor.y + s.height / 2)
+                let fittedWidth = requestedWidth <= currentWidth
+                    ? requestedWidth
+                    : min(requestedWidth, low)
+                next.pipWidth = max(0.10, fittedWidth)
+                let fittedSize = Compositor.pipSizeNormalized(cfg: next)
+                let fittedAnchor = CGPoint(
+                    x: min(anchor.x, 1 - fittedSize.width),
+                    y: min(anchor.y, 1 - fittedSize.height)
+                )
+                next.pipCenter = CGPoint(
+                    x: fittedAnchor.x + fittedSize.width / 2,
+                    y: fittedAnchor.y + fittedSize.height / 2
+                )
                 cam.cfg = next
             }
             .onEnded { _ in
