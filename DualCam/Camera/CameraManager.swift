@@ -1598,7 +1598,7 @@ final class CameraManager: NSObject, ObservableObject {
                     device.torchMode = .on
                 } else if self.nightAssistTorchRequested && !self.highResolutionBatchActive {
                     // Temporary flash/recording light has priority; restore the selected fill level after it ends.
-                    try device.setTorchModeOn(level: self.nightAssistTorchLevel)
+                    try device.setTorchModeOn(level: min(max(self.nightAssistTorchLevel, 0.05), 1.0))
                 } else {
                     device.torchMode = .off
                 }
@@ -1632,8 +1632,8 @@ final class CameraManager: NSObject, ObservableObject {
         for device in devices.compactMap({ $0 }) where device.position == .back && device.hasTorch {
             do {
                 try device.lockForConfiguration()
+                defer { device.unlockForConfiguration() }
                 device.torchMode = .off
-                device.unlockForConfiguration()
             } catch {
                 NSLog("[DualCam] Could not suspend night-assist torch before still capture: %@", error.localizedDescription)
             }
