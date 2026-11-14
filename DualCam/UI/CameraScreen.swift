@@ -278,15 +278,20 @@ struct CameraScreen: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .zIndex(5)
 
-                // Keep the save-mode switch outside the preview's hit-test canvas.
-                // The preview can extend to y=0 in full-screen mode, where its old
-                // top-left pill sat underneath the top bar and became untappable.
+                // Place the compact output switch in the upper-left safe band,
+                // vertically centered with the Dynamic Island. It sits above the preview
+                // and outside the top-bar hit-test region, including full-screen ratios.
                 if !showPanel && wirelessSession.mode != .receiving {
                     OutputModePill()
-                        .frame(width: 148, height: 44, alignment: .leading)
+                        .frame(width: 144, height: 44, alignment: .leading)
+                        .contentShape(Rectangle())
                         .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topLeading)
-                        .offset(x: canvasOffset.width + 8, y: canvasOffset.height + topControlsBottom + 6)
-                        .zIndex(6)
+                        .offset(
+                            x: canvasOffset.width + 10,
+                            y: canvasOffset.height + max((insets.top - 44) / 2, 6)
+                        )
+                        .zIndex(30)
+                        .allowsHitTesting(true)
                 }
 
                 // When the device is physically landscape, render a real landscape-sized
@@ -1446,13 +1451,13 @@ struct PiPOverlay: View {
                     .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(Color.white)
-                    .frame(width: 34, height: 34)
-                    .background(Circle().fill(Color.black.opacity(0.58)))
-                    .overlay(Circle().stroke(Color.white.opacity(0.22), lineWidth: 0.8))
-                    .frame(width: 44, height: 44)
-                    .contentShape(Circle())
-                    .highPriorityGesture(resizeGesture)
-                    .accessibilityLabel("调整画中画大小")
+                    .frame(width: 32, height: 32)
+                    .background(Circle().fill(Color.black.opacity(0.72)))
+                    .overlay(Circle().stroke(Color.white.opacity(0.30), lineWidth: 0.9))
+                    .frame(width: 52, height: 52)
+                    .contentShape(Rectangle())
+                    .highPriorityGesture(resizeGesture, including: .all)
+                    .accessibilityLabel("拖动放大或缩小画中画")
             }
             .frame(width: rect.width, height: rect.height)
             // Place the whole PiP interaction group from the canvas origin.
@@ -1585,38 +1590,43 @@ struct PiPOverlay: View {
                 var next = cam.cfg
                 let aspect = max(next.aspectRatio, 0.1)
                 let pipRatio = next.pipShape == .circle ? CGFloat(1) : next.pipRatio.value
-                let scale = max(Compositor.pipWidthScale(aspect: aspect), 0.1)
+                let widthScale = max(Compositor.pipWidthScale(aspect: aspect), 0.1)
 
-                // The handle moves diagonally. Convert vertical movement into the
-                // equivalent normalized width change, then average both axes so either
-                // a horizontal, vertical or diagonal drag resizes predictably.
-                let deltaX = value.translation.width / max(size.width, 1)
-                let deltaY = value.translation.height / max(size.height, 1) * pipRatio / aspect
-                let desired = resizeStartWidth + (deltaX + deltaY) * 0.5
-                let requestedWidth = min(max(desired / scale, 0.10), 0.55)
+                // Convert diagonal handle travel into a normalized width delta.
+                // Vertical movement is converted using the current preview/PiP ratios.
+                let horizontalDelta = value.translation.width / max(size.width, 1)
+                let verticalDelta = value.translation.height / max(size.height, 1)
+                    * pipRatio / aspect
+                let renderedWidth = resizeStartWidth + (horizontalDelta + verticalDelta) * 0.5
+                let requestedWidth = min(max(renderedWidth / widthScale, 0.10), 0.55)
 
-                // Preserve the top-left anchor. Find the largest legal width by testing
-                // the compositor's exact geometry; this avoids a minimum-width clamp
-                // pushing the lower-right corner outside the canvas.
+                // Clamp growth against the compositor's exact geometry while allowing
+                // shrinking to track the finger directly. Keep the top-left corner fixed
+                // unless the minimum legal size itself would extend beyond the canvas.
+                let currentWidth = cam.cfg.pipWidth
                 var low: CGFloat = 0.10
-                var high: CGFloat = requestedWidth
-                for _ in 0..<14 {
+                var high: CGFloat = max(requestedWidth, low)
+                for _ in 0..<16 {
                     let candidateWidth = (low + high) * 0.5
                     var candidate = next
                     candidate.pipWidth = candidateWidth
                     let candidateSize = Compositor.pipSizeNormalized(cfg: candidate)
-                    if anchor.x + candidateSize.width <= 1.0001 &&
-                       anchor.y + candidateSize.height <= 1.0001 {
-                        low = candidateWidth
-                    } else {
-                        high = candidateWidth
-                    }
+                    let fits = anchor.x + candidateSize.width <= 1.0001 &&
+                        anchor.y + candidateSize.height <= 1.0001
+                    if fits { low = candidateWidth } else { high = candidateWidth }
                 }
-                next.pipWidth = min(requestedWidth, low)
+                let fittedWidth = requestedWidth <= currentWidth
+                    ? requestedWidth
+                    : min(requestedWidth, low)
+                next.pipWidth = max(0.10, fittedWidth)
                 let fittedSize = Compositor.pipSizeNormalized(cfg: next)
+                let fittedAnchor = CGPoint(
+                    x: min(anchor.x, 1 - fittedSize.width),
+                    y: min(anchor.y, 1 - fittedSize.height)
+                )
                 next.pipCenter = CGPoint(
-                    x: anchor.x + fittedSize.width / 2,
-                    y: anchor.y + fittedSize.height / 2
+                    x: fittedAnchor.x + fittedSize.width / 2,
+                    y: fittedAnchor.y + fittedSize.height / 2
                 )
                 cam.cfg = next
             }
