@@ -506,15 +506,6 @@ private struct ExposureRuler: View {
                         }
                         .onEnded { _ in lastHapticStep = nil }
                 )
-                .onTapGesture { location in
-                    guard !disabled else { return }
-                    let position = min(max(location.x - sideInset, 0), width)
-                    let nextStep = min(max(Int((position / width * CGFloat(stepCount)).rounded()), 0), stepCount)
-                    if nextStep != currentStep {
-                        value = min(max(range.lowerBound + Double(nextStep) * step, range.lowerBound), range.upperBound)
-                        HapticFeedback.play(.selection)
-                    }
-                }
             }
             .frame(height: 31)
             .accessibilityElement()
