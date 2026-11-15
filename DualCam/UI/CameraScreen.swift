@@ -1159,77 +1159,67 @@ struct OutputModePill: View {
     }
 }
 
-/// Stripe-style focus confirmation reticle. It is visual-only and never intercepts
-/// taps, so the preview's original focus gesture remains the single source of focus input.
+/// iPhone-style focus confirmation frame with the vertical exposure rail shown in the reference.
+/// Hit testing stays disabled: the existing preview gesture remains responsible for focus and EV.
 struct FocusMarkerView: View {
     var iconRotationDegrees: CGFloat = 0
-
     @State private var appeared = false
     @State private var faded = false
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .stroke(Color.yellow.opacity(0.28), lineWidth: 0.8)
-                .frame(width: 76, height: 76)
+        HStack(spacing: 14) {
+            ZStack {
+                Rectangle()
+                    .stroke(Color.yellow, lineWidth: 1.4)
+                FocusReticleTicks()
+                    .stroke(Color.yellow, style: StrokeStyle(lineWidth: 1.5, lineCap: .square))
+                Image(systemName: "scope")
+                    .rotationEffect(.degrees(iconRotationDegrees))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.yellow)
+            }
+            .frame(width: 76, height: 76)
 
-            FocusStripeTicks()
-                .stroke(Color.yellow, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
-                .frame(width: 76, height: 76)
-
-            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                .stroke(Color.yellow.opacity(0.82), lineWidth: 1.1)
-                .frame(width: 38, height: 38)
-
-            Image(systemName: "scope")
-                .rotationEffect(.degrees(iconRotationDegrees))
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color.yellow)
-                .shadow(color: .black.opacity(0.55), radius: 3)
+            VStack(spacing: 0) {
+                Rectangle().fill(Color.yellow).frame(width: 1.5, height: 24)
+                Image(systemName: "sun.max.fill")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(Color.yellow)
+                    .frame(width: 32, height: 32)
+                Rectangle().fill(Color.yellow).frame(width: 1.5, height: 24)
+            }
+            .frame(width: 32, height: 84)
         }
-        .frame(width: 84, height: 84)
-        .scaleEffect(appeared ? 1 : 0.82)
+        .frame(width: 122, height: 92)
+        .scaleEffect(appeared ? 1 : 0.94)
         .opacity(faded ? 0 : (appeared ? 1 : 0))
         .allowsHitTesting(false)
         .accessibilityHidden(true)
         .onAppear {
-            withAnimation(.spring(response: 0.28, dampingFraction: 0.68)) {
-                appeared = true
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.35) {
-                withAnimation(.easeOut(duration: 0.72)) {
-                    faded = true
-                }
+            withAnimation(.easeOut(duration: 0.18)) { appeared = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                withAnimation(.easeOut(duration: 0.55)) { faded = true }
             }
         }
     }
 }
 
-/// Fine calibration marks surrounding the focus point, with longer marks at regular intervals.
-private struct FocusStripeTicks: Shape {
+/// Short calibration marks around the focus frame.
+private struct FocusReticleTicks: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path()
-        let inset: CGFloat = 3
-        let usable = max(rect.width - inset * 2, 0)
-        let count = 9
-
-        for index in 0..<count {
-            let x = inset + usable * CGFloat(index) / CGFloat(count - 1)
-            let y = inset + usable * CGFloat(index) / CGFloat(count - 1)
-            let length: CGFloat = index.isMultiple(of: 2) ? 7 : 4
-
-            path.move(to: CGPoint(x: x, y: inset))
-            path.addLine(to: CGPoint(x: x, y: inset + length))
-
-            path.move(to: CGPoint(x: x, y: rect.maxY - inset))
-            path.addLine(to: CGPoint(x: x, y: rect.maxY - inset - length))
-
-            path.move(to: CGPoint(x: inset, y: y))
-            path.addLine(to: CGPoint(x: inset + length, y: y))
-
-            path.move(to: CGPoint(x: rect.maxX - inset, y: y))
-            path.addLine(to: CGPoint(x: rect.maxX - inset - length, y: y))
-        }
+        let inset: CGFloat = 2
+        let length: CGFloat = 7
+        let midX = rect.midX
+        let midY = rect.midY
+        path.move(to: CGPoint(x: midX, y: inset))
+        path.addLine(to: CGPoint(x: midX, y: inset + length))
+        path.move(to: CGPoint(x: midX, y: rect.maxY - inset))
+        path.addLine(to: CGPoint(x: midX, y: rect.maxY - inset - length))
+        path.move(to: CGPoint(x: inset, y: midY))
+        path.addLine(to: CGPoint(x: inset + length, y: midY))
+        path.move(to: CGPoint(x: rect.maxX - inset, y: midY))
+        path.addLine(to: CGPoint(x: rect.maxX - inset - length, y: midY))
         return path
     }
 }

@@ -370,6 +370,8 @@ private struct CameraAlbumPhotoDetail: View {
     @State private var showingDeleteConfirmation = false
     @State private var image: UIImage?
     @State private var secondaryImage: UIImage?
+    @State private var primaryImage: UIImage?
+    @State private var showingPrimaryOriginal = false
     @State private var showingSubwindow = false
     @State private var zoom: CGFloat = 1
     @State private var loadFailed = false
@@ -401,28 +403,35 @@ private struct CameraAlbumPhotoDetail: View {
         cam.archivedLiveMovieURL(for: currentURL)
     }
 
+    private var currentDisplayedURL: URL {
+        if showingPrimaryOriginal, let url = cam.archivedPrimaryPreviewURL(for: currentURL) { return url }
+        if showingSubwindow, let url = cam.archivedSecondaryPreviewURL(for: currentURL) { return url }
+        return currentURL
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 Button {
-                    if showingSubwindow {
+                    if showingSubwindow || showingPrimaryOriginal {
                         showingSubwindow = false
+                        showingPrimaryOriginal = false
                         zoom = 1
                     } else {
                         dismiss()
                     }
                 } label: {
-                    Image(systemName: showingSubwindow ? "chevron.left" : "xmark")
+                    Image(systemName: (showingSubwindow || showingPrimaryOriginal) ? "chevron.left" : "xmark")
                         .font(.system(size: 15, weight: .semibold))
                         .frame(width: 42, height: 42)
                         .background(Circle().fill(Color.white.opacity(0.09)))
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(showingSubwindow ? "返回合成照片" : "返回相机相册")
+                .accessibilityLabel((showingSubwindow || showingPrimaryOriginal) ? "返回合成照片" : "返回相机相册")
 
                 Spacer(minLength: 0)
                 VStack(spacing: 2) {
-                    Text(showingSubwindow ? "副摄画面" : "合成照片")
+                    Text(showingPrimaryOriginal ? "主摄原图" : (showingSubwindow ? "副摄原图" : "合成照片"))
                         .font(.system(size: 15, weight: .semibold))
                     Text(showingSubwindow
                          ? "小窗单独预览"
@@ -458,7 +467,7 @@ private struct CameraAlbumPhotoDetail: View {
                 .accessibilityLabel("删除当前照片")
 
                 Button {
-                    onExport(currentURL)
+                    onExport(currentDisplayedURL)
                 } label: {
                     Image(systemName: "square.and.arrow.down")
                         .font(.system(size: 15, weight: .semibold))
@@ -480,6 +489,13 @@ private struct CameraAlbumPhotoDetail: View {
                     if showingLiveMotion, let livePlayer {
                         VideoPlayer(player: livePlayer)
                             .frame(width: geo.size.width, height: geo.size.height)
+                    } else if showingPrimaryOriginal, let primaryImage {
+                        Image(uiImage: primaryImage)
+                            .resizable()
+                            .interpolation(.high)
+                            .scaledToFit()
+                            .frame(width: geo.size.width * zoom, height: geo.size.height * zoom)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else if showingSubwindow, let secondaryImage {
                         Image(uiImage: secondaryImage)
                             .resizable()
@@ -580,14 +596,36 @@ private struct CameraAlbumPhotoDetail: View {
                              : (currentPiPRegion == nil ? "左右滑动切换照片" : "左右滑动切换 · 点小窗单独预览"))))
                     .foregroundStyle(.white.opacity(0.62))
                 Spacer(minLength: 0)
-                if showingSubwindow {
+                if showingPrimaryOriginal || showingSubwindow {
                     Button("返回合成") {
+                        showingPrimaryOriginal = false
                         showingSubwindow = false
                         zoom = 1
                     }
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Color.yellow)
                     .fixedSize()
+                } else {
+                    if primaryImage != nil {
+                        Button("主摄原图") {
+                            showingPrimaryOriginal = true
+                            showingSubwindow = false
+                            zoom = 1
+                        }
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color.yellow)
+                        .fixedSize()
+                    }
+                    if secondaryImage != nil {
+                        Button("副摄原图") {
+                            showingSubwindow = true
+                            showingPrimaryOriginal = false
+                            zoom = 1
+                        }
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color.yellow)
+                        .fixedSize()
+                    }
                 }
             }
             .font(.system(size: 11, weight: .medium))
@@ -602,18 +640,27 @@ private struct CameraAlbumPhotoDetail: View {
             livePlayer = nil
             showingLiveMotion = false
             image = nil
+            primaryImage = nil
             secondaryImage = nil
+            showingPrimaryOriginal = false
             loadFailed = false
             zoom = 1
             showingSubwindow = false
 
             let requestedURL = currentURL
+            let primaryURL = cam.archivedPrimaryPreviewURL(for: requestedURL)
             let secondaryURL = cam.archivedSecondaryPreviewURL(for: requestedURL)
             let liveMovieURL = cam.archivedLiveMovieURL(for: requestedURL)
             let loadedMain = await GalleryImageLoader.load(requestedURL, maxPixel: 4096, priority: .userInitiated)
             guard !Task.isCancelled else { return }
             image = loadedMain
             loadFailed = loadedMain == nil
+            if let primaryURL {
+                primaryImage = await GalleryImageLoader.load(primaryURL, maxPixel: 4096, priority: .userInitiated)
+                guard !Task.isCancelled else { return }
+            } else {
+                primaryImage = nil
+            }
             if let secondaryURL {
                 let loadedSecondary = await GalleryImageLoader.load(secondaryURL, maxPixel: 4096, priority: .userInitiated)
                 guard !Task.isCancelled else { return }
