@@ -11,16 +11,23 @@ enum Compositor {
     /// 「最高」档直接用摄像头全部像素；录像和预览合成仍封顶 4K 级，避免实时 HEVC 编码跟不上。
     static func canvasSize(aspect: CanvasAspect, resolution: ResolutionOption, sourceWidth: CGFloat,
                            aspectRatio: CGFloat? = nil, forStill: Bool = false) -> CGSize {
+        let ratio = max(aspectRatio ?? aspect.value, 0.1)
         var w: CGFloat
         switch resolution {
-        case .p720: w = 720
-        case .p1080: w = 1080
-        case .maximum: w = min(max(sourceWidth, 720), forStill ? 4032 : 2160)
+        case .p720:
+            w = 720
+        case .p1080:
+            w = 1080
+        case .maximum:
+            // Landscape 4K needs a 3840-pixel width; portrait 4K is 2160×3840.
+            // Keep still fallback memory bounded, while normal native still capture uses
+            // AVCapturePhotoOutput's full supported sensor dimensions.
+            let widthLimit: CGFloat = forStill ? 4032 : (ratio > 1.2 ? 3840 : 2160)
+            w = min(max(sourceWidth, 720), widthLimit)
         }
-        // 不超过摄像头实际像素，不做无意义的放大
+        // Never upscale beyond the actual camera buffer.
         if sourceWidth >= 360 { w = min(w, sourceWidth) }
         w = floor(w / 2) * 2
-        let ratio = max(aspectRatio ?? aspect.value, 0.1)
         let h = (w / ratio / 2).rounded() * 2
         return CGSize(width: w, height: h)
     }
