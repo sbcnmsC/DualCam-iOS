@@ -1221,8 +1221,15 @@ struct FocusMarkerView: View {
             }
         }
         .frame(width: 126, height: max(reticleSize, trackHeight + 50))
-        .scaleEffect(appeared ? 1 : 1.04)
-        .onAppear { withAnimation(.easeOut(duration: 0.14)) { appeared = true } }
+        // A fresh marker ID is created for every screen tap, so replay a clear
+        // focus confirmation pulse even when the user taps the same point repeatedly.
+        .scaleEffect(appeared ? 1 : 1.16)
+        .opacity(appeared ? 1 : 0.72)
+        .onAppear {
+            withAnimation(.spring(response: 0.24, dampingFraction: 0.62)) {
+                appeared = true
+            }
+        }
         .accessibilityElement(children: .contain)
     }
 
