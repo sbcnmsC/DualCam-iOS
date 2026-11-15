@@ -939,8 +939,6 @@ struct PreviewStage: View {
     let size: CGSize
     var iconRotationDegrees: CGFloat = 0
 
-    @State private var pressing = false
-    @State private var adjusting = false
     @State private var pinching = false
     @State private var zoomStart: CGFloat? = nil
     @State private var blinkOpacity: Double = 0
@@ -955,7 +953,7 @@ struct PreviewStage: View {
                     .allowsHitTesting(false)
             }
 
-            // 最底层的手势层：点按对焦、上下滑动调曝光、双指变焦
+            // Preview taps only set focus. Exposure is adjusted exclusively on the sun handle.
             Color.clear
                 .contentShape(Rectangle())
                 .gesture(backgroundGesture)
@@ -971,7 +969,16 @@ struct PreviewStage: View {
             if let marker = cam.focusMarker {
                 let focusX = min(max(marker.point.x * size.width, 44), max(44, size.width - 44))
                 let focusY = min(max(marker.point.y * size.height, 44), max(44, size.height - 44))
-                FocusMarkerView(iconRotationDegrees: iconRotationDegrees)
+                let slot = marker.slot ?? cam.mainSlot
+                let info = cam.slotInfos[slot]
+                FocusMarkerView(
+                    iconRotationDegrees: iconRotationDegrees,
+                    exposureBias: marker.exposureBias ?? cam.slotStates[slot].exposureBias,
+                    minBias: info.minBias,
+                    maxBias: info.maxBias,
+                    isExposureLocked: cam.slotStates[slot].manualExposure || cam.slotStates[slot].locked,
+                    onExposureChanged: { cam.adjustExposureBias(slot: slot, value: $0) }
+                )
                     .position(x: focusX, y: focusY)
                     .id(marker.id)
                     .transition(.opacity)
@@ -1018,25 +1025,10 @@ struct PreviewStage: View {
     }
 
     private var backgroundGesture: some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { v in
+        SpatialTapGesture()
+            .onEnded { value in
                 guard !pinching else { return }
-                if !pressing {
-                    pressing = true
-                    adjusting = false
-                    cam.exposureDragBegan(at: normalized(v.startLocation))
-                }
-                if abs(v.translation.height) > 10 || adjusting {
-                    adjusting = true
-                    cam.exposureDragChanged(dy: v.translation.height, at: normalized(v.location))
-                }
-            }
-            .onEnded { v in
-                if !adjusting && !pinching && hypot(v.translation.width, v.translation.height) < 12 {
-                    cam.focus(atNormalized: normalized(v.startLocation))
-                }
-                pressing = false
-                adjusting = false
+                cam.focus(atNormalized: normalized(value.location))
             }
     }
 
@@ -1159,18 +1151,27 @@ struct OutputModePill: View {
     }
 }
 
-/// iPhone-style focus confirmation frame with the vertical exposure rail shown in the reference.
-/// Hit testing stays disabled: the existing preview gesture remains responsible for focus and EV.
+/// Focus frame with a directly draggable exposure control on the right rail.
 struct FocusMarkerView: View {
     var iconRotationDegrees: CGFloat = 0
+    let exposureBias: Float
+    let minBias: Float
+    let maxBias: Float
+    let isExposureLocked: Bool
+    let onExposureChanged: (Float) -> Void
+
     @State private var appeared = false
     @State private var faded = false
+    @State private var draggingSun = false
+
+    private var clampedBias: Float {
+        min(max(exposureBias, minBias), maxBias)
+    }
 
     var body: some View {
         HStack(spacing: 14) {
             ZStack {
-                Rectangle()
-                    .stroke(Color.yellow, lineWidth: 1.4)
+                Rectangle().stroke(Color.yellow, lineWidth: 1.4)
                 FocusReticleTicks()
                     .stroke(Color.yellow, style: StrokeStyle(lineWidth: 1.5, lineCap: .square))
                 Image(systemName: "scope")
@@ -1179,32 +1180,73 @@ struct FocusMarkerView: View {
                     .foregroundStyle(Color.yellow)
             }
             .frame(width: 76, height: 76)
+            .allowsHitTesting(false)
 
-            VStack(spacing: 0) {
-                Rectangle().fill(Color.yellow).frame(width: 1.5, height: 24)
-                Image(systemName: "sun.max.fill")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(Color.yellow)
-                    .frame(width: 32, height: 32)
-                Rectangle().fill(Color.yellow).frame(width: 1.5, height: 24)
+            GeometryReader { proxy in
+                let height = proxy.size.height
+                let usableHeight = max(height - 20, 1)
+                let range = max(maxBias - minBias, 0.01)
+                let fraction = CGFloat((clampedBias - minBias) / range)
+                let sunY = 10 + (1 - fraction) * usableHeight
+
+                ZStack(alignment: .top) {
+                    Rectangle()
+                        .fill(Color.yellow.opacity(0.95))
+                        .frame(width: 1.5, height: max(sunY - 10, 0))
+                        .position(x: proxy.size.width / 2, y: sunY / 2)
+
+                    Rectangle()
+                        .fill(Color.yellow.opacity(0.95))
+                        .frame(width: 1.5, height: max(height - sunY - 10, 0))
+                        .position(x: proxy.size.width / 2, y: sunY + 10 + max(height - sunY - 10, 0) / 2)
+
+                    Image(systemName: "sun.max.fill")
+                        .font(.system(size: 19, weight: .medium))
+                        .foregroundStyle(isExposureLocked ? Color.yellow.opacity(0.45) : Color.yellow)
+                        .frame(width: 42, height: 42)
+                        .background(Color.black.opacity(0.16), in: Circle())
+                        .position(x: proxy.size.width / 2, y: sunY)
+                }
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            guard !isExposureLocked else { return }
+                            draggingSun = true
+                            let y = min(max(value.location.y, 10), height - 10)
+                            let progress = 1 - Float((y - 10) / usableHeight)
+                            onExposureChanged(minBias + progress * range)
+                        }
+                        .onEnded { _ in draggingSun = false }
+                )
+                .accessibilityElement()
+                .accessibilityLabel("曝光调节")
+                .accessibilityValue(String(format: "%.1f EV", clampedBias))
             }
-            .frame(width: 32, height: 84)
+            .frame(width: 42, height: 92)
+            .allowsHitTesting(!isExposureLocked)
         }
-        .frame(width: 122, height: 92)
+        .frame(width: 132, height: 96)
         .scaleEffect(appeared ? 1 : 0.94)
-        .opacity(faded ? 0 : (appeared ? 1 : 0))
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
+        .opacity(faded && !draggingSun ? 0 : (appeared ? 1 : 0))
+        .accessibilityHidden(false)
         .onAppear {
             withAnimation(.easeOut(duration: 0.18)) { appeared = true }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.4) {
                 withAnimation(.easeOut(duration: 0.55)) { faded = true }
+            }
+        }
+        .onChange(of: draggingSun) { _, isDragging in
+            if isDragging { faded = false }
+            else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.4) {
+                    withAnimation(.easeOut(duration: 0.55)) { faded = true }
+                }
             }
         }
     }
 }
 
-/// Short calibration marks around the focus frame.
 private struct FocusReticleTicks: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path()

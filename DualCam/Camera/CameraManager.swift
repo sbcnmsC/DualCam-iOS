@@ -1361,7 +1361,8 @@ final class CameraManager: NSObject, ObservableObject {
 
     func showMarker(at p: CGPoint, slot: Int? = nil) {
         exposureMarkerID = nil
-        let marker = FocusMarker(point: p, slot: slot)
+        let bias = slotStates.indices.contains(slot) ? slotStates[slot].exposureBias : 0
+        let marker = FocusMarker(point: p, exposureBias: bias, slot: slot)
         focusMarker = marker
         scheduleFocusMarkerDismissal(id: marker.id)
     }
@@ -1400,24 +1401,6 @@ final class CameraManager: NSObject, ObservableObject {
         showExposureMarker(at: point, bias: bias, slot: slot)
     }
 
-    func exposureDragBegan(at p: CGPoint) {
-        let c = cfg
-        let regions = Compositor.regions(cfg: c)
-        let mainSlot = c.swapped ? 1 : 0
-        dragSlot = regions.sub.contains(p) ? 1 - mainSlot : mainSlot
-        dragStartBias = slotStates[dragSlot].exposureBias
-    }
-
-    func exposureDragChanged(dy: CGFloat, at point: CGPoint) {
-        let slot = dragSlot
-        let s = slotStates[slot]
-        guard !s.manualExposure, !s.locked else { return }
-        let info = slotInfos[slot]
-        let bias = min(max(dragStartBias - Float(dy / 70), info.minBias), info.maxBias)
-        slotStates[slot].exposureBias = bias
-        applyExposure(slot)
-        showExposureMarker(at: point, bias: bias, slot: slot)
-    }
 
     private func subjectAreaChanged() {
         DispatchQueue.main.async {
