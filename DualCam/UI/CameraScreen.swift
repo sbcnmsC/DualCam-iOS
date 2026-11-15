@@ -1326,7 +1326,6 @@ struct PiPOverlay: View {
                     TapGesture().onEnded {
                         guard !cam.isRecording && !cam.isCapturingPhoto,
                               !isDraggingPiP, !isResizingPiP else { return }
-                        HapticFeedback.play(.selection)
                         cam.swapCameras()
                     }
                 )
