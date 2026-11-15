@@ -1392,24 +1392,69 @@ VStack(alignment: .leading, spacing: 9) {
                               range: 0...1, valueText: shutterText(info: info, t: st.shutter))
             }
         case .focus:
-            HStack {
-                Toggle("手动对焦", isOn: boolBinding(i, \.manualFocus) { cam.applyFocus($0) })
-                    .font(.system(size: 12))
-                Spacer()
-                Button("自动对焦") {
-                    HapticFeedback.play(.selection)
-                    cam.setAutoFocus(i)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("对焦模式")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text(st.manualFocus ? "手动控制焦点距离" : "点按取景画面自动对焦")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Color.white.opacity(0.55))
+                    }
+                    Spacer(minLength: 6)
+                    HStack(spacing: 3) {
+                        Button {
+                            HapticFeedback.play(.selection)
+                            cam.setAutoFocus(i)
+                        } label: {
+                            Text("自动")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(!st.manualFocus ? Color.black : Color.white.opacity(0.72))
+                                .frame(width: 48, height: 30)
+                                .background(Capsule().fill(!st.manualFocus ? Color.yellow : Color.white.opacity(0.08)))
+                        }
+                        .buttonStyle(.plain)
+
+                        Button {
+                            guard info.supportsManualFocus else { return }
+                            HapticFeedback.play(.selection)
+                            if !cam.slotStates[i].manualFocus {
+                                cam.slotStates[i].manualFocus = true
+                                cam.applyFocus(i)
+                            }
+                        } label: {
+                            Text("手动")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(st.manualFocus ? Color.black : Color.white.opacity(0.72))
+                                .frame(width: 48, height: 30)
+                                .background(Capsule().fill(st.manualFocus ? Color.yellow : Color.white.opacity(0.08)))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!info.supportsManualFocus)
+                        .opacity(info.supportsManualFocus ? 1 : 0.4)
+                    }
+                    .padding(3)
+                    .background(Capsule().fill(Color.white.opacity(0.055)))
                 }
-                    .font(.system(size: 11, weight: .semibold)).tint(.yellow)
-            }
-            if st.manualFocus {
-                LabeledSlider(icon: "scope", title: "对焦距离",
-                              value: numberBinding(i, \.lensPosition) { cam.applyFocus($0) },
-                              range: 0...1, valueText: String(format: "%.2f", Double(st.lensPosition)),
-                              disabled: !info.supportsManualFocus)
-            } else {
-                Text("点按预览对焦；焦点框右侧太阳滑杆可调节曝光。")
-                    .font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.62))
+
+                if st.manualFocus {
+                    LabeledSlider(icon: "scope", title: "对焦距离",
+                                  value: numberBinding(i, \.lensPosition) { cam.applyFocus($0) },
+                                  range: 0...1, valueText: String(format: "%.2f", Double(st.lensPosition)),
+                                  disabled: !info.supportsManualFocus)
+                } else {
+                    HStack(spacing: 7) {
+                        Image(systemName: "scope")
+                            .foregroundStyle(Color.yellow)
+                        Text("轻点预览画面即可重新选择焦点")
+                            .foregroundStyle(Color.white.opacity(0.68))
+                    }
+                    .font(.system(size: 10, weight: .medium))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 9)
+                    .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.045)))
+                }
             }
         case .whiteBalance:
             Toggle("手动白平衡", isOn: boolBinding(i, \.manualWB) { cam.applyWhiteBalance($0) })
