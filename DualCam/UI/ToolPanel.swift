@@ -1270,6 +1270,14 @@ VStack(alignment: .leading, spacing: 9) {
 
         switch parameter {
         case .exposure:
+            LabeledSlider(
+                icon: "sun.max",
+                title: "曝光",
+                value: numberBinding(i, \.exposureBias) { cam.applyExposure($0) },
+                range: Double(info.minBias)...Double(max(info.maxBias, info.minBias + 0.1)),
+                valueText: String(format: "%+.1f EV", Double(st.exposureBias)),
+                disabled: st.manualExposure || st.locked
+            )
             HStack {
                 Spacer()
                 Button("归零") {
@@ -1278,12 +1286,8 @@ VStack(alignment: .leading, spacing: 9) {
                 }
                 .font(.system(size: 11, weight: .semibold))
                 .tint(.yellow)
+                .disabled(st.manualExposure || st.locked)
             }
-            ExposureRuler(
-                value: numberBinding(i, \.exposureBias) { cam.applyExposure($0) },
-                range: Double(info.minBias)...Double(max(info.maxBias, info.minBias + 0.1)),
-                disabled: st.manualExposure || st.locked
-            )
         case .iso:
             if !st.manualExposure {
                 Button {
