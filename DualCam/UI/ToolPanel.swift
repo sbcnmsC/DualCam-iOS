@@ -187,6 +187,10 @@ struct ToolPanel: View {
 
 struct LabeledSlider: View {
     @Environment(\.toolPanelIconRotationDegrees) private var iconRotationDegrees
+    @AppStorage("dualcam.adjustmentHandedness") private var leftHanded = false
+    @State private var startIndex: Int?
+    @State private var dragOffset: CGFloat = 0
+    @State private var lastHapticIndex: Int?
     var icon: String? = nil
     let title: String
     @Binding var value: Double
@@ -194,34 +198,93 @@ struct LabeledSlider: View {
     let valueText: String
     var disabled = false
 
+    private let tickSpacing: CGFloat = 13
+    private let rulerWidth: CGFloat = 38
+    private let rulerHeight: CGFloat = 96
+    private var unit: Double { max((range.upperBound - range.lowerBound) / 100, 0.01) }
+    private var maxIndex: Int { max(0, Int(floor((range.upperBound - range.lowerBound) / unit + 0.000001))) }
+    private var currentIndex: Int { min(max(Int(((value - range.lowerBound) / unit).rounded()), 0), maxIndex) }
+
     var body: some View {
-        HStack(spacing: 10) {
-            HStack(spacing: 4) {
-                if let icon {
-                    Image(systemName: icon)
-                        .rotationEffect(.degrees(iconRotationDegrees))
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Color.yellow)
-                        .frame(width: 16)
+        HStack(spacing: 12) {
+            if leftHanded { ruler }
+            VStack(alignment: leftHanded ? .trailing : .leading, spacing: 5) {
+                HStack(spacing: 5) {
+                    if let icon {
+                        Image(systemName: icon)
+                            .rotationEffect(.degrees(iconRotationDegrees))
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Color.yellow)
+                    }
+                    Text(title).font(.system(size: 13, weight: .medium)).lineLimit(1).minimumScaleFactor(0.8)
                 }
-                Text(title)
-                    .font(.system(size: 13))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                Text(valueText)
+                    .font(.system(size: 16, weight: .semibold, design: .rounded).monospacedDigit())
+                    .foregroundStyle(.white).contentTransition(.numericText()).lineLimit(1).minimumScaleFactor(0.72)
+                Text("精细刻度").font(.system(size: 10, weight: .medium)).foregroundStyle(.white.opacity(0.42))
             }
-            .frame(width: icon == nil ? 64 : 84, alignment: .leading)
-            Slider(value: $value, in: range, onEditingChanged: { editing in
-                // Give one short confirmation when the adjustment finishes, never on every drag frame.
-                if !editing { HapticFeedback.play(.selection) }
-            })
-                .accessibilityLabel(title)
-                .accessibilityValue(valueText)
-            Text(valueText)
-                .font(.system(size: 12, design: .monospaced))
-                .frame(width: 56, alignment: .trailing)
+            .frame(maxWidth: .infinity, alignment: leftHanded ? .trailing : .leading)
+            if !leftHanded { ruler }
         }
+        .frame(maxWidth: .infinity, minHeight: rulerHeight)
         .opacity(disabled ? 0.4 : 1)
         .disabled(disabled)
+    }
+
+    private var ruler: some View {
+        GeometryReader { proxy in
+            let center = proxy.size.height / 2
+            ZStack {
+                VStack(spacing: 0) {
+                    ForEach(-3...3, id: \.self) { offset in
+                        let tick = (startIndex ?? currentIndex) + offset
+                        let valid = tick >= 0 && tick <= maxIndex
+                        HStack {
+                            Spacer(minLength: 0)
+                            Rectangle()
+                                .fill(Color.white.opacity(valid ? (offset.isMultiple(of: 2) ? 0.68 : 0.36) : 0.10))
+                                .frame(width: offset.isMultiple(of: 2) ? 22 : 12, height: 1.5)
+                        }
+                        .frame(width: rulerWidth, height: tickSpacing)
+                    }
+                }
+                .frame(width: rulerWidth, height: tickSpacing * 7)
+                .offset(y: dragOffset)
+                .position(x: proxy.size.width / 2, y: center)
+                Rectangle().fill(Color.yellow).frame(width: 25, height: 2.5)
+                    .position(x: proxy.size.width / 2, y: center).allowsHitTesting(false)
+            }
+            .contentShape(Rectangle()).clipped()
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { gesture in
+                    guard !disabled else { return }
+                    if startIndex == nil { startIndex = currentIndex; lastHapticIndex = currentIndex }
+                    guard let start = startIndex else { return }
+                    dragOffset = gesture.translation.height
+                    let delta = Int((-gesture.translation.height / tickSpacing).rounded())
+                    let next = min(max(start + delta, 0), maxIndex)
+                    let nextValue = min(range.lowerBound + Double(next) * unit, range.upperBound)
+                    if abs(nextValue - value) >= 0.000001 {
+                        value = nextValue
+                        if lastHapticIndex != next {
+                            HapticFeedback.play(.selection)
+                            lastHapticIndex = next
+                        }
+                    }
+                }
+                .onEnded { _ in startIndex = nil; dragOffset = 0; lastHapticIndex = nil })
+        }
+        .frame(width: rulerWidth, height: rulerHeight)
+        .accessibilityElement().accessibilityLabel(title).accessibilityValue(valueText)
+        .accessibilityAdjustableAction { direction in
+            guard !disabled else { return }
+            switch direction {
+            case .increment: value = min(value + unit, range.upperBound)
+            case .decrement: value = max(value - unit, range.lowerBound)
+            @unknown default: break
+            }
+            HapticFeedback.play(.selection)
+        }
     }
 }
 
@@ -713,6 +776,7 @@ struct SettingsTab: View {
     @AppStorage("dualcam.sound.recordingStop") private var recordingStopSoundEnabled = true
     @AppStorage("dualcam.haptics.enabled") private var hapticsEnabled = true
     @AppStorage("dualcam.dismissOnBlankTap") private var dismissOnBlankTap = true
+    @AppStorage("dualcam.adjustmentHandedness") private var leftHandedAdjustments = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -854,6 +918,16 @@ struct SettingsTab: View {
                 Toggle("点击空白处关闭弹窗", isOn: $dismissOnBlankTap)
                     .font(.system(size: 12))
                     .tint(.yellow)
+                HStack {
+                    Text("调节刻度位置").font(.system(size: 12))
+                    Spacer()
+                    Picker("调节刻度位置", selection: $leftHandedAdjustments) {
+                        Text("右手").tag(false)
+                        Text("左手").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 132)
+                }
                 Text(dismissOnBlankTap
                      ? "点击弹窗外的空白区域即可关闭。"
                      : "已关闭空白处关闭；请使用弹窗内的关闭、取消或确定按钮。")
