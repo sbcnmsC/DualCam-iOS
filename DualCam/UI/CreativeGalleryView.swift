@@ -584,52 +584,60 @@ private struct CameraAlbumPhotoDetail: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            HStack(spacing: 8) {
-                Image(systemName: showingSubwindow ? "rectangle.on.rectangle" : "hand.draw")
-                    .foregroundStyle(Color.yellow)
-                Text(showingLiveMotion
-                     ? "正在播放实况片段"
-                     : (showingSubwindow
-                         ? "正在单独预览副摄画面"
-                         : (currentLiveMovieURL != nil
-                             ? "实况照片 · 左右滑动切换"
-                             : (currentPiPRegion == nil ? "左右滑动切换照片" : "左右滑动切换 · 点小窗单独预览"))))
-                    .foregroundStyle(.white.opacity(0.62))
-                Spacer(minLength: 0)
-                if showingPrimaryOriginal || showingSubwindow {
-                    Button("返回合成") {
-                        showingPrimaryOriginal = false
-                        showingSubwindow = false
-                        zoom = 1
-                    }
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.yellow)
-                    .fixedSize()
-                } else {
-                    if primaryImage != nil {
-                        Button("主摄原图") {
-                            showingPrimaryOriginal = true
+            VStack(spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: showingSubwindow ? "rectangle.on.rectangle" : "hand.draw")
+                        .foregroundStyle(Color.yellow)
+                    Text(showingLiveMotion
+                         ? "正在播放实况片段"
+                         : (showingSubwindow
+                             ? "正在单独预览副摄画面"
+                             : (currentLiveMovieURL != nil
+                                 ? "实况照片 · 左右滑动切换"
+                                 : (currentPiPRegion == nil ? "左右滑动切换照片" : "左右滑动切换 · 点小窗单独预览"))))
+                        .foregroundStyle(.white.opacity(0.62))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    if showingPrimaryOriginal || showingSubwindow {
+                        Button("返回合成") {
+                            showingPrimaryOriginal = false
                             showingSubwindow = false
                             zoom = 1
                         }
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Color.yellow)
                         .fixedSize()
-                    }
-                    if secondaryImage != nil {
-                        Button("副摄原图") {
-                            showingSubwindow = true
-                            showingPrimaryOriginal = false
-                            zoom = 1
+                    } else {
+                        if primaryImage != nil {
+                            Button("主摄原图") {
+                                showingPrimaryOriginal = true
+                                showingSubwindow = false
+                                zoom = 1
+                            }
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Color.yellow)
+                            .fixedSize()
                         }
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Color.yellow)
-                        .fixedSize()
+                        if secondaryImage != nil {
+                            Button("副摄原图") {
+                                showingSubwindow = true
+                                showingPrimaryOriginal = false
+                                zoom = 1
+                            }
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Color.yellow)
+                            .fixedSize()
+                        }
                     }
+                }
+                HStack(spacing: 8) {
+                    splitExportButton(title: "保存合成", symbol: "square.stack.3d.up", url: currentURL)
+                    splitExportButton(title: "保存主摄", symbol: "camera", url: cam.archivedPrimaryPreviewURL(for: currentURL))
+                    splitExportButton(title: "保存副摄", symbol: "camera.aperture", url: cam.archivedSecondaryPreviewURL(for: currentURL))
                 }
             }
             .font(.system(size: 11, weight: .medium))
-            .padding(.horizontal, 16)
+            .padding(.horizontal, 14)
             .padding(.top, 8)
             .padding(.bottom, 12)
         }
@@ -693,6 +701,23 @@ private struct CameraAlbumPhotoDetail: View {
             Text("照片及其关联的小窗预览与实况片段会一起删除，无法撤销。")
         }
         .preferredColorScheme(.dark)
+    }
+
+    private func splitExportButton(title: String, symbol: String, url: URL?) -> some View {
+        Button {
+            guard let url else { return }
+            onExport(url)
+        } label: {
+            Label(title, systemImage: symbol)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(url == nil ? Color.white.opacity(0.28) : Color.black)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 11)
+                .background(url == nil ? Color.white.opacity(0.07) : Color.yellow, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(url == nil)
+        .accessibilityLabel(url == nil ? "\(title)，当前照片无对应原图" : "\(title)到系统照片图库")
     }
 
     private func toggleLivePlayback() {
