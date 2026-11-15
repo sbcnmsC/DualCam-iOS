@@ -1301,16 +1301,6 @@ final class CameraManager: NSObject, ObservableObject {
         applyExposure(slot)
     }
 
-    func setManualFocus(_ slot: Int, enabled: Bool) {
-        guard slotStates.indices.contains(slot) else { return }
-        guard !enabled || slotInfos[slot].supportsManualFocus else { return }
-        var state = slotStates[slot]
-        state.manualFocus = enabled
-        if enabled { state.locked = false }
-        slotStates[slot] = state
-        applyFocus(slot)
-    }
-
     func setAutoFocus(_ slot: Int) {
         guard slotStates.indices.contains(slot) else { return }
         var state = slotStates[slot]
