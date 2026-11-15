@@ -1382,7 +1382,7 @@ private struct FocusReticleCorners: Shape {
     }
 }
 
-private enum PiPResizeCorner {
+private enum PiPResizeCorner: Equatable {
     case topLeading
     case topTrailing
     case bottomLeading
@@ -1580,9 +1580,7 @@ struct PiPOverlay: View {
                 guard !cam.isRecording && !cam.isCapturingPhoto, !isResizingPiP else { return }
                 if pinchStart == nil {
                     pinchStart = cam.cfg.pipWidth
-                    pinchStartCenter = normalizedRect.midX == 0 && normalizedRect.midY == 0
-                        ? cam.cfg.pipCenter
-                        : CGPoint(x: normalizedRect.midX, y: normalizedRect.midY)
+                    pinchStartCenter = CGPoint(x: normalizedRect.midX, y: normalizedRect.midY)
                     dragNeedsRebase = true
                     dragOriginCenter = nil
                     dragTranslation = .zero
@@ -1626,12 +1624,10 @@ struct PiPOverlay: View {
     ) -> CGFloat {
         let availableX = corner.growsRight ? 1 - rect.minX : rect.maxX
         let availableY = corner.growsDown ? 1 - rect.minY : rect.maxY
-        return max(0.10, min(
-            0.55,
-            availableX / max(widthScale, 0.001),
-            availableY / max(heightScale, 0.001),
-            0.95 / max(heightScale, 0.001)
-        ))
+        let byWidth = availableX / max(widthScale, 0.001)
+        let byHeight = availableY / max(heightScale, 0.001)
+        let byCanvasHeight = 0.95 / max(heightScale, 0.001)
+        return max(0.10, min(0.55, min(byWidth, min(byHeight, byCanvasHeight))))
     }
 
     private var resizeGesture: some Gesture {
@@ -1680,12 +1676,10 @@ struct PiPOverlay: View {
 
                 let availableX = corner.growsRight ? 1 - anchor.x : anchor.x
                 let availableY = corner.growsDown ? 1 - anchor.y : anchor.y
-                let maxWidth = max(0.10, min(
-                    0.55,
-                    availableX / max(widthScale, 0.001),
-                    availableY / max(heightScale, 0.001),
-                    0.95 / max(heightScale, 0.001)
-                ))
+                let byWidth = availableX / max(widthScale, 0.001)
+                let byHeight = availableY / max(heightScale, 0.001)
+                let byCanvasHeight = 0.95 / max(heightScale, 0.001)
+                let maxWidth = max(resizeStartWidth, min(0.55, min(byWidth, min(byHeight, byCanvasHeight))))
                 let requestedWidth = resizeStartWidth + widthDelta
                 next.pipWidth = min(max(requestedWidth, 0.10), maxWidth)
 
