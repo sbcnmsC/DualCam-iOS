@@ -215,31 +215,106 @@ struct LabeledSlider: View {
     private var maxIndex: Int { max(0, Int(floor((range.upperBound - range.lowerBound) / unit + 0.000001))) }
     private var currentIndex: Int { min(max(Int(((value - range.lowerBound) / unit).rounded()), 0), maxIndex) }
 
-    var body: some View {
-        HStack(spacing: 12) {
-            if leftHanded { ruler }
-            VStack(alignment: leftHanded ? .trailing : .leading, spacing: 5) {
-                HStack(spacing: 5) {
-                    if let icon {
-                        Image(systemName: icon)
-                            .rotationEffect(.degrees(iconRotationDegrees))
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(Color.yellow)
-                    }
-                    Text(title).font(.system(size: 13, weight: .medium)).lineLimit(1).minimumScaleFactor(0.8)
-                }
-                Text(valueText)
-                    .font(.system(size: 16, weight: .semibold, design: .rounded).monospacedDigit())
-                    .foregroundStyle(.white).contentTransition(.numericText()).lineLimit(1).minimumScaleFactor(0.72)
-                Text("精细刻度").font(.system(size: 10, weight: .medium)).foregroundStyle(.white.opacity(0.42))
+    private var usesHorizontalRuler: Bool { maxIndex > 60 }
+
+    private var valueLabel: some View {
+        HStack(spacing: 5) {
+            if let icon {
+                Image(systemName: icon)
+                    .rotationEffect(.degrees(iconRotationDegrees))
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.yellow)
             }
-            .frame(maxWidth: .infinity, alignment: leftHanded ? .trailing : .leading)
-            if !leftHanded { ruler }
+            Text(title).font(.system(size: 13, weight: .medium)).lineLimit(1).minimumScaleFactor(0.8)
+            Spacer(minLength: 4)
+            Text(valueText)
+                .font(.system(size: 16, weight: .semibold, design: .rounded).monospacedDigit())
+                .foregroundStyle(.white).contentTransition(.numericText()).lineLimit(1).minimumScaleFactor(0.72)
+        }
+    }
+
+    var body: some View {
+        Group {
+            if usesHorizontalRuler {
+                VStack(alignment: .leading, spacing: 7) {
+                    valueLabel
+                    horizontalRuler
+                    Text("长范围调节 · 左右滑动")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.42))
+                }
+                .frame(maxWidth: .infinity, minHeight: 74)
+            } else {
+                HStack(spacing: 12) {
+                    if leftHanded { ruler }
+                    VStack(alignment: leftHanded ? .trailing : .leading, spacing: 5) {
+                        valueLabel
+                        Text("精细刻度").font(.system(size: 10, weight: .medium)).foregroundStyle(.white.opacity(0.42))
+                    }
+                    .frame(maxWidth: .infinity, alignment: leftHanded ? .trailing : .leading)
+                    if !leftHanded { ruler }
+                }
+                .frame(maxWidth: .infinity, minHeight: rulerHeight)
+            }
         }
         .environment(\.layoutDirection, leftHanded ? .rightToLeft : .leftToRight)
-        .frame(maxWidth: .infinity, minHeight: rulerHeight)
         .opacity(disabled ? 0.4 : 1)
         .disabled(disabled)
+    }
+
+    private var horizontalRuler: some View {
+        GeometryReader { proxy in
+            let center = proxy.size.width / 2
+            ZStack {
+                HStack(spacing: 0) {
+                    ForEach(-4...4, id: \.self) { offset in
+                        let tick = min(max((startIndex ?? currentIndex) + offset, 0), maxIndex)
+                        Rectangle()
+                            .fill(Color.white.opacity(offset.isMultiple(of: 2) ? 0.68 : 0.36))
+                            .frame(width: 1.5, height: offset.isMultiple(of: 2) ? 19 : 11)
+                            .frame(maxHeight: .infinity, alignment: .center)
+                            .frame(width: 14)
+                            .accessibilityHidden(true)
+                        _ = tick
+                    }
+                }
+                .offset(x: dragOffset)
+                .position(x: center, y: proxy.size.height / 2)
+                Rectangle().fill(Color.yellow).frame(width: 2.5, height: 25)
+                    .position(x: center, y: proxy.size.height / 2)
+                    .allowsHitTesting(false)
+            }
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { gesture in
+                    guard !disabled else { return }
+                    if startIndex == nil { startIndex = currentIndex; lastHapticIndex = currentIndex }
+                    guard let start = startIndex else { return }
+                    dragOffset = gesture.translation.width
+                    let delta = Int((gesture.translation.width / 14).rounded())
+                    let next = min(max(start + delta, 0), maxIndex)
+                    let nextValue = min(range.lowerBound + Double(next) * unit, range.upperBound)
+                    if abs(nextValue - value) >= 0.000001 {
+                        value = nextValue
+                        if lastHapticIndex != next {
+                            HapticFeedback.play(.selection)
+                            lastHapticIndex = next
+                        }
+                    }
+                }
+                .onEnded { _ in startIndex = nil; dragOffset = 0; lastHapticIndex = nil })
+        }
+        .frame(height: 42)
+        .accessibilityElement().accessibilityLabel(title).accessibilityValue(valueText)
+        .accessibilityAdjustableAction { direction in
+            guard !disabled else { return }
+            switch direction {
+            case .increment: value = min(value + unit, range.upperBound)
+            case .decrement: value = max(value - unit, range.lowerBound)
+            @unknown default: break
+            }
+            HapticFeedback.play(.selection)
+        }
     }
 
     private var ruler: some View {
@@ -253,7 +328,7 @@ struct LabeledSlider: View {
                         HStack {
                             Spacer(minLength: 0)
                             Rectangle()
-                                .fill(Color.white.opacity(valid ? (offset.isMultiple(of: 2) ? 0.68 : 0.36) : 0.10))
+                                .fill(Color.white.opacity(valid ? (offset.isMultiple(of: 2) ? 0.68 : 0.36) : 0.28))
                                 .frame(width: offset.isMultiple(of: 2) ? 22 : 12, height: 1.5)
                         }
                         .frame(width: rulerWidth, height: tickSpacing)
