@@ -1309,18 +1309,27 @@ struct PiPOverlay: View {
             if isDraggingPiP {
                 dragPlaceholder(in: rect)
             } else {
+                // The live preview is rendered by the compositor behind this overlay.
+                // Tap-to-swap is attached to the shared gesture surface below.
                 Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        guard !cam.isRecording && !cam.isCapturingPhoto else { return }
-                        cam.swapCameras()
-                    }
+                    .allowsHitTesting(false)
             }
 
             Color.clear
                 .contentShape(Rectangle())
                 .gesture(moveGesture)
                 .simultaneousGesture(pinchGesture)
+                // Keep tap-to-swap and drag-to-move on the same hit surface.
+                // A tap is recognized only when the finger does not move; a drag
+                // continues to be handled by the Build #92 move gesture above.
+                .simultaneousGesture(
+                    TapGesture().onEnded {
+                        guard !cam.isRecording && !cam.isCapturingPhoto,
+                              !isDraggingPiP, !isResizingPiP else { return }
+                        HapticFeedback.play(.selection)
+                        cam.swapCameras()
+                    }
+                )
 
             Image(systemName: "arrow.up.left.and.arrow.down.right")
                 .rotationEffect(.degrees(iconRotationDegrees))
