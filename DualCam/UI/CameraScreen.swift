@@ -969,30 +969,12 @@ struct PreviewStage: View {
             }
 
             if let marker = cam.focusMarker {
-                let slot = min(max(marker.slot ?? cam.mainSlot, 0), 1)
-                let focusX = min(max(marker.point.x * size.width, 36), max(36, size.width - 36))
-                let focusY = min(max(marker.point.y * size.height, 36), max(36, size.height - 36))
-                let railOnLeft = focusX > size.width * 0.64
-                let railHeight = min(124, max(76, size.height - 64))
-                let groupHeight = railHeight + 50
-                let groupCenterX = focusX + (railOnLeft ? -26 : 26)
-                let groupCenterY = min(max(focusY, groupHeight / 2), max(groupHeight / 2, size.height - groupHeight / 2))
-                FocusMarkerView(
-                    exposureBias: marker.exposureBias ?? cam.slotStates[slot].exposureBias,
-                    minBias: cam.slotInfos[slot].minBias,
-                    maxBias: cam.slotInfos[slot].maxBias,
-                    isDisabled: cam.slotStates[slot].manualExposure || cam.slotStates[slot].locked,
-                    railOnLeft: railOnLeft,
-                    trackHeight: railHeight,
-                    onExposureChanged: { cam.adjustExposureBias(slot: slot, value: $0) },
-                    iconRotationDegrees: iconRotationDegrees
-                )
-                .position(
-                    x: min(max(groupCenterX, 61), max(61, size.width - 61)),
-                    y: groupCenterY
-                )
-                .id(marker.id)
-                .transition(.opacity)
+                let focusX = min(max(marker.point.x * size.width, 44), max(44, size.width - 44))
+                let focusY = min(max(marker.point.y * size.height, 44), max(44, size.height - 44))
+                FocusMarkerView(iconRotationDegrees: iconRotationDegrees)
+                    .position(x: focusX, y: focusY)
+                    .id(marker.id)
+                    .transition(.opacity)
             }
 
             // 拍照处理 / 切换镜头 / 重建会话时的「处理中」遮罩（先于快门黑场，两者叠加）
@@ -1177,188 +1159,78 @@ struct OutputModePill: View {
     }
 }
 
-/// Touch focus reticle with its own exposure rail. The transparent rail hit area is wider
-/// than its artwork, and the rail lives on the side with more free preview space.
+/// Stripe-style focus confirmation reticle. It is visual-only and never intercepts
+/// taps, so the preview's original focus gesture remains the single source of focus input.
 struct FocusMarkerView: View {
-    let exposureBias: Float
-    let minBias: Float
-    let maxBias: Float
-    let isDisabled: Bool
-    let railOnLeft: Bool
-    let trackHeight: CGFloat
-    let onExposureChanged: (Float) -> Void
     var iconRotationDegrees: CGFloat = 0
 
     @State private var appeared = false
-    @State private var isDragging = false
-    @State private var dragBias: Float?
-
-    private let reticleSize: CGFloat = 68
-    private let railWidth: CGFloat = 48
-
-    private var displayedBias: Float {
-        min(max(dragBias ?? exposureBias, minBias), maxBias)
-    }
-
-    private var handleOffset: CGFloat {
-        let span = max(maxBias - minBias, 0.1)
-        let fraction = CGFloat((maxBias - displayedBias) / span)
-        return (fraction - 0.5) * trackHeight
-    }
-
-    private var disabledTint: Color {
-        isDisabled ? Color.white.opacity(0.38) : Color.yellow
-    }
+    @State private var faded = false
 
     var body: some View {
-        HStack(spacing: 10) {
-            if railOnLeft {
-                exposureRail
-                focusReticle
-            } else {
-                focusReticle
-                exposureRail
-            }
+        ZStack {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(Color.yellow.opacity(0.28), lineWidth: 0.8)
+                .frame(width: 76, height: 76)
+
+            FocusStripeTicks()
+                .stroke(Color.yellow, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                .frame(width: 76, height: 76)
+
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .stroke(Color.yellow.opacity(0.82), lineWidth: 1.1)
+                .frame(width: 38, height: 38)
+
+            Image(systemName: "scope")
+                .rotationEffect(.degrees(iconRotationDegrees))
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.yellow)
+                .shadow(color: .black.opacity(0.55), radius: 3)
         }
-        .frame(width: 126, height: max(reticleSize, trackHeight + 50))
-        // A fresh marker ID is created for every screen tap, so replay a clear
-        // focus confirmation pulse even when the user taps the same point repeatedly.
-        .scaleEffect(appeared ? 1 : 1.16)
-        .opacity(appeared ? 1 : 0.72)
+        .frame(width: 84, height: 84)
+        .scaleEffect(appeared ? 1 : 0.82)
+        .opacity(faded ? 0 : (appeared ? 1 : 0))
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
         .onAppear {
-            withAnimation(.spring(response: 0.24, dampingFraction: 0.62)) {
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.68)) {
                 appeared = true
             }
-        }
-        .accessibilityElement(children: .contain)
-    }
-
-    private var focusReticle: some View {
-        ZStack(alignment: .topTrailing) {
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(Color.yellow.opacity(0.98), lineWidth: 1.5)
-                .frame(width: reticleSize, height: reticleSize)
-                .overlay {
-                    FocusReticleCorners()
-                        .stroke(Color.yellow, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                        .frame(width: reticleSize, height: reticleSize)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.35) {
+                withAnimation(.easeOut(duration: 0.72)) {
+                    faded = true
                 }
-            Image(systemName: isDisabled ? "lock.fill" : "scope")
-                .rotationEffect(.degrees(iconRotationDegrees))
-                .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(Color.yellow)
-                .frame(width: 20, height: 20)
-                .background(Circle().fill(Color.black.opacity(0.82)))
-                .offset(x: 7, y: -7)
-        }
-        .frame(width: reticleSize, height: reticleSize)
-        // Keep the reticle visually present without stealing taps intended to refocus the preview.
-        .allowsHitTesting(false)
-        .shadow(color: Color.black.opacity(0.25), radius: 3, y: 1)
-    }
-
-    private var exposureRail: some View {
-        VStack(spacing: 4) {
-            exposureRailTitle
-            exposureTrack
-            exposureValue
-        }
-        .padding(.horizontal, 2)
-        .padding(.vertical, 5)
-        .background(Capsule().fill(Color.black.opacity(0.58)))
-        .overlay(Capsule().stroke(Color.white.opacity(isDragging ? 0.36 : 0.13), lineWidth: 0.8))
-        .opacity(isDisabled ? 0.72 : 1)
-        .frame(width: railWidth, height: max(reticleSize, trackHeight + 50))
-    }
-
-    private var exposureRailTitle: some View {
-        Text("EV")
-            .font(.system(size: 9, weight: .bold, design: .rounded))
-            .foregroundStyle(Color.white.opacity(0.72))
-    }
-
-    private var exposureTrack: some View {
-        ZStack {
-            Capsule()
-                .fill(Color.white.opacity(isDisabled ? 0.16 : 0.22))
-                .frame(width: 4, height: trackHeight)
-
-            ForEach(0..<5, id: \.self) { tick in
-                Capsule()
-                    .fill(Color.white.opacity(tick == 2 ? 0.78 : 0.38))
-                    .frame(width: tick == 2 ? 13 : 7, height: 1)
-                    .offset(y: (CGFloat(tick) / 4 - 0.5) * trackHeight)
             }
-
-            exposureHandle
         }
-        .frame(width: railWidth, height: trackHeight + 16)
-        .contentShape(Rectangle())
-        .highPriorityGesture(exposureDragGesture)
-        .accessibilityLabel("曝光补偿")
-        .accessibilityValue(String(format: "%+.1f EV", Double(displayedBias)))
-        .accessibilityHint(isDisabled ? "先关闭手动曝光或锁定状态" : "上下滑动调节曝光，双击数值可归零")
     }
+}
 
-    private var exposureHandle: some View {
-        Circle()
-            .fill(Color.black.opacity(0.8))
-            .frame(width: 25, height: 25)
-            .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 0.7))
-            .overlay {
-                Circle()
-                    .fill(disabledTint)
-                    .frame(width: 11, height: 11)
-            }
-            .overlay(
-                Circle()
-                    .stroke(Color.white.opacity(0.9), lineWidth: 1.2)
-                    .frame(width: 25, height: 25)
-            )
-            .shadow(color: .black.opacity(0.45), radius: 4, y: 2)
-            .offset(y: handleOffset)
-            .allowsHitTesting(false)
-    }
+/// Fine calibration marks surrounding the focus point, with longer marks at regular intervals.
+private struct FocusStripeTicks: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let inset: CGFloat = 3
+        let usable = max(rect.width - inset * 2, 0)
+        let count = 9
 
-    private var exposureValue: some View {
-        Text(String(format: "%+.1f", Double(displayedBias)))
-            .font(.system(size: 10, weight: .bold, design: .monospaced))
-            .foregroundStyle(isDisabled ? Color.white.opacity(0.45) : Color.yellow)
-            .contentShape(Rectangle())
-            .onTapGesture(count: 2, perform: resetExposureToZero)
-    }
+        for index in 0..<count {
+            let x = inset + usable * CGFloat(index) / CGFloat(count - 1)
+            let y = inset + usable * CGFloat(index) / CGFloat(count - 1)
+            let length: CGFloat = index.isMultiple(of: 2) ? 7 : 4
 
-    private var exposureDragGesture: some Gesture {
-        DragGesture(minimumDistance: 0, coordinateSpace: .local)
-            .onChanged(handleExposureDragChanged)
-            .onEnded { _ in handleExposureDragEnded() }
-    }
+            path.move(to: CGPoint(x: x, y: inset))
+            path.addLine(to: CGPoint(x: x, y: inset + length))
 
-    private func handleExposureDragChanged(_ value: DragGesture.Value) {
-        guard !isDisabled else { return }
-        if !isDragging {
-            isDragging = true
-            HapticFeedback.play(.button)
+            path.move(to: CGPoint(x: x, y: rect.maxY - inset))
+            path.addLine(to: CGPoint(x: x, y: rect.maxY - inset - length))
+
+            path.move(to: CGPoint(x: inset, y: y))
+            path.addLine(to: CGPoint(x: inset + length, y: y))
+
+            path.move(to: CGPoint(x: rect.maxX - inset, y: y))
+            path.addLine(to: CGPoint(x: rect.maxX - inset - length, y: y))
         }
-        let y = min(max(value.location.y - 8, 0), trackHeight)
-        let fraction = 1 - Float(y / max(trackHeight, 1))
-        let next = minBias + fraction * (maxBias - minBias)
-        dragBias = next
-        onExposureChanged(next)
-    }
-
-    private func handleExposureDragEnded() {
-        if isDragging { HapticFeedback.play(.selection) }
-        isDragging = false
-        dragBias = nil
-    }
-
-    private func resetExposureToZero() {
-        guard !isDisabled else { return }
-        HapticFeedback.play(.selection)
-        dragBias = 0
-        onExposureChanged(0)
+        return path
     }
 }
 
