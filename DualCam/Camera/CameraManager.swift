@@ -2318,15 +2318,24 @@ final class CameraManager: NSObject, ObservableObject {
         let composed = Compositor.compose(main: mainImage, sub: subImage, cfg: c, canvas: canvas)
         let finalImage = c.filter.apply(to: composed, intensity: c.filterIntensity).cropped(to: full)
 
-        let pipSecondaryData: Data? = {
-            guard c.layout == .pip, let subImage else { return nil }
-            return jpeg(c.filter.apply(to: subImage, intensity: c.filterIntensity))
-        }()
+        // Keep both sensor originals beside every composite archive entry. Use rawA/rawB rather
+        // than the mirrored/filtered display images, and resolve the visible main/sub roles only
+        // after applying the user's camera-swap setting.
+        let mainOriginalImage = (c.swapped && rawB != nil) ? rawB! : rawA
+        let secondaryOriginalImage = (c.swapped && rawB != nil) ? rawA : rawB
+        let primaryOriginalData = jpeg(mainOriginalImage)
+        let secondaryOriginalData = secondaryOriginalImage.flatMap { jpeg($0) }
 
         // 原图直出：每颗镜头各存一张未镜像、未加滤镜、未裁切、未合成的画面；合成图是预览里看到的样子
         var shots: [StillShot] = []
         if c.outputMode.savesComposite {
-            shots.append(StillShot(image: finalImage, slot: nil, captureConfig: c, secondaryPreviewData: pipSecondaryData))
+            shots.append(StillShot(
+                image: finalImage,
+                slot: nil,
+                captureConfig: c,
+                primaryPreviewData: primaryOriginalData,
+                secondaryPreviewData: secondaryOriginalData
+            ))
         }
         if c.outputMode.savesOriginal && includeOriginals {
             shots.append(StillShot(image: rawA, slot: 0, captureConfig: c))
@@ -2393,6 +2402,7 @@ final class CameraManager: NSObject, ObservableObject {
             saveCompositeArchive(
                 compositeShots.compactMap { $0.data },
                 config: c,
+                primaryImages: compositeShots.map { $0.primaryPreviewData },
                 secondaryImages: compositeShots.map { $0.secondaryPreviewData }
             )
             saveImages(datas, successMessage: silentSave ? "" : nil)
@@ -2445,6 +2455,7 @@ final class CameraManager: NSObject, ObservableObject {
                         movie: box.get(i),
                         isComposite: s.slot == nil,
                         captureConfig: s.captureConfig ?? Config(),
+                        primaryPreviewData: s.primaryPreviewData,
                         secondaryPreviewData: s.secondaryPreviewData
                     ))
                 }
@@ -2695,6 +2706,7 @@ final class CameraManager: NSObject, ObservableObject {
         saveCompositeArchive(
             compositeItems.map { $0.photo },
             config: compositeItems.first?.captureConfig ?? cfg,
+            primaryImages: compositeItems.map { $0.primaryPreviewData },
             secondaryImages: compositeItems.map { $0.secondaryPreviewData },
             liveMovies: compositeItems.map { $0.movie }
         )
@@ -2984,6 +2996,7 @@ private struct StillShot {
     var recorder: VideoRecorder? = nil
     var data: Data? = nil
     var captureConfig: Config? = nil
+    var primaryPreviewData: Data? = nil
     var secondaryPreviewData: Data? = nil
     /// 合成图实况的动态片段取自哪颗镜头槽位；nil = 取合成画面。
     var motionLens: Int? = nil
@@ -3001,6 +3014,7 @@ private struct SavedItem {
     let movie: URL?
     let isComposite: Bool
     let captureConfig: Config
+    let primaryPreviewData: Data?
     let secondaryPreviewData: Data?
 }
 
