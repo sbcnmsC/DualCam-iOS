@@ -15,9 +15,11 @@ enum Compositor {
         var w: CGFloat
         switch resolution {
         case .p720:
-            w = 720
+            // Resolution tiers describe the short edge, so landscape 16:9 is 1280×720
+            // while portrait 9:16 is 720×1280.
+            w = 720 * max(1, ratio)
         case .p1080:
-            w = 1080
+            w = 1080 * max(1, ratio)
         case .maximum:
             // Landscape 4K needs a 3840-pixel width; portrait 4K is 2160×3840.
             // Keep still fallback memory bounded, while normal native still capture uses
