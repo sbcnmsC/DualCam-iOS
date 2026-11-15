@@ -1163,6 +1163,8 @@ struct FocusMarkerView: View {
     @State private var appeared = false
     @State private var faded = false
     @State private var draggingSun = false
+    @State private var exposureDragStartY: CGFloat?
+    @State private var exposureDragStartBias: Float?
 
     private var clampedBias: Float {
         min(max(exposureBias, minBias), maxBias)
@@ -1214,10 +1216,25 @@ struct FocusMarkerView: View {
                             guard !isExposureLocked else { return }
                             draggingSun = true
                             let y = min(max(value.location.y, 10), height - 10)
-                            let progress = 1 - Float((y - 10) / usableHeight)
-                            onExposureChanged(minBias + progress * range)
+                            if exposureDragStartY == nil || exposureDragStartBias == nil {
+                                // Preserve the existing touch-to-position behavior, then add
+                                // resistance to subsequent movement instead of making the rail jumpy.
+                                let progress = 1 - Float((y - 10) / usableHeight)
+                                let initialBias = minBias + progress * range
+                                exposureDragStartY = y
+                                exposureDragStartBias = initialBias
+                                onExposureChanged(initialBias)
+                            } else if let startY = exposureDragStartY,
+                                      let startBias = exposureDragStartBias {
+                                let delta = Float((startY - y) / usableHeight) * range * 0.6
+                                onExposureChanged(min(max(startBias + delta, minBias), maxBias))
+                            }
                         }
-                        .onEnded { _ in draggingSun = false }
+                        .onEnded { _ in
+                            draggingSun = false
+                            exposureDragStartY = nil
+                            exposureDragStartBias = nil
+                        }
                 )
                 .accessibilityElement()
                 .accessibilityLabel("曝光调节")
