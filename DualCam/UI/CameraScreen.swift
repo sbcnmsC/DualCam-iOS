@@ -1179,7 +1179,7 @@ struct FocusMarkerView: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Color.yellow)
             }
-            .frame(width: 82, height: 108)
+            .frame(width: 76, height: 76)
             .allowsHitTesting(false)
 
             GeometryReader { proxy in
@@ -1226,7 +1226,7 @@ struct FocusMarkerView: View {
             .frame(width: 42, height: 124)
             .allowsHitTesting(!isExposureLocked)
         }
-        .frame(width: 148, height: 132)
+        .frame(width: 132, height: 124)
         .scaleEffect(appeared ? 1 : 0.94)
         .opacity(faded && !draggingSun ? 0 : (appeared ? 1 : 0))
         .accessibilityHidden(false)
