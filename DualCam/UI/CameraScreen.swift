@@ -967,8 +967,8 @@ struct PreviewStage: View {
             }
 
             if let marker = cam.focusMarker {
-                let focusX = min(max(marker.point.x * size.width, 44), max(44, size.width - 44))
-                let focusY = min(max(marker.point.y * size.height, 44), max(44, size.height - 44))
+                let focusX = min(max(marker.point.x * size.width, 66), max(66, size.width - 66))
+                let focusY = min(max(marker.point.y * size.height, 48), max(48, size.height - 48))
                 let slot = marker.slot ?? cam.mainSlot
                 let info = cam.slotInfos[slot]
                 FocusMarkerView(

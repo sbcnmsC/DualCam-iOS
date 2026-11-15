@@ -1678,9 +1678,9 @@ final class CameraManager: NSObject, ObservableObject {
                     // before the shutter fires used to delay every high-resolution capture by two
                     // full-frame encodes; now a frame is encoded only if its native still is missing.
                     let fallbackFrames = self.snapshotFallbackFrames()
-                    let slots = captureConfig.outputMode.savesOriginal
-                        ? [primarySlot, 1 - primarySlot]
-                        : [primarySlot]
+                    // Always capture both sensors natively: the secondary still is kept as an
+                    // independently exportable original in the in-app composite archive.
+                    let slots = [primarySlot, 1 - primarySlot]
 
                     self.captureHighResolutionPhotos(
                         slots: slots,
@@ -1723,11 +1723,12 @@ final class CameraManager: NSObject, ObservableObject {
                                     compositeDatas.append(composite)
                                     compositePrimaryDatas.append(mainData)
                                     compositeSecondaryDatas.append(
-                                        self.highResolutionSecondaryJPEG(
-                                            secondaryFrame: fallbackFrames[1 - primarySlot],
-                                            config: captureConfig,
-                                            slot: 1 - primarySlot
-                                        )
+                                        highResolutionPhotos[1 - primarySlot]
+                                            ?? self.highResolutionSecondaryJPEG(
+                                                secondaryFrame: fallbackFrames[1 - primarySlot],
+                                                config: captureConfig,
+                                                slot: 1 - primarySlot
+                                            )
                                     )
                                 }
                             }
