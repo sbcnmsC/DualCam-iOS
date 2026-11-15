@@ -1382,6 +1382,28 @@ private struct FocusReticleCorners: Shape {
     }
 }
 
+private enum PiPResizeCorner {
+    case topLeading
+    case topTrailing
+    case bottomLeading
+    case bottomTrailing
+
+    var growsRight: Bool {
+        self == .topTrailing || self == .bottomTrailing
+    }
+
+    var growsDown: Bool {
+        self == .bottomLeading || self == .bottomTrailing
+    }
+
+    var alignment: Alignment {
+        Alignment(
+            horizontal: growsRight ? .trailing : .leading,
+            vertical: growsDown ? .bottom : .top
+        )
+    }
+}
+
 struct PiPOverlay: View {
     @EnvironmentObject private var cam: CameraManager
     let size: CGSize
@@ -1391,9 +1413,11 @@ struct PiPOverlay: View {
     @State private var dragTranslation: CGSize = .zero
     @State private var isDraggingPiP = false
     @State private var pinchStart: CGFloat? = nil
+    @State private var pinchStartCenter: CGPoint? = nil
     @State private var isResizingPiP = false
-    // 拉伸开始时锁定小窗中心与宽度；向四周扩展，避免贴边时无法放大。
+    // The opposite corner stays fixed; choose the resize corner with the most room.
     @State private var resizeAnchor: CGPoint? = nil
+    @State private var resizeCorner: PiPResizeCorner? = nil
     @State private var resizeStartWidth: CGFloat = 0
     @State private var resizeMoved = false
     // 双指缩放结束后手指还没抬起时，再次进入拖动要以当前位置重新计起点，否则小窗会跳一下。
@@ -1415,6 +1439,7 @@ struct PiPOverlay: View {
     var body: some View {
         let rect = previewRect
         let handleSide = min(58, min(rect.width, rect.height))
+        let handleCorner = resizeCorner ?? bestResizeCorner
 
         // Keep this overlay in the exact same full-canvas coordinate space as PreviewRepresentable.
         // The PiP interaction surface is a local rectangle placed by its top-leading origin;
@@ -1440,9 +1465,9 @@ struct PiPOverlay: View {
 
             }
             .frame(width: rect.width, height: rect.height)
-            // Keep the resize hit target inside the PiP interaction frame. A handle
-            // positioned outside this frame can be visible but lose touch delivery.
-            .overlay(alignment: .bottomTrailing) {
+            // Keep the resize hit target inside the PiP frame. Its corner automatically
+            // flips toward the side with more free canvas, so edge-snapped PiPs can still grow.
+            .overlay(alignment: handleCorner.alignment) {
                 Rectangle()
                     .fill(Color.clear)
                     .frame(width: handleSide, height: handleSide)
@@ -1548,36 +1573,81 @@ struct PiPOverlay: View {
     }
 
     private var pinchGesture: some Gesture {
-        MagnifyGesture()
+        // Follow Apple's MagnifyGesture pattern: derive every frame from the size at
+        // gesture start, rather than multiplying an already-updated size (which compounds drift).
+        MagnifyGesture(minimumScaleDelta: 0.01)
             .onChanged { value in
                 guard !cam.isRecording && !cam.isCapturingPhoto, !isResizingPiP else { return }
                 if pinchStart == nil {
                     pinchStart = cam.cfg.pipWidth
+                    pinchStartCenter = normalizedRect.midX == 0 && normalizedRect.midY == 0
+                        ? cam.cfg.pipCenter
+                        : CGPoint(x: normalizedRect.midX, y: normalizedRect.midY)
                     dragNeedsRebase = true
                     dragOriginCenter = nil
                     dragTranslation = .zero
                     isDraggingPiP = false
                     cam.clearPiPDragPreview()
                 }
-                cam.cfg.pipWidth = min(max((pinchStart ?? 0.28) * value.magnification, 0.16), 0.55)
+
+                var next = cam.cfg
+                next.pipWidth = min(max((pinchStart ?? next.pipWidth) * value.magnification, 0.10), 0.55)
+                next.pipCenter = boundedCenter(pinchStartCenter ?? next.pipCenter, config: next)
+                cam.cfg = next
             }
             .onEnded { _ in
                 if pinchStart != nil { HapticFeedback.play(.selection) }
                 pinchStart = nil
+                pinchStartCenter = nil
             }
     }
 
+    private var bestResizeCorner: PiPResizeCorner {
+        let rect = normalizedRect
+        let aspect = max(cam.cfg.aspectRatio, 0.1)
+        let pipRatio = cam.cfg.pipShape == .circle ? CGFloat(1) : cam.cfg.pipRatio.value
+        let widthScale = max(Compositor.pipWidthScale(aspect: aspect), 0.1)
+        let heightScale = widthScale * aspect / max(pipRatio, 0.1)
+        let corners: [PiPResizeCorner] = [
+            .topLeading, .topTrailing, .bottomLeading, .bottomTrailing
+        ]
+
+        return corners.max { lhs, rhs in
+            maximumWidth(from: lhs, rect: rect, widthScale: widthScale, heightScale: heightScale)
+                < maximumWidth(from: rhs, rect: rect, widthScale: widthScale, heightScale: heightScale)
+        } ?? .bottomTrailing
+    }
+
+    private func maximumWidth(
+        from corner: PiPResizeCorner,
+        rect: CGRect,
+        widthScale: CGFloat,
+        heightScale: CGFloat
+    ) -> CGFloat {
+        let availableX = corner.growsRight ? 1 - rect.minX : rect.maxX
+        let availableY = corner.growsDown ? 1 - rect.minY : rect.maxY
+        return max(0.10, min(
+            0.55,
+            availableX / max(widthScale, 0.001),
+            availableY / max(heightScale, 0.001),
+            0.95 / max(heightScale, 0.001)
+        ))
+    }
+
     private var resizeGesture: some Gesture {
-        // 必须用 .global：手柄随小窗一起移动，.local 坐标会跟着手柄漂，拉伸会越拉越慢、不跟手。
+        // Use global translation because the handle itself moves as the PiP is resized.
+        // The opposite corner stays fixed, and the handle flips to the side with more room.
         DragGesture(minimumDistance: 0, coordinateSpace: .global)
             .onChanged { value in
                 guard !cam.isRecording && !cam.isCapturingPhoto, pinchStart == nil else { return }
                 if resizeAnchor == nil {
-                    let r = normalizedRect
-                    resizeAnchor = CGPoint(x: r.midX, y: r.midY)
-                    // Store the compositor's source width, not the aspect-scaled
-                    // normalized rect width. The gesture converts canvas travel back
-                    // into this same configuration unit on every aspect ratio.
+                    let rect = normalizedRect
+                    let corner = bestResizeCorner
+                    resizeCorner = corner
+                    resizeAnchor = CGPoint(
+                        x: corner.growsRight ? rect.minX : rect.maxX,
+                        y: corner.growsDown ? rect.minY : rect.maxY
+                    )
                     resizeStartWidth = cam.cfg.pipWidth
                     resizeMoved = false
                     isResizingPiP = true
@@ -1586,51 +1656,50 @@ struct PiPOverlay: View {
                     isDraggingPiP = false
                     cam.clearPiPDragPreview()
                 }
-                guard let anchor = resizeAnchor else { return }
-                if abs(value.translation.width) > 2 || abs(value.translation.height) > 2 { resizeMoved = true }
+
+                guard let anchor = resizeAnchor, let corner = resizeCorner else { return }
+                let dx = corner.growsRight ? value.translation.width : -value.translation.width
+                let dy = corner.growsDown ? value.translation.height : -value.translation.height
+                if abs(dx) > 2 || abs(dy) > 2 { resizeMoved = true }
 
                 var next = cam.cfg
                 let aspect = max(next.aspectRatio, 0.1)
                 let pipRatio = next.pipShape == .circle ? CGFloat(1) : next.pipRatio.value
                 let widthScale = max(Compositor.pipWidthScale(aspect: aspect), 0.1)
+                let heightScale = widthScale * aspect / max(pipRatio, 0.1)
 
-                // Convert diagonal handle travel into a normalized width delta.
-                // Vertical movement is converted using the current preview/PiP ratios.
-                let horizontalDelta = value.translation.width / max(size.width, 1)
-                let verticalDelta = value.translation.height / max(size.height, 1)
-                    * pipRatio / aspect
-                let configWidthDelta = (horizontalDelta + verticalDelta) * 0.5 / widthScale
-                let requestedWidth = min(max(resizeStartWidth + configWidthDelta, 0.10), 0.55)
+                // Project the finger movement onto the actual diagonal resize direction.
+                // This keeps horizontal and vertical movement equally meaningful across ratios.
+                let pointsPerWidthX = widthScale * max(size.width, 1)
+                let pointsPerWidthY = heightScale * max(size.height, 1)
+                let denominator = pointsPerWidthX * pointsPerWidthX
+                    + pointsPerWidthY * pointsPerWidthY
+                let widthDelta = denominator > 0
+                    ? (dx * pointsPerWidthX + dy * pointsPerWidthY) / denominator
+                    : 0
 
-                // Clamp growth against the compositor's exact geometry while allowing
-                // shrinking to track the finger directly. Keep the top-left corner fixed
-                // unless the minimum legal size itself would extend beyond the canvas.
-                let currentWidth = cam.cfg.pipWidth
-                var low: CGFloat = 0.10
-                var high: CGFloat = max(requestedWidth, low)
-                for _ in 0..<16 {
-                    let candidateWidth = (low + high) * 0.5
-                    var candidate = next
-                    candidate.pipWidth = candidateWidth
-                    let candidateSize = Compositor.pipSizeNormalized(cfg: candidate)
-                    let fits = anchor.x - candidateSize.width / 2 >= -0.0001 &&
-                        anchor.x + candidateSize.width / 2 <= 1.0001 &&
-                        anchor.y - candidateSize.height / 2 >= -0.0001 &&
-                        anchor.y + candidateSize.height / 2 <= 1.0001
-                    if fits { low = candidateWidth } else { high = candidateWidth }
-                }
-                let fittedWidth = requestedWidth <= currentWidth
-                    ? requestedWidth
-                    : min(requestedWidth, low)
-                next.pipWidth = max(0.10, fittedWidth)
-                // Keep the starting center fixed and grow/shrink symmetrically.
-                // This also works when the PiP is initially snapped to a canvas edge.
-                next.pipCenter = anchor
+                let availableX = corner.growsRight ? 1 - anchor.x : anchor.x
+                let availableY = corner.growsDown ? 1 - anchor.y : anchor.y
+                let maxWidth = max(0.10, min(
+                    0.55,
+                    availableX / max(widthScale, 0.001),
+                    availableY / max(heightScale, 0.001),
+                    0.95 / max(heightScale, 0.001)
+                ))
+                let requestedWidth = resizeStartWidth + widthDelta
+                next.pipWidth = min(max(requestedWidth, 0.10), maxWidth)
+
+                let pipSize = Compositor.pipSizeNormalized(cfg: next)
+                next.pipCenter = CGPoint(
+                    x: anchor.x + (corner.growsRight ? pipSize.width / 2 : -pipSize.width / 2),
+                    y: anchor.y + (corner.growsDown ? pipSize.height / 2 : -pipSize.height / 2)
+                )
                 cam.cfg = next
             }
             .onEnded { _ in
                 if resizeAnchor != nil, resizeMoved { HapticFeedback.play(.selection) }
                 resizeAnchor = nil
+                resizeCorner = nil
                 resizeMoved = false
                 isResizingPiP = false
             }
