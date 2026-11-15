@@ -268,14 +268,12 @@ struct LabeledSlider: View {
             ZStack {
                 HStack(spacing: 0) {
                     ForEach(-4...4, id: \.self) { offset in
-                        let tick = min(max((startIndex ?? currentIndex) + offset, 0), maxIndex)
                         Rectangle()
                             .fill(Color.white.opacity(offset.isMultiple(of: 2) ? 0.68 : 0.36))
                             .frame(width: 1.5, height: offset.isMultiple(of: 2) ? 19 : 11)
                             .frame(maxHeight: .infinity, alignment: .center)
                             .frame(width: 14)
                             .accessibilityHidden(true)
-                        _ = tick
                     }
                 }
                 .offset(x: dragOffset)
