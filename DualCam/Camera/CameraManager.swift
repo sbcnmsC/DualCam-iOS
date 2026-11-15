@@ -1303,8 +1303,10 @@ final class CameraManager: NSObject, ObservableObject {
 
     func setAutoFocus(_ slot: Int) {
         guard slotStates.indices.contains(slot) else { return }
-        slotStates[slot].manualFocus = false
-        slotStates[slot].locked = false
+        var state = slotStates[slot]
+        state.manualFocus = false
+        state.locked = false
+        slotStates[slot] = state
         applyFocus(slot)
         applyExposure(slot)
     }
@@ -1359,7 +1361,9 @@ final class CameraManager: NSObject, ObservableObject {
 
     func showMarker(at p: CGPoint, slot: Int? = nil) {
         exposureMarkerID = nil
-        let marker = FocusMarker(point: p, slot: slot)
+        let resolvedSlot = slot ?? mainSlot
+        let bias = slotStates.indices.contains(resolvedSlot) ? slotStates[resolvedSlot].exposureBias : 0
+        let marker = FocusMarker(point: p, exposureBias: bias, slot: resolvedSlot)
         focusMarker = marker
         scheduleFocusMarkerDismissal(id: marker.id)
     }
@@ -1398,24 +1402,6 @@ final class CameraManager: NSObject, ObservableObject {
         showExposureMarker(at: point, bias: bias, slot: slot)
     }
 
-    func exposureDragBegan(at p: CGPoint) {
-        let c = cfg
-        let regions = Compositor.regions(cfg: c)
-        let mainSlot = c.swapped ? 1 : 0
-        dragSlot = regions.sub.contains(p) ? 1 - mainSlot : mainSlot
-        dragStartBias = slotStates[dragSlot].exposureBias
-    }
-
-    func exposureDragChanged(dy: CGFloat, at point: CGPoint) {
-        let slot = dragSlot
-        let s = slotStates[slot]
-        guard !s.manualExposure, !s.locked else { return }
-        let info = slotInfos[slot]
-        let bias = min(max(dragStartBias - Float(dy / 70), info.minBias), info.maxBias)
-        slotStates[slot].exposureBias = bias
-        applyExposure(slot)
-        showExposureMarker(at: point, bias: bias, slot: slot)
-    }
 
     private func subjectAreaChanged() {
         DispatchQueue.main.async {
@@ -1693,9 +1679,9 @@ final class CameraManager: NSObject, ObservableObject {
                     // before the shutter fires used to delay every high-resolution capture by two
                     // full-frame encodes; now a frame is encoded only if its native still is missing.
                     let fallbackFrames = self.snapshotFallbackFrames()
-                    let slots = captureConfig.outputMode.savesOriginal
-                        ? [primarySlot, 1 - primarySlot]
-                        : [primarySlot]
+                    // Always capture both sensors natively: the secondary still is kept as an
+                    // independently exportable original in the in-app composite archive.
+                    let slots = [primarySlot, 1 - primarySlot]
 
                     self.captureHighResolutionPhotos(
                         slots: slots,
@@ -1708,6 +1694,7 @@ final class CameraManager: NSObject, ObservableObject {
                             self.setCaptureStatus("合成并保存…")
                             var datas: [Data] = []
                             var compositeDatas: [Data] = []
+                            var compositePrimaryDatas: [Data?] = []
                             var compositeSecondaryDatas: [Data?] = []
                             let fallbackForSlot: (Int) -> Data? = { slot in
                                 guard fallbackFrames.indices.contains(slot),
@@ -1735,12 +1722,14 @@ final class CameraManager: NSObject, ObservableObject {
                                 ) {
                                     datas.append(composite)
                                     compositeDatas.append(composite)
+                                    compositePrimaryDatas.append(mainData)
                                     compositeSecondaryDatas.append(
-                                        self.highResolutionSecondaryJPEG(
-                                            secondaryFrame: fallbackFrames[1 - primarySlot],
-                                            config: captureConfig,
-                                            slot: 1 - primarySlot
-                                        )
+                                        highResolutionPhotos[1 - primarySlot]
+                                            ?? self.highResolutionSecondaryJPEG(
+                                                secondaryFrame: fallbackFrames[1 - primarySlot],
+                                                config: captureConfig,
+                                                slot: 1 - primarySlot
+                                            )
                                     )
                                 }
                             }
@@ -1748,6 +1737,7 @@ final class CameraManager: NSObject, ObservableObject {
                             self.saveCompositeArchive(
                                 compositeDatas,
                                 config: captureConfig,
+                                primaryImages: compositePrimaryDatas,
                                 secondaryImages: compositeSecondaryDatas
                             )
                             DispatchQueue.main.async {
@@ -1822,6 +1812,7 @@ final class CameraManager: NSObject, ObservableObject {
 
                     var outputPhotos: [Data] = []
                     var compositePhotos: [Data] = []
+                    var compositePrimaryPhotos: [Data?] = []
                     var compositeSecondaryPhotos: [Data?] = []
                     let secondaryPreview = self.highResolutionSecondaryJPEG(
                         secondaryFrame: fallbackFrames[1 - primarySlot],
@@ -1840,6 +1831,7 @@ final class CameraManager: NSObject, ObservableObject {
                                 mainSlot: primarySlot
                             ) {
                                 compositePhotos.append(composite)
+                                compositePrimaryPhotos.append(photo)
                                 compositeSecondaryPhotos.append(secondaryPreview)
                                 outputPhotos.append(composite)
                             }
@@ -1849,6 +1841,7 @@ final class CameraManager: NSObject, ObservableObject {
                     self.saveCompositeArchive(
                         compositePhotos,
                         config: captureConfig,
+                        primaryImages: compositePrimaryPhotos,
                         secondaryImages: compositeSecondaryPhotos
                     )
                     if !outputPhotos.isEmpty {
@@ -2325,15 +2318,24 @@ final class CameraManager: NSObject, ObservableObject {
         let composed = Compositor.compose(main: mainImage, sub: subImage, cfg: c, canvas: canvas)
         let finalImage = c.filter.apply(to: composed, intensity: c.filterIntensity).cropped(to: full)
 
-        let pipSecondaryData: Data? = {
-            guard c.layout == .pip, let subImage else { return nil }
-            return jpeg(c.filter.apply(to: subImage, intensity: c.filterIntensity))
-        }()
+        // Keep both sensor originals beside every composite archive entry. Use rawA/rawB rather
+        // than the mirrored/filtered display images, and resolve the visible main/sub roles only
+        // after applying the user's camera-swap setting.
+        let mainOriginalImage = (c.swapped && rawB != nil) ? rawB! : rawA
+        let secondaryOriginalImage = (c.swapped && rawB != nil) ? rawA : rawB
+        let primaryOriginalData = jpeg(mainOriginalImage)
+        let secondaryOriginalData = secondaryOriginalImage.flatMap { jpeg($0) }
 
         // 原图直出：每颗镜头各存一张未镜像、未加滤镜、未裁切、未合成的画面；合成图是预览里看到的样子
         var shots: [StillShot] = []
         if c.outputMode.savesComposite {
-            shots.append(StillShot(image: finalImage, slot: nil, captureConfig: c, secondaryPreviewData: pipSecondaryData))
+            shots.append(StillShot(
+                image: finalImage,
+                slot: nil,
+                captureConfig: c,
+                primaryPreviewData: primaryOriginalData,
+                secondaryPreviewData: secondaryOriginalData
+            ))
         }
         if c.outputMode.savesOriginal && includeOriginals {
             shots.append(StillShot(image: rawA, slot: 0, captureConfig: c))
@@ -2400,6 +2402,7 @@ final class CameraManager: NSObject, ObservableObject {
             saveCompositeArchive(
                 compositeShots.compactMap { $0.data },
                 config: c,
+                primaryImages: compositeShots.map { $0.primaryPreviewData },
                 secondaryImages: compositeShots.map { $0.secondaryPreviewData }
             )
             saveImages(datas, successMessage: silentSave ? "" : nil)
@@ -2452,6 +2455,7 @@ final class CameraManager: NSObject, ObservableObject {
                         movie: box.get(i),
                         isComposite: s.slot == nil,
                         captureConfig: s.captureConfig ?? Config(),
+                        primaryPreviewData: s.primaryPreviewData,
                         secondaryPreviewData: s.secondaryPreviewData
                     ))
                 }
@@ -2527,6 +2531,10 @@ final class CameraManager: NSObject, ObservableObject {
         photoURL.deletingPathExtension().appendingPathExtension("sub.jpg")
     }
 
+    private func archivePrimaryURL(for photoURL: URL) -> URL {
+        photoURL.deletingPathExtension().appendingPathExtension("main.jpg")
+    }
+
     private func archiveLiveMovieURL(for photoURL: URL) -> URL {
         photoURL.deletingPathExtension().appendingPathExtension("live.mov")
     }
@@ -2574,10 +2582,16 @@ final class CameraManager: NSObject, ObservableObject {
         return FileManager.default.fileExists(atPath: candidate.path) ? candidate : nil
     }
 
+    func archivedPrimaryPreviewURL(for url: URL) -> URL? {
+        let candidate = archivePrimaryURL(for: url)
+        return FileManager.default.fileExists(atPath: candidate.path) ? candidate : nil
+    }
+
     /// Original JPEGs are kept as-is; newest photo is at index zero and a burst is newest-first.
     private func saveCompositeArchive(
         _ images: [Data],
         config: Config? = nil,
+        primaryImages: [Data?] = [],
         secondaryImages: [Data?] = [],
         liveMovies: [URL?] = []
     ) {
@@ -2613,8 +2627,26 @@ final class CameraManager: NSObject, ObservableObject {
                             try? encoded.write(to: self.archiveLayoutURL(for: photoURL), options: .atomic)
                         }
                     }
+                    if primaryImages.indices.contains(index) {
+                        if let source = primaryImages[index] {
+                            do {
+                                try source.write(to: self.archivePrimaryURL(for: photoURL), options: .atomic)
+                            } catch {
+                                failed = true
+                                NSLog("[DualCam] Failed to archive main-camera original: %@", error.localizedDescription)
+                            }
+                        } else {
+                            failed = true
+                            NSLog("[DualCam] Composite archive entry has no main-camera original")
+                        }
+                    }
                     if secondaryImages.indices.contains(index), let source = secondaryImages[index] {
-                        try? source.write(to: self.archiveSecondaryURL(for: photoURL), options: .atomic)
+                        do {
+                            try source.write(to: self.archiveSecondaryURL(for: photoURL), options: .atomic)
+                        } catch {
+                            failed = true
+                            NSLog("[DualCam] Failed to archive secondary-camera original: %@", error.localizedDescription)
+                        }
                     }
                     if liveMovieData.indices.contains(index), let motionData = liveMovieData[index] {
                         try? motionData.write(to: self.archiveLiveMovieURL(for: photoURL), options: .atomic)
@@ -2635,6 +2667,7 @@ final class CameraManager: NSObject, ObservableObject {
                 let oldURL = directory.appendingPathComponent(name)
                 try? FileManager.default.removeItem(at: oldURL)
                 try? FileManager.default.removeItem(at: self.archiveLayoutURL(for: oldURL))
+                try? FileManager.default.removeItem(at: self.archivePrimaryURL(for: oldURL))
                 try? FileManager.default.removeItem(at: self.archiveSecondaryURL(for: oldURL))
                 try? FileManager.default.removeItem(at: self.archiveLiveMovieURL(for: oldURL))
             }
@@ -2660,6 +2693,7 @@ final class CameraManager: NSObject, ObservableObject {
             for url in removed {
                 try? FileManager.default.removeItem(at: url)
                 try? FileManager.default.removeItem(at: self.archiveLayoutURL(for: url))
+                try? FileManager.default.removeItem(at: self.archivePrimaryURL(for: url))
                 try? FileManager.default.removeItem(at: self.archiveSecondaryURL(for: url))
                 try? FileManager.default.removeItem(at: self.archiveLiveMovieURL(for: url))
             }
@@ -2687,6 +2721,7 @@ final class CameraManager: NSObject, ObservableObject {
         saveCompositeArchive(
             compositeItems.map { $0.photo },
             config: compositeItems.first?.captureConfig ?? cfg,
+            primaryImages: compositeItems.map { $0.primaryPreviewData },
             secondaryImages: compositeItems.map { $0.secondaryPreviewData },
             liveMovies: compositeItems.map { $0.movie }
         )
@@ -2976,6 +3011,7 @@ private struct StillShot {
     var recorder: VideoRecorder? = nil
     var data: Data? = nil
     var captureConfig: Config? = nil
+    var primaryPreviewData: Data? = nil
     var secondaryPreviewData: Data? = nil
     /// 合成图实况的动态片段取自哪颗镜头槽位；nil = 取合成画面。
     var motionLens: Int? = nil
@@ -2993,6 +3029,7 @@ private struct SavedItem {
     let movie: URL?
     let isComposite: Bool
     let captureConfig: Config
+    let primaryPreviewData: Data?
     let secondaryPreviewData: Data?
 }
 

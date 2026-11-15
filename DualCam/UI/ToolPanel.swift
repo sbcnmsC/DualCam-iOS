@@ -425,80 +425,89 @@ struct FilterTab: View {
     }
 }
 
-/// A tactile exposure-compensation ruler. Each 0.1 EV notch is a discrete detent;
-/// haptics fire only when the finger crosses into a new detent, not on every render frame.
-/// Camera-style exposure ruler: the center pointer stays fixed while the tick scale
-/// moves beneath the finger. One detent equals 0.1 EV.
+/// Vertical camera-style EV ruler. The yellow horizontal pointer stays fixed
+/// while the tick scale moves vertically beneath the user's finger.
 private struct ExposureRuler: View {
+    @AppStorage("dualcam.adjustmentHandedness") private var leftHanded = false
     @Binding var value: Double
     let range: ClosedRange<Double>
     var disabled = false
 
-    @State private var dragStartValue: Double?
+    @State private var dragStartIndex: Int?
+    @State private var dragOffset: CGFloat = 0
     @State private var lastHapticIndex: Int?
-    @State private var dragRemainder: CGFloat = 0
 
     private let step = 0.1
-    private let tickSpacing: CGFloat = 34
+    private let tickSpacing: CGFloat = 13
+    private let rulerHeight: CGFloat = 96
+    private let rulerWidth: CGFloat = 38
 
     private var minIndex: Int { Int(ceil(range.lowerBound / step)) }
     private var maxIndex: Int { Int(floor(range.upperBound / step)) }
     private var currentIndex: Int {
         min(max(Int((value / step).rounded()), minIndex), maxIndex)
     }
-
-    private var displayValue: String {
-        String(format: "%.1f", value)
-    }
+    private var displayValue: String { String(format: "%+.1f EV", value) }
 
     var body: some View {
-        VStack(spacing: 8) {
-            Text("曝光")
-                .font(.system(size: 23, weight: .medium))
-                .foregroundStyle(.white)
-
-            Text(displayValue)
-                .font(.system(size: 54, weight: .regular, design: .rounded).monospacedDigit())
-                .foregroundStyle(.white)
-                .contentTransition(.numericText())
-                .frame(maxWidth: .infinity)
-                .padding(.top, 1)
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 7) {
+                Text("曝光")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.82))
+                Text(displayValue)
+                    .font(.system(size: 17, weight: .semibold, design: .rounded).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .contentTransition(.numericText())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                Text("0.1 EV / 格")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.48))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             GeometryReader { proxy in
-                let center = proxy.size.width / 2
+                let centerY = proxy.size.height / 2
                 ZStack {
-                    HStack(spacing: 0) {
-                        ForEach(-4...4, id: \.self) { offset in
-                            let tickIndex = currentIndex + offset
+                    VStack(spacing: 0) {
+                        ForEach(-3...3, id: \.self) { offset in
+                            let tickIndex = (dragStartIndex ?? currentIndex) + offset
                             let inRange = tickIndex >= minIndex && tickIndex <= maxIndex
-                            Rectangle()
-                                .fill(Color.white.opacity(inRange ? (offset.isMultiple(of: 2) ? 0.48 : 0.28) : 0.08))
-                                .frame(width: 2, height: offset.isMultiple(of: 2) ? 27 : 18)
-                                .frame(width: tickSpacing, height: 48, alignment: .center)
+                            HStack(spacing: 0) {
+                                Spacer(minLength: 0)
+                                Rectangle()
+                                    .fill(Color.white.opacity(inRange ? (offset.isMultiple(of: 2) ? 0.68 : 0.36) : 0.10))
+                                    .frame(width: offset.isMultiple(of: 2) ? 22 : 12, height: 1.5)
+                            }
+                            .frame(width: rulerWidth, height: tickSpacing)
                         }
                     }
-                    .frame(width: tickSpacing * 9, height: 48)
-                    .offset(x: dragRemainder)
-                    .position(x: center, y: 24)
+                    .frame(width: rulerWidth, height: tickSpacing * 7)
+                    .offset(y: dragOffset)
+                    .position(x: proxy.size.width / 2, y: centerY)
 
-                    Capsule()
+                    Rectangle()
                         .fill(Color.yellow)
-                        .frame(width: 3, height: 42)
-                        .position(x: center, y: 24)
+                        .frame(width: 25, height: 2.5)
+                        .position(x: proxy.size.width / 2, y: centerY)
                         .allowsHitTesting(false)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
+                .clipped()
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { gesture in
                             guard !disabled else { return }
-                            if dragStartValue == nil { dragStartValue = value }
-                            guard let start = dragStartValue else { return }
-                            // Swipe left to increase exposure; the scale moves right-to-left
-                            // beneath the fixed center marker.
-                            let delta = Int((gesture.translation.width / tickSpacing).rounded())
-                            dragRemainder = gesture.translation.width - CGFloat(delta) * tickSpacing
-                            let nextIndex = min(max(Int((start / step).rounded()) - delta, minIndex), maxIndex)
+                            if dragStartIndex == nil {
+                                dragStartIndex = currentIndex
+                                lastHapticIndex = currentIndex
+                            }
+                            guard let startIndex = dragStartIndex else { return }
+                            dragOffset = gesture.translation.height
+                            let delta = Int((-gesture.translation.height / tickSpacing).rounded())
+                            let nextIndex = min(max(startIndex + delta, minIndex), maxIndex)
                             let nextValue = min(max(Double(nextIndex) * step, range.lowerBound), range.upperBound)
                             if abs(nextValue - value) >= 0.0001 {
                                 value = nextValue
@@ -509,16 +518,17 @@ private struct ExposureRuler: View {
                             }
                         }
                         .onEnded { _ in
-                            dragStartValue = nil
+                            dragStartIndex = nil
+                            dragOffset = 0
                             lastHapticIndex = nil
-                            dragRemainder = 0
                         }
                 )
             }
-            .frame(height: 48)
+            .frame(width: rulerWidth, height: rulerHeight)
+            .environment(\.layoutDirection, .leftToRight)
             .accessibilityElement()
             .accessibilityLabel("曝光补偿")
-            .accessibilityValue(String(format: "%+.1f EV", value))
+            .accessibilityValue(displayValue)
             .accessibilityAdjustableAction { direction in
                 guard !disabled else { return }
                 switch direction {
@@ -528,18 +538,8 @@ private struct ExposureRuler: View {
                 }
                 HapticFeedback.play(.selection)
             }
-
-            HStack {
-                Text(String(format: "%.1f", range.lowerBound))
-                Spacer()
-                Text("每格 0.1 EV")
-                Spacer()
-                Text(String(format: "%+.1f", range.upperBound))
-            }
-            .font(.system(size: 10, design: .monospaced))
-            .foregroundStyle(Color.white.opacity(0.48))
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, minHeight: rulerHeight)
         .opacity(disabled ? 0.4 : 1)
         .disabled(disabled)
     }
@@ -578,9 +578,12 @@ struct ParamsTab: View {
                         .opacity(st.manualExposure || st.locked ? 0.4 : 1)
                 }
 
-                ExposureRuler(
+                LabeledSlider(
+                    icon: "sun.max",
+                    title: "曝光",
                     value: dbl(i, \.exposureBias) { cam.applyExposure($0) },
                     range: Double(info.minBias)...Double(max(info.maxBias, info.minBias + 0.1)),
+                    valueText: String(format: "%+.1f EV", st.exposureBias),
                     disabled: st.manualExposure || st.locked
                 )
 
@@ -712,6 +715,7 @@ struct SettingsTab: View {
     @AppStorage("dualcam.sound.recordingStop") private var recordingStopSoundEnabled = true
     @AppStorage("dualcam.haptics.enabled") private var hapticsEnabled = true
     @AppStorage("dualcam.dismissOnBlankTap") private var dismissOnBlankTap = true
+    @AppStorage("dualcam.adjustmentHandedness") private var leftHandedAdjustments = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -853,6 +857,16 @@ struct SettingsTab: View {
                 Toggle("点击空白处关闭弹窗", isOn: $dismissOnBlankTap)
                     .font(.system(size: 12))
                     .tint(.yellow)
+                HStack {
+                    Text("调节刻度位置").font(.system(size: 12))
+                    Spacer()
+                    Picker("调节刻度位置", selection: $leftHandedAdjustments) {
+                        Text("右手").tag(false)
+                        Text("左手").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 132)
+                }
                 Text(dismissOnBlankTap
                      ? "点击弹窗外的空白区域即可关闭。"
                      : "已关闭空白处关闭；请使用弹窗内的关闭、取消或确定按钮。")
@@ -1256,6 +1270,14 @@ VStack(alignment: .leading, spacing: 9) {
 
         switch parameter {
         case .exposure:
+            LabeledSlider(
+                icon: "sun.max",
+                title: "曝光",
+                value: numberBinding(i, \.exposureBias) { cam.applyExposure($0) },
+                range: Double(info.minBias)...Double(max(info.maxBias, info.minBias + 0.1)),
+                valueText: String(format: "%+.1f EV", Double(st.exposureBias)),
+                disabled: st.manualExposure || st.locked
+            )
             HStack {
                 Spacer()
                 Button("归零") {
@@ -1264,12 +1286,8 @@ VStack(alignment: .leading, spacing: 9) {
                 }
                 .font(.system(size: 11, weight: .semibold))
                 .tint(.yellow)
+                .disabled(st.manualExposure || st.locked)
             }
-            ExposureRuler(
-                value: numberBinding(i, \.exposureBias) { cam.applyExposure($0) },
-                range: Double(info.minBias)...Double(max(info.maxBias, info.minBias + 0.1)),
-                disabled: st.manualExposure || st.locked
-            )
         case .iso:
             if !st.manualExposure {
                 Button {
@@ -1304,24 +1322,67 @@ VStack(alignment: .leading, spacing: 9) {
                               range: 0...1, valueText: shutterText(info: info, t: st.shutter))
             }
         case .focus:
-            HStack {
-                Toggle("手动对焦", isOn: boolBinding(i, \.manualFocus) { cam.applyFocus($0) })
-                    .font(.system(size: 12))
-                Spacer()
-                Button("自动对焦") {
-                    HapticFeedback.play(.selection)
-                    cam.setAutoFocus(i)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("对焦模式")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text(st.manualFocus ? "手动控制焦点距离" : "点按取景画面自动对焦")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Color.white.opacity(0.55))
+                    }
+                    Spacer(minLength: 6)
+                    HStack(spacing: 3) {
+                        Button {
+                            HapticFeedback.play(.selection)
+                            cam.setAutoFocus(i)
+                        } label: {
+                            Text("自动")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(!st.manualFocus ? Color.black : Color.white.opacity(0.72))
+                                .frame(width: 48, height: 30)
+                                .background(Capsule().fill(!st.manualFocus ? Color.yellow : Color.white.opacity(0.08)))
+                        }
+                        .buttonStyle(.plain)
+
+                        Button {
+                            guard info.supportsManualFocus else { return }
+                            HapticFeedback.play(.selection)
+                            cam.slotStates[i].manualFocus = true
+                                cam.applyFocus(i)
+                        } label: {
+                            Text("手动")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(st.manualFocus ? Color.black : Color.white.opacity(0.72))
+                                .frame(width: 48, height: 30)
+                                .background(Capsule().fill(st.manualFocus ? Color.yellow : Color.white.opacity(0.08)))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!info.supportsManualFocus)
+                        .opacity(info.supportsManualFocus ? 1 : 0.4)
+                    }
+                    .padding(3)
+                    .background(Capsule().fill(Color.white.opacity(0.055)))
                 }
-                    .font(.system(size: 11, weight: .semibold)).tint(.yellow)
-            }
-            if st.manualFocus {
-                LabeledSlider(icon: "scope", title: "对焦距离",
-                              value: numberBinding(i, \.lensPosition) { cam.applyFocus($0) },
-                              range: 0...1, valueText: String(format: "%.2f", Double(st.lensPosition)),
-                              disabled: !info.supportsManualFocus)
-            } else {
-                Text("点按预览对焦；焦点框右侧太阳滑杆可调节曝光。")
-                    .font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.62))
+
+                if st.manualFocus {
+                    LabeledSlider(icon: "scope", title: "对焦距离",
+                                  value: numberBinding(i, \.lensPosition) { cam.applyFocus($0) },
+                                  range: 0...1, valueText: String(format: "%.2f", Double(st.lensPosition)),
+                                  disabled: !info.supportsManualFocus)
+                } else {
+                    HStack(spacing: 7) {
+                        Image(systemName: "scope")
+                            .foregroundStyle(Color.yellow)
+                        Text("轻点预览画面即可重新选择焦点")
+                            .foregroundStyle(Color.white.opacity(0.68))
+                    }
+                    .font(.system(size: 10, weight: .medium))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 9)
+                    .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.045)))
+                }
             }
         case .whiteBalance:
             Toggle("手动白平衡", isOn: boolBinding(i, \.manualWB) { cam.applyWhiteBalance($0) })

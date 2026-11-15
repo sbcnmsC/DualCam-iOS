@@ -278,22 +278,6 @@ struct CameraScreen: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .zIndex(5)
 
-                // Keep the switch in the upper-left camera-control band, but inside
-                // the GeometryReader's active hit-test bounds. Offsetting it into the
-                // unsafe status-bar area makes it visible while UIKit can reject touches.
-                if !showPanel && wirelessSession.mode != .receiving {
-                    OutputModePill()
-                        .frame(width: 144, height: 52, alignment: .leading)
-                        .contentShape(Rectangle())
-                        .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topLeading)
-                        .offset(
-                            x: canvasOffset.width + 10,
-                            y: canvasOffset.height + topControlsBottom + 6
-                        )
-                        .zIndex(100)
-                        .allowsHitTesting(true)
-                }
-
                 // When the device is physically landscape, render a real landscape-sized
                 // parameter canvas and rotate that panel as one unit. The camera interface and
                 // its preview remain portrait-locked underneath.
@@ -955,8 +939,6 @@ struct PreviewStage: View {
     let size: CGSize
     var iconRotationDegrees: CGFloat = 0
 
-    @State private var pressing = false
-    @State private var adjusting = false
     @State private var pinching = false
     @State private var zoomStart: CGFloat? = nil
     @State private var blinkOpacity: Double = 0
@@ -971,7 +953,7 @@ struct PreviewStage: View {
                     .allowsHitTesting(false)
             }
 
-            // 最底层的手势层：点按对焦、上下滑动调曝光、双指变焦
+            // Preview taps only set focus. Exposure is adjusted exclusively on the sun handle.
             Color.clear
                 .contentShape(Rectangle())
                 .gesture(backgroundGesture)
@@ -985,30 +967,21 @@ struct PreviewStage: View {
             }
 
             if let marker = cam.focusMarker {
-                let slot = min(max(marker.slot ?? cam.mainSlot, 0), 1)
-                let focusX = min(max(marker.point.x * size.width, 36), max(36, size.width - 36))
-                let focusY = min(max(marker.point.y * size.height, 36), max(36, size.height - 36))
-                let railOnLeft = focusX > size.width * 0.64
-                let railHeight = min(124, max(76, size.height - 64))
-                let groupHeight = railHeight + 50
-                let groupCenterX = focusX + (railOnLeft ? -26 : 26)
-                let groupCenterY = min(max(focusY, groupHeight / 2), max(groupHeight / 2, size.height - groupHeight / 2))
+                let focusX = min(max(marker.point.x * size.width, 66), max(66, size.width - 66))
+                let focusY = min(max(marker.point.y * size.height, 48), max(48, size.height - 48))
+                let slot = marker.slot ?? cam.mainSlot
+                let info = cam.slotInfos[slot]
                 FocusMarkerView(
+                    iconRotationDegrees: iconRotationDegrees,
                     exposureBias: marker.exposureBias ?? cam.slotStates[slot].exposureBias,
-                    minBias: cam.slotInfos[slot].minBias,
-                    maxBias: cam.slotInfos[slot].maxBias,
-                    isDisabled: cam.slotStates[slot].manualExposure || cam.slotStates[slot].locked,
-                    railOnLeft: railOnLeft,
-                    trackHeight: railHeight,
-                    onExposureChanged: { cam.adjustExposureBias(slot: slot, value: $0) },
-                    iconRotationDegrees: iconRotationDegrees
+                    minBias: info.minBias,
+                    maxBias: info.maxBias,
+                    isExposureLocked: cam.slotStates[slot].manualExposure || cam.slotStates[slot].locked,
+                    onExposureChanged: { cam.adjustExposureBias(slot: slot, value: $0) }
                 )
-                .position(
-                    x: min(max(groupCenterX, 61), max(61, size.width - 61)),
-                    y: groupCenterY
-                )
-                .id(marker.id)
-                .transition(.opacity)
+                    .position(x: focusX, y: focusY)
+                    .id(marker.id)
+                    .transition(.opacity)
             }
 
             // 拍照处理 / 切换镜头 / 重建会话时的「处理中」遮罩（先于快门黑场，两者叠加）
@@ -1052,25 +1025,10 @@ struct PreviewStage: View {
     }
 
     private var backgroundGesture: some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { v in
+        SpatialTapGesture()
+            .onEnded { value in
                 guard !pinching else { return }
-                if !pressing {
-                    pressing = true
-                    adjusting = false
-                    cam.exposureDragBegan(at: normalized(v.startLocation))
-                }
-                if abs(v.translation.height) > 10 || adjusting {
-                    adjusting = true
-                    cam.exposureDragChanged(dy: v.translation.height, at: normalized(v.location))
-                }
-            }
-            .onEnded { v in
-                if !adjusting && !pinching && hypot(v.translation.width, v.translation.height) < 12 {
-                    cam.focus(atNormalized: normalized(v.startLocation))
-                }
-                pressing = false
-                adjusting = false
+                cam.focus(atNormalized: normalized(value.location))
             }
     }
 
@@ -1193,181 +1151,135 @@ struct OutputModePill: View {
     }
 }
 
-/// Touch focus reticle with its own exposure rail. The transparent rail hit area is wider
-/// than its artwork, and the rail lives on the side with more free preview space.
+/// Focus frame with a directly draggable exposure control on the right rail.
 struct FocusMarkerView: View {
+    var iconRotationDegrees: CGFloat = 0
     let exposureBias: Float
     let minBias: Float
     let maxBias: Float
-    let isDisabled: Bool
-    let railOnLeft: Bool
-    let trackHeight: CGFloat
+    let isExposureLocked: Bool
     let onExposureChanged: (Float) -> Void
-    var iconRotationDegrees: CGFloat = 0
 
     @State private var appeared = false
-    @State private var isDragging = false
-    @State private var dragBias: Float?
+    @State private var faded = false
+    @State private var draggingSun = false
+    @State private var exposureDragStartY: CGFloat?
+    @State private var exposureDragStartBias: Float?
 
-    private let reticleSize: CGFloat = 68
-    private let railWidth: CGFloat = 48
-
-    private var displayedBias: Float {
-        min(max(dragBias ?? exposureBias, minBias), maxBias)
-    }
-
-    private var handleOffset: CGFloat {
-        let span = max(maxBias - minBias, 0.1)
-        let fraction = CGFloat((maxBias - displayedBias) / span)
-        return (fraction - 0.5) * trackHeight
-    }
-
-    private var disabledTint: Color {
-        isDisabled ? Color.white.opacity(0.38) : Color.yellow
+    private var clampedBias: Float {
+        min(max(exposureBias, minBias), maxBias)
     }
 
     var body: some View {
-        HStack(spacing: 10) {
-            if railOnLeft {
-                exposureRail
-                focusReticle
-            } else {
-                focusReticle
-                exposureRail
+        HStack(spacing: 14) {
+            ZStack {
+                Rectangle().stroke(Color.yellow, lineWidth: 1.4)
+                FocusReticleTicks()
+                    .stroke(Color.yellow, style: StrokeStyle(lineWidth: 1.5, lineCap: .square))
+                Image(systemName: "scope")
+                    .rotationEffect(.degrees(iconRotationDegrees))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.yellow)
             }
-        }
-        .frame(width: 126, height: max(reticleSize, trackHeight + 50))
-        .scaleEffect(appeared ? 1 : 1.04)
-        .onAppear { withAnimation(.easeOut(duration: 0.14)) { appeared = true } }
-        .accessibilityElement(children: .contain)
-    }
-
-    private var focusReticle: some View {
-        ZStack(alignment: .topTrailing) {
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(Color.yellow.opacity(0.98), lineWidth: 1.5)
-                .frame(width: reticleSize, height: reticleSize)
-                .overlay {
-                    FocusReticleCorners()
-                        .stroke(Color.yellow, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                        .frame(width: reticleSize, height: reticleSize)
-                }
-            Image(systemName: isDisabled ? "lock.fill" : "scope")
-                .rotationEffect(.degrees(iconRotationDegrees))
-                .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(Color.yellow)
-                .frame(width: 20, height: 20)
-                .background(Circle().fill(Color.black.opacity(0.82)))
-                .offset(x: 7, y: -7)
-        }
-        .frame(width: reticleSize, height: reticleSize)
-        // Keep the reticle visually present without stealing taps intended to refocus the preview.
-        .allowsHitTesting(false)
-        .shadow(color: Color.black.opacity(0.25), radius: 3, y: 1)
-    }
-
-    private var exposureRail: some View {
-        VStack(spacing: 4) {
-            exposureRailTitle
-            exposureTrack
-            exposureValue
-        }
-        .padding(.horizontal, 2)
-        .padding(.vertical, 5)
-        .background(Capsule().fill(Color.black.opacity(0.58)))
-        .overlay(Capsule().stroke(Color.white.opacity(isDragging ? 0.36 : 0.13), lineWidth: 0.8))
-        .opacity(isDisabled ? 0.72 : 1)
-        .frame(width: railWidth, height: max(reticleSize, trackHeight + 50))
-    }
-
-    private var exposureRailTitle: some View {
-        Text("EV")
-            .font(.system(size: 9, weight: .bold, design: .rounded))
-            .foregroundStyle(Color.white.opacity(0.72))
-    }
-
-    private var exposureTrack: some View {
-        ZStack {
-            Capsule()
-                .fill(Color.white.opacity(isDisabled ? 0.16 : 0.22))
-                .frame(width: 4, height: trackHeight)
-
-            ForEach(0..<5, id: \.self) { tick in
-                Capsule()
-                    .fill(Color.white.opacity(tick == 2 ? 0.78 : 0.38))
-                    .frame(width: tick == 2 ? 13 : 7, height: 1)
-                    .offset(y: (CGFloat(tick) / 4 - 0.5) * trackHeight)
-            }
-
-            exposureHandle
-        }
-        .frame(width: railWidth, height: trackHeight + 16)
-        .contentShape(Rectangle())
-        .highPriorityGesture(exposureDragGesture)
-        .accessibilityLabel("曝光补偿")
-        .accessibilityValue(String(format: "%+.1f EV", Double(displayedBias)))
-        .accessibilityHint(isDisabled ? "先关闭手动曝光或锁定状态" : "上下滑动调节曝光，双击数值可归零")
-    }
-
-    private var exposureHandle: some View {
-        Circle()
-            .fill(Color.black.opacity(0.8))
-            .frame(width: 25, height: 25)
-            .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 0.7))
-            .overlay {
-                Circle()
-                    .fill(disabledTint)
-                    .frame(width: 11, height: 11)
-            }
-            .overlay(
-                Circle()
-                    .stroke(Color.white.opacity(0.9), lineWidth: 1.2)
-                    .frame(width: 25, height: 25)
-            )
-            .shadow(color: .black.opacity(0.45), radius: 4, y: 2)
-            .offset(y: handleOffset)
+            .frame(width: 76, height: 76)
             .allowsHitTesting(false)
-    }
 
-    private var exposureValue: some View {
-        Text(String(format: "%+.1f", Double(displayedBias)))
-            .font(.system(size: 10, weight: .bold, design: .monospaced))
-            .foregroundStyle(isDisabled ? Color.white.opacity(0.45) : Color.yellow)
-            .contentShape(Rectangle())
-            .onTapGesture(count: 2, perform: resetExposureToZero)
-    }
+            GeometryReader { proxy in
+                let height = proxy.size.height
+                let usableHeight = max(height - 20, 1)
+                let range = max(maxBias - minBias, 0.01)
+                let fraction = CGFloat((clampedBias - minBias) / range)
+                let sunY = 10 + (1 - fraction) * usableHeight
 
-    private var exposureDragGesture: some Gesture {
-        DragGesture(minimumDistance: 0, coordinateSpace: .local)
-            .onChanged(handleExposureDragChanged)
-            .onEnded { _ in handleExposureDragEnded() }
-    }
+                ZStack(alignment: .top) {
+                    Rectangle()
+                        .fill(Color.yellow.opacity(0.95))
+                        .frame(width: 1.5, height: max(sunY - 10, 0))
+                        .position(x: proxy.size.width / 2, y: sunY / 2)
 
-    private func handleExposureDragChanged(_ value: DragGesture.Value) {
-        guard !isDisabled else { return }
-        if !isDragging {
-            isDragging = true
-            HapticFeedback.play(.button)
+                    Rectangle()
+                        .fill(Color.yellow.opacity(0.95))
+                        .frame(width: 1.5, height: max(height - sunY - 10, 0))
+                        .position(x: proxy.size.width / 2, y: sunY + 10 + max(height - sunY - 10, 0) / 2)
+
+                    Image(systemName: "sun.max.fill")
+                        .font(.system(size: 19, weight: .medium))
+                        .foregroundStyle(isExposureLocked ? Color.yellow.opacity(0.45) : Color.yellow)
+                        .frame(width: 42, height: 42)
+                        .background(Color.black.opacity(0.16), in: Circle())
+                        .position(x: proxy.size.width / 2, y: sunY)
+                }
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            guard !isExposureLocked else { return }
+                            draggingSun = true
+                            let y = min(max(value.location.y, 10), height - 10)
+                            if exposureDragStartY == nil || exposureDragStartBias == nil {
+                                // Preserve the existing touch-to-position behavior, then add
+                                // resistance to subsequent movement instead of making the rail jumpy.
+                                let progress = 1 - Float((y - 10) / usableHeight)
+                                let initialBias = minBias + progress * range
+                                exposureDragStartY = y
+                                exposureDragStartBias = initialBias
+                                onExposureChanged(initialBias)
+                            } else if let startY = exposureDragStartY,
+                                      let startBias = exposureDragStartBias {
+                                let delta = Float((startY - y) / usableHeight) * range * 0.6
+                                onExposureChanged(min(max(startBias + delta, minBias), maxBias))
+                            }
+                        }
+                        .onEnded { _ in
+                            draggingSun = false
+                            exposureDragStartY = nil
+                            exposureDragStartBias = nil
+                        }
+                )
+                .accessibilityElement()
+                .accessibilityLabel("曝光调节")
+                .accessibilityValue(String(format: "%.1f EV", clampedBias))
+            }
+            .frame(width: 42, height: 124)
+            .allowsHitTesting(!isExposureLocked)
         }
-        let y = min(max(value.location.y - 8, 0), trackHeight)
-        let fraction = 1 - Float(y / max(trackHeight, 1))
-        let next = minBias + fraction * (maxBias - minBias)
-        dragBias = next
-        onExposureChanged(next)
+        .frame(width: 132, height: 124)
+        .scaleEffect(appeared ? 1 : 0.94)
+        .opacity(faded && !draggingSun ? 0 : (appeared ? 1 : 0))
+        .accessibilityHidden(false)
+        .onAppear {
+            withAnimation(.easeOut(duration: 0.18)) { appeared = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.4) {
+                withAnimation(.easeOut(duration: 0.55)) { faded = true }
+            }
+        }
+        .onChange(of: draggingSun) { _, isDragging in
+            if isDragging { faded = false }
+            else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.4) {
+                    withAnimation(.easeOut(duration: 0.55)) { faded = true }
+                }
+            }
+        }
     }
+}
 
-    private func handleExposureDragEnded() {
-        if isDragging { HapticFeedback.play(.selection) }
-        isDragging = false
-        dragBias = nil
-    }
-
-    private func resetExposureToZero() {
-        guard !isDisabled else { return }
-        HapticFeedback.play(.selection)
-        dragBias = 0
-        onExposureChanged(0)
+private struct FocusReticleTicks: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let inset: CGFloat = 2
+        let length: CGFloat = 7
+        let midX = rect.midX
+        let midY = rect.midY
+        path.move(to: CGPoint(x: midX, y: inset))
+        path.addLine(to: CGPoint(x: midX, y: inset + length))
+        path.move(to: CGPoint(x: midX, y: rect.maxY - inset))
+        path.addLine(to: CGPoint(x: midX, y: rect.maxY - inset - length))
+        path.move(to: CGPoint(x: inset, y: midY))
+        path.addLine(to: CGPoint(x: inset + length, y: midY))
+        path.move(to: CGPoint(x: rect.maxX - inset, y: midY))
+        path.addLine(to: CGPoint(x: rect.maxX - inset - length, y: midY))
+        return path
     }
 }
 
@@ -1391,6 +1303,28 @@ private struct FocusReticleCorners: Shape {
     }
 }
 
+private enum PiPResizeCorner: Equatable {
+    case topLeading
+    case topTrailing
+    case bottomLeading
+    case bottomTrailing
+
+    var growsRight: Bool {
+        self == .topTrailing || self == .bottomTrailing
+    }
+
+    var growsDown: Bool {
+        self == .bottomLeading || self == .bottomTrailing
+    }
+
+    var alignment: Alignment {
+        Alignment(
+            horizontal: growsRight ? .trailing : .leading,
+            vertical: growsDown ? .bottom : .top
+        )
+    }
+}
+
 struct PiPOverlay: View {
     @EnvironmentObject private var cam: CameraManager
     let size: CGSize
@@ -1400,14 +1334,8 @@ struct PiPOverlay: View {
     @State private var dragTranslation: CGSize = .zero
     @State private var isDraggingPiP = false
     @State private var pinchStart: CGFloat? = nil
+    @State private var resizeStart: CGFloat? = nil
     @State private var isResizingPiP = false
-    // 拉伸开始时小窗左上角（归一化）与宽度；拉伸全程锁定左上角，手柄就始终跟在手指下面。
-    @State private var resizeAnchor: CGPoint? = nil
-    @State private var resizeStartWidth: CGFloat = 0
-    @State private var resizeMoved = false
-    // 双指缩放结束后手指还没抬起时，再次进入拖动要以当前位置重新计起点，否则小窗会跳一下。
-    @State private var dragNeedsRebase = false
-    @State private var dragRebase: CGSize = .zero
 
     private var normalizedRect: CGRect {
         Compositor.pipRectNormalized(cfg: cam.cfg)
@@ -1424,54 +1352,50 @@ struct PiPOverlay: View {
     var body: some View {
         let rect = previewRect
 
-        // Keep this overlay in the exact same full-canvas coordinate space as PreviewRepresentable.
-        // The PiP interaction surface is a local rectangle placed by its top-leading origin;
-        // avoid position(), whose implicit layout frame can diverge from the rendered preview.
-        ZStack(alignment: .topLeading) {
-            ZStack(alignment: .bottomTrailing) {
-                if isDraggingPiP {
-                    dragPlaceholder(in: rect)
-                } else {
-                    Color.clear
-                }
-
-                // Tap, move and pinch share the PiP surface; the resize handle is anchored
-                // to this same surface, so it cannot drift independently of the preview.
+        // Match the proven Build #92 layout: the preview surface, gesture surface and
+        // resize handle are direct siblings in one bottom-trailing aligned ZStack.
+        ZStack(alignment: .bottomTrailing) {
+            if isDraggingPiP {
+                dragPlaceholder(in: rect)
+            } else {
+                // The live preview is rendered by the compositor behind this overlay.
+                // Tap-to-swap is attached to the shared gesture surface below.
                 Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        guard !cam.isRecording && !cam.isCapturingPhoto else { return }
+                    .allowsHitTesting(false)
+            }
+
+            Color.clear
+                .contentShape(Rectangle())
+                .gesture(moveGesture)
+                .simultaneousGesture(pinchGesture)
+                // Keep tap-to-swap and drag-to-move on the same hit surface.
+                // A tap is recognized only when the finger does not move; a drag
+                // continues to be handled by the Build #92 move gesture above.
+                .simultaneousGesture(
+                    TapGesture().onEnded {
+                        // Camera swapping is allowed during recording and photo capture;
+                        // only suppress taps that belong to an active PiP drag/resize gesture.
+                        guard !isDraggingPiP, !isResizingPiP else { return }
                         cam.swapCameras()
                     }
-                    .gesture(moveGesture)
-                    .simultaneousGesture(pinchGesture)
+                )
 
-                Rectangle()
-                    .fill(Color.clear)
-                    .frame(width: 64, height: 64)
-                    .overlay {
-                        Image(systemName: "arrow.up.left.and.arrow.down.right")
-                            .rotationEffect(.degrees(iconRotationDegrees))
-                            .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(Color.white)
-                            .frame(width: 34, height: 34)
-                            .background(Circle().fill(Color.black.opacity(0.78)))
-                            .overlay(Circle().stroke(Color.white.opacity(0.34), lineWidth: 0.9))
-                    }
-                    .contentShape(Rectangle())
-                    .highPriorityGesture(resizeGesture, including: .all)
-                    .accessibilityLabel("拖动放大或缩小画中画")
-            }
-            .frame(width: rect.width, height: rect.height)
-            // Place the whole PiP interaction group from the canvas origin.
-            .offset(
-                x: rect.minX + dragTranslation.width,
-                y: rect.minY + dragTranslation.height
-            )
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .rotationEffect(.degrees(iconRotationDegrees))
+                .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(Color.white)
+                .frame(width: 24, height: 24)
+                .background(Circle().fill(Color.black.opacity(0.45)))
+                .padding(4)
+                .contentShape(Circle())
+                .gesture(resizeGesture)
         }
-        // The outer overlay always matches the rendered preview canvas.
-        .frame(width: size.width, height: size.height, alignment: .topLeading)
+        // One measured frame and one position for the image and its resize control.
+        .frame(width: rect.width, height: rect.height)
+        .position(x: rect.midX, y: rect.midY)
+        // The same transform moves both siblings together.
+        .offset(dragTranslation)
         .animation(.smooth(duration: 0.26), value: size)
     }
 
@@ -1517,19 +1441,15 @@ struct PiPOverlay: View {
                 if dragOriginCenter == nil {
                     guard !cam.isRecording && !cam.isCapturingPhoto else { return }
                     dragOriginCenter = CGPoint(x: normalizedRect.midX, y: normalizedRect.midY)
-                    dragRebase = dragNeedsRebase ? value.translation : .zero
-                    dragNeedsRebase = false
                     isDraggingPiP = true
                     cam.setPiPDragPreviewActive(true)
                     HapticFeedback.play(.button)
                 }
 
                 let base = previewRect
-                let dx = value.translation.width - dragRebase.width
-                let dy = value.translation.height - dragRebase.height
                 dragTranslation = CGSize(
-                    width: min(max(dx, -base.minX), size.width - base.maxX),
-                    height: min(max(dy, -base.minY), size.height - base.maxY)
+                    width: min(max(value.translation.width, -base.minX), size.width - base.maxX),
+                    height: min(max(value.translation.height, -base.minY), size.height - base.maxY)
                 )
             }
             .onEnded { _ in
@@ -1545,7 +1465,6 @@ struct PiPOverlay: View {
                 }
 
                 dragTranslation = .zero
-                dragRebase = .zero
                 dragOriginCenter = nil
                 isDraggingPiP = false
                 cam.clearPiPDragPreview()
@@ -1558,13 +1477,12 @@ struct PiPOverlay: View {
                 guard !cam.isRecording && !cam.isCapturingPhoto, !isResizingPiP else { return }
                 if pinchStart == nil {
                     pinchStart = cam.cfg.pipWidth
-                    dragNeedsRebase = true
                     dragOriginCenter = nil
                     dragTranslation = .zero
                     isDraggingPiP = false
                     cam.clearPiPDragPreview()
                 }
-                cam.cfg.pipWidth = min(max((pinchStart ?? 0.28) * value.magnification, 0.16), 0.55)
+                cam.cfg.pipWidth = min(max((pinchStart ?? 0.32) * value.magnification, 0.16), 0.9)
             }
             .onEnded { _ in
                 if pinchStart != nil { HapticFeedback.play(.selection) }
@@ -1573,74 +1491,24 @@ struct PiPOverlay: View {
     }
 
     private var resizeGesture: some Gesture {
-        // 必须用 .global：手柄随小窗一起移动，.local 坐标会跟着手柄漂，拉伸会越拉越慢、不跟手。
-        DragGesture(minimumDistance: 0, coordinateSpace: .global)
+        DragGesture(minimumDistance: 0, coordinateSpace: .local)
             .onChanged { value in
                 guard !cam.isRecording && !cam.isCapturingPhoto, pinchStart == nil else { return }
-                if resizeAnchor == nil {
-                    let r = normalizedRect
-                    resizeAnchor = CGPoint(x: r.minX, y: r.minY)
-                    // Store the compositor's source width, not the aspect-scaled
-                    // normalized rect width. The gesture converts canvas travel back
-                    // into this same configuration unit on every aspect ratio.
-                    resizeStartWidth = cam.cfg.pipWidth
-                    resizeMoved = false
+                if resizeStart == nil {
+                    resizeStart = cam.cfg.pipWidth
                     isResizingPiP = true
                     dragOriginCenter = nil
                     dragTranslation = .zero
                     isDraggingPiP = false
                     cam.clearPiPDragPreview()
                 }
-                guard let anchor = resizeAnchor else { return }
-                if abs(value.translation.width) > 2 || abs(value.translation.height) > 2 { resizeMoved = true }
-
-                var next = cam.cfg
-                let aspect = max(next.aspectRatio, 0.1)
-                let pipRatio = next.pipShape == .circle ? CGFloat(1) : next.pipRatio.value
-                let widthScale = max(Compositor.pipWidthScale(aspect: aspect), 0.1)
-
-                // Convert diagonal handle travel into a normalized width delta.
-                // Vertical movement is converted using the current preview/PiP ratios.
-                let horizontalDelta = value.translation.width / max(size.width, 1)
-                let verticalDelta = value.translation.height / max(size.height, 1)
-                    * pipRatio / aspect
-                let configWidthDelta = (horizontalDelta + verticalDelta) * 0.5 / widthScale
-                let requestedWidth = min(max(resizeStartWidth + configWidthDelta, 0.10), 0.55)
-
-                // Clamp growth against the compositor's exact geometry while allowing
-                // shrinking to track the finger directly. Keep the top-left corner fixed
-                // unless the minimum legal size itself would extend beyond the canvas.
-                let currentWidth = cam.cfg.pipWidth
-                var low: CGFloat = 0.10
-                var high: CGFloat = max(requestedWidth, low)
-                for _ in 0..<16 {
-                    let candidateWidth = (low + high) * 0.5
-                    var candidate = next
-                    candidate.pipWidth = candidateWidth
-                    let candidateSize = Compositor.pipSizeNormalized(cfg: candidate)
-                    let fits = anchor.x + candidateSize.width <= 1.0001 &&
-                        anchor.y + candidateSize.height <= 1.0001
-                    if fits { low = candidateWidth } else { high = candidateWidth }
-                }
-                let fittedWidth = requestedWidth <= currentWidth
-                    ? requestedWidth
-                    : min(requestedWidth, low)
-                next.pipWidth = max(0.10, fittedWidth)
-                let fittedSize = Compositor.pipSizeNormalized(cfg: next)
-                let fittedAnchor = CGPoint(
-                    x: min(anchor.x, 1 - fittedSize.width),
-                    y: min(anchor.y, 1 - fittedSize.height)
-                )
-                next.pipCenter = CGPoint(
-                    x: fittedAnchor.x + fittedSize.width / 2,
-                    y: fittedAnchor.y + fittedSize.height / 2
-                )
-                cam.cfg = next
+                let scale = Compositor.pipWidthScale(aspect: cam.cfg.aspectRatio)
+                let delta = value.translation.width / max(size.width, 1) / max(scale, 0.1)
+                cam.cfg.pipWidth = min(max((resizeStart ?? 0.32) + delta, 0.16), 0.9)
             }
             .onEnded { _ in
-                if resizeAnchor != nil, resizeMoved { HapticFeedback.play(.selection) }
-                resizeAnchor = nil
-                resizeMoved = false
+                if resizeStart != nil { HapticFeedback.play(.selection) }
+                resizeStart = nil
                 isResizingPiP = false
             }
     }
@@ -1821,7 +1689,7 @@ struct TimerSettingsOverlay: View {
 struct TopBar: View {
     @EnvironmentObject private var cam: CameraManager
     @AppStorage("dualcam.topbar.actions")
-    private var actionOrderValue = "flash,livePhoto,liveMotion,timer,swapCamera,nightAssist,wireless"
+    private var actionOrderValue = "flash,livePhoto,liveMotion,outputMode,timer,swapCamera,nightAssist,wireless"
     @State private var isCustomizing = false
 
     let onTimerTap: () -> Void
@@ -1835,7 +1703,7 @@ struct TopBar: View {
     var iconRotationDegrees: CGFloat = 90
     var compactLayout = false
 
-    private static let baseActionKeys = ["flash", "livePhoto", "liveMotion", "timer", "swapCamera", "nightAssist", "wireless", "shareComposite"]
+    private static let baseActionKeys = ["flash", "livePhoto", "liveMotion", "outputMode", "timer", "swapCamera", "nightAssist", "wireless", "shareComposite"]
     private static var allActionKeys: [String] {
         baseActionKeys + QuickParameter.allCases.map { "param.\($0.shortcutKey)" }
     }
@@ -1946,6 +1814,12 @@ struct TopBar: View {
                 actionOrderValue = actionOrderValue
                     .replacingOccurrences(of: "nightVision", with: "nightAssist")
             }
+            if actionOrderValue != "none", !actionKeys.contains("outputMode") {
+                var migratedKeys = actionKeys
+                let insertionIndex = migratedKeys.firstIndex(of: "timer").map { $0 } ?? migratedKeys.endIndex
+                migratedKeys.insert("outputMode", at: insertionIndex)
+                saveActionKeys(migratedKeys)
+            }
             if cam.cfg.filter == .nightVision {
                 cam.applyFilter(.original, intensity: 1)
             }
@@ -1984,6 +1858,26 @@ struct TopBar: View {
                 }
             } else {
                 EmptyView()
+            }
+        case "outputMode":
+            let modeBadge: String = {
+                switch cam.cfg.outputMode {
+                case .original: return "原"
+                case .composite: return "合"
+                case .both: return "双"
+                }
+            }()
+            iconButton(
+                actionKey: key,
+                icon: "viewfinder",
+                active: cam.cfg.outputMode == .original,
+                label: "保存模式：\(cam.cfg.outputMode.rawValue)，点击切换",
+                badge: modeBadge
+            ) {
+                let all = OutputMode.allCases
+                let index = all.firstIndex(of: cam.cfg.outputMode) ?? 0
+                cam.cfg.outputMode = all[(index + 1) % all.count]
+                HapticFeedback.play(.selection)
             }
         case "timer":
             iconButton(actionKey: key, icon: cam.timerSeconds == 0 ? "timer" : "timer.circle.fill",
@@ -2107,6 +2001,7 @@ struct TopBar: View {
         case "flash": return "闪光灯"
         case "livePhoto": return "实况照片"
         case "liveMotion": return "实况动态来源"
+        case "outputMode": return "保存模式"
         case "timer": return "倒计时"
         case "swapCamera": return "切换摄像头"
         case "wireless": return "无线监看"
@@ -2126,6 +2021,7 @@ struct TopBar: View {
         case "flash": return "bolt.fill"
         case "livePhoto": return "livephoto"
         case "liveMotion": return "waveform"
+        case "outputMode": return "viewfinder"
         case "timer": return "timer"
         case "swapCamera": return "arrow.triangle.2.circlepath"
         case "wireless": return "dot.radiowaves.left.and.right"
