@@ -1385,7 +1385,7 @@ struct PiPOverlay: View {
     @State private var isDraggingPiP = false
     @State private var pinchStart: CGFloat? = nil
     @State private var isResizingPiP = false
-    // 拉伸开始时小窗左上角（归一化）与宽度；拉伸全程锁定左上角，手柄就始终跟在手指下面。
+    // 拉伸开始时锁定小窗中心与宽度；向四周扩展，避免贴边时无法放大。
     @State private var resizeAnchor: CGPoint? = nil
     @State private var resizeStartWidth: CGFloat = 0
     @State private var resizeMoved = false
@@ -1407,6 +1407,7 @@ struct PiPOverlay: View {
 
     var body: some View {
         let rect = previewRect
+        let handleSide = min(58, min(rect.width, rect.height))
 
         // Keep this overlay in the exact same full-canvas coordinate space as PreviewRepresentable.
         // The PiP interaction surface is a local rectangle placed by its top-leading origin;
@@ -1437,7 +1438,7 @@ struct PiPOverlay: View {
             .overlay(alignment: .bottomTrailing) {
                 Rectangle()
                     .fill(Color.clear)
-                    .frame(width: 58, height: 58)
+                    .frame(width: handleSide, height: handleSide)
                     .overlay {
                         Image(systemName: "arrow.up.left.and.arrow.down.right")
                             .rotationEffect(.degrees(iconRotationDegrees))
@@ -1566,7 +1567,7 @@ struct PiPOverlay: View {
                 guard !cam.isRecording && !cam.isCapturingPhoto, pinchStart == nil else { return }
                 if resizeAnchor == nil {
                     let r = normalizedRect
-                    resizeAnchor = CGPoint(x: r.minX, y: r.minY)
+                    resizeAnchor = CGPoint(x: r.midX, y: r.midY)
                     // Store the compositor's source width, not the aspect-scaled
                     // normalized rect width. The gesture converts canvas travel back
                     // into this same configuration unit on every aspect ratio.
@@ -1605,23 +1606,19 @@ struct PiPOverlay: View {
                     var candidate = next
                     candidate.pipWidth = candidateWidth
                     let candidateSize = Compositor.pipSizeNormalized(cfg: candidate)
-                    let fits = anchor.x + candidateSize.width <= 1.0001 &&
-                        anchor.y + candidateSize.height <= 1.0001
+                    let fits = anchor.x - candidateSize.width / 2 >= -0.0001 &&
+                        anchor.x + candidateSize.width / 2 <= 1.0001 &&
+                        anchor.y - candidateSize.height / 2 >= -0.0001 &&
+                        anchor.y + candidateSize.height / 2 <= 1.0001
                     if fits { low = candidateWidth } else { high = candidateWidth }
                 }
                 let fittedWidth = requestedWidth <= currentWidth
                     ? requestedWidth
                     : min(requestedWidth, low)
                 next.pipWidth = max(0.10, fittedWidth)
-                let fittedSize = Compositor.pipSizeNormalized(cfg: next)
-                let fittedAnchor = CGPoint(
-                    x: min(anchor.x, 1 - fittedSize.width),
-                    y: min(anchor.y, 1 - fittedSize.height)
-                )
-                next.pipCenter = CGPoint(
-                    x: fittedAnchor.x + fittedSize.width / 2,
-                    y: fittedAnchor.y + fittedSize.height / 2
-                )
+                // Keep the starting center fixed and grow/shrink symmetrically.
+                // This also works when the PiP is initially snapped to a canvas edge.
+                next.pipCenter = anchor
                 cam.cfg = next
             }
             .onEnded { _ in
