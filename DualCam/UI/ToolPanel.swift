@@ -201,7 +201,17 @@ struct LabeledSlider: View {
     private let tickSpacing: CGFloat = 13
     private let rulerWidth: CGFloat = 38
     private let rulerHeight: CGFloat = 96
-    private var unit: Double { max((range.upperBound - range.lowerBound) / 100, 0.01) }
+    private var unit: Double {
+        switch title {
+        case "ISO": return 1
+        case "色温": return 50
+        case "色调": return 1
+        case "快门", "对焦距离": return 0.01
+        case "变焦": return 0.1
+        case "曝光": return 0.1
+        default: return max((range.upperBound - range.lowerBound) / 100, 0.01)
+        }
+    }
     private var maxIndex: Int { max(0, Int(floor((range.upperBound - range.lowerBound) / unit + 0.000001))) }
     private var currentIndex: Int { min(max(Int(((value - range.lowerBound) / unit).rounded()), 0), maxIndex) }
 
