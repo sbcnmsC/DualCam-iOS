@@ -236,6 +236,7 @@ struct LabeledSlider: View {
             .frame(maxWidth: .infinity, alignment: leftHanded ? .trailing : .leading)
             if !leftHanded { ruler }
         }
+        .environment(\.layoutDirection, leftHanded ? .rightToLeft : .leftToRight)
         .frame(maxWidth: .infinity, minHeight: rulerHeight)
         .opacity(disabled ? 0.4 : 1)
         .disabled(disabled)
@@ -501,6 +502,7 @@ struct FilterTab: View {
 /// Vertical camera-style EV ruler. The yellow horizontal pointer stays fixed
 /// while the tick scale moves vertically beneath the user's finger.
 private struct ExposureRuler: View {
+    @AppStorage("dualcam.adjustmentHandedness") private var leftHanded = false
     @Binding var value: Double
     let range: ClosedRange<Double>
     var disabled = false
@@ -597,6 +599,7 @@ private struct ExposureRuler: View {
                 )
             }
             .frame(width: rulerWidth, height: rulerHeight)
+            .environment(\.layoutDirection, .leftToRight)
             .accessibilityElement()
             .accessibilityLabel("曝光补偿")
             .accessibilityValue(displayValue)
