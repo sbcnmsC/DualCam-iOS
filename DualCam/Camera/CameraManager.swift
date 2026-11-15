@@ -1361,8 +1361,9 @@ final class CameraManager: NSObject, ObservableObject {
 
     func showMarker(at p: CGPoint, slot: Int? = nil) {
         exposureMarkerID = nil
-        let bias = slotStates.indices.contains(slot) ? slotStates[slot].exposureBias : 0
-        let marker = FocusMarker(point: p, exposureBias: bias, slot: slot)
+        let resolvedSlot = slot ?? mainSlot
+        let bias = slotStates.indices.contains(resolvedSlot) ? slotStates[resolvedSlot].exposureBias : 0
+        let marker = FocusMarker(point: p, exposureBias: bias, slot: resolvedSlot)
         focusMarker = marker
         scheduleFocusMarkerDismissal(id: marker.id)
     }
