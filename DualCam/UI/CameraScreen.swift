@@ -1324,8 +1324,9 @@ struct PiPOverlay: View {
                 // continues to be handled by the Build #92 move gesture above.
                 .simultaneousGesture(
                     TapGesture().onEnded {
-                        guard !cam.isRecording && !cam.isCapturingPhoto,
-                              !isDraggingPiP, !isResizingPiP else { return }
+                        // Camera swapping is allowed during recording and photo capture;
+                        // only suppress taps that belong to an active PiP drag/resize gesture.
+                        guard !isDraggingPiP, !isResizingPiP else { return }
                         cam.swapCameras()
                     }
                 )
