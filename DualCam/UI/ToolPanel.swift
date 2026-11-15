@@ -1344,10 +1344,7 @@ VStack(alignment: .leading, spacing: 9) {
                         Button {
                             guard info.supportsManualFocus else { return }
                             HapticFeedback.play(.selection)
-                            if !cam.slotStates[i].manualFocus {
-                                cam.slotStates[i].manualFocus = true
-                                cam.applyFocus(i)
-                            }
+                            cam.setManualFocus(i, enabled: true)
                         } label: {
                             Text("手动")
                                 .font(.system(size: 11, weight: .semibold))
