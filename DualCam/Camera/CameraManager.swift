@@ -2627,11 +2627,26 @@ final class CameraManager: NSObject, ObservableObject {
                             try? encoded.write(to: self.archiveLayoutURL(for: photoURL), options: .atomic)
                         }
                     }
-                    if primaryImages.indices.contains(index), let source = primaryImages[index] {
-                        try? source.write(to: self.archivePrimaryURL(for: photoURL), options: .atomic)
+                    if primaryImages.indices.contains(index) {
+                        if let source = primaryImages[index] {
+                            do {
+                                try source.write(to: self.archivePrimaryURL(for: photoURL), options: .atomic)
+                            } catch {
+                                failed = true
+                                NSLog("[DualCam] Failed to archive main-camera original: %@", error.localizedDescription)
+                            }
+                        } else {
+                            failed = true
+                            NSLog("[DualCam] Composite archive entry has no main-camera original")
+                        }
                     }
                     if secondaryImages.indices.contains(index), let source = secondaryImages[index] {
-                        try? source.write(to: self.archiveSecondaryURL(for: photoURL), options: .atomic)
+                        do {
+                            try source.write(to: self.archiveSecondaryURL(for: photoURL), options: .atomic)
+                        } catch {
+                            failed = true
+                            NSLog("[DualCam] Failed to archive secondary-camera original: %@", error.localizedDescription)
+                        }
                     }
                     if liveMovieData.indices.contains(index), let motionData = liveMovieData[index] {
                         try? motionData.write(to: self.archiveLiveMovieURL(for: photoURL), options: .atomic)
