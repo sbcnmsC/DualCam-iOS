@@ -333,6 +333,9 @@ final class CameraManager: NSObject, ObservableObject {
     // 录制状态（用 recLock 保护）
     private let recLock = NSLock()
     private var recorder: VideoRecorder?
+    /// Fixed output dimensions for the entire recording. Swapping front/rear sources
+    /// must not change the pixel-buffer dimensions expected by AVAssetWriter.
+    private var recordingCanvasSize: CGSize? = nil
     private var rawRecorders: [VideoRecorder?] = [nil, nil]
     // 实况照片的配套短视频（同样用 recLock 保护）
     private var liveComposite: VideoRecorder?
@@ -941,13 +944,16 @@ final class CameraManager: NSObject, ObservableObject {
 
         // The capture canvas remains full resolution. Only downscale the idle preview render graph.
         // Composite video and Live Photo motion still use the full-resolution canvas.
-        let canvas = Compositor.canvasSize(aspect: c.aspect, resolution: c.resolution,
-                                           sourceWidth: mainImage.extent.width, aspectRatio: c.aspectRatio)
+        let proposedCanvas = Compositor.canvasSize(aspect: c.aspect, resolution: c.resolution,
+                                                   sourceWidth: mainImage.extent.width, aspectRatio: c.aspectRatio)
         recLock.lock()
         let rec = recorder
         let live = liveComposite
+        let lockedRecordingCanvas = recordingCanvasSize
         recLock.unlock()
-        let needsFullResolution = rec != nil || live != nil
+        // Keep the movie writer's input dimensions stable when the user swaps the main camera.
+        let canvas = lockedRecordingCanvas ?? proposedCanvas
+        let needsFullResolution = rec != nil || live != nil || lockedRecordingCanvas != nil
         let renderCanvas: CGSize
         if needsFullResolution {
             renderCanvas = canvas
@@ -2937,6 +2943,7 @@ final class CameraManager: NSObject, ObservableObject {
                     return
                 }
                 self.recLock.lock()
+                self.recordingCanvasSize = canvas
                 self.recorder = comp
                 self.rawRecorders = raws
                 self.recLock.unlock()
@@ -2971,6 +2978,7 @@ final class CameraManager: NSObject, ObservableObject {
             let rec = self.recorder
             let raws = self.rawRecorders
             self.recorder = nil
+            self.recordingCanvasSize = nil
             self.rawRecorders = [nil, nil]
             self.recLock.unlock()
 
