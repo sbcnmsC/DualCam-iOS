@@ -1900,8 +1900,7 @@ struct TopBar: View {
             }
         case "swapCamera":
             iconButton(actionKey: key, icon: "arrow.triangle.2.circlepath", active: false,
-                       label: cam.captureMode == .video ? "录像中切换前后主摄" : "切换主副摄像头") {
-                HapticFeedback.play(.selection)
+                       label: cam.captureMode == .video ? "切换前后主摄（录像可用）" : "切换主副摄像头") {
                 cam.swapCameras()
             }
         case "wireless":
