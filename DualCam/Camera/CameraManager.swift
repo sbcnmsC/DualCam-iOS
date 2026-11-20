@@ -144,7 +144,12 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var countdown: Int? = nil
     @Published var screenFlash = false
     @Published var flashEnabled = launchSettings?.flashEnabled ?? false {
-        didSet { scheduleSettingsPersistence() }
+        didSet {
+            scheduleSettingsPersistence()
+            // The same control acts as a still-photo flash preference and a live
+            // continuous-light switch while recording.
+            if isRecording { setRecordingTorch(enabled: flashEnabled) }
+        }
     }
     @Published var timerSeconds = launchSettings?.timerSeconds ?? 0 {
         didSet { scheduleSettingsPersistence() }
@@ -268,6 +273,10 @@ final class CameraManager: NSObject, ObservableObject {
     /// All access is serialized on sessionQueue.
     private var nightAssistTorchRequested = false
     private var nightAssistTorchLevel: Float = 0.72
+    /// The physical slot whose rear LED was enabled for the current movie.
+    /// Access is serialized on sessionQueue so swapping the displayed camera cannot
+    /// make stopRecording turn off the wrong device.
+    private var recordingTorchSlot: Int? = nil
     /// If a still never reports back (interruption, camera taken by another app), give up on that
     /// lens after this many seconds so the MultiCam preview is always restored.
     private static let highResolutionCaptureTimeout: TimeInterval = 8
@@ -1449,6 +1458,8 @@ final class CameraManager: NSObject, ObservableObject {
     func swapCameras() {
         HapticFeedback.play(.selection)
         cfg.swapped.toggle()
+        // Keep recording light state synchronized with the newly selected main camera.
+        if isRecording { setRecordingTorch(enabled: flashEnabled) }
     }
 
     func resetPiP() {
@@ -1608,6 +1619,67 @@ final class CameraManager: NSObject, ObservableObject {
                 }
             } catch {
                 DispatchQueue.main.async { self.showToast("闪光灯暂不可用：\\(error.localizedDescription)") }
+            }
+        }
+    }
+
+    /// Route the movie light to an available rear camera and remember the physical slot.
+    /// This is intentionally independent of mainSlot at stop time: the user may swap cameras
+    /// several times during one recording.
+    private func setRecordingTorch(enabled: Bool) {
+        let preferredSlot = mainSlot
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+
+            let targetSlot: Int? = {
+                guard enabled else { return nil }
+                if self.devices.indices.contains(preferredSlot),
+                   let preferred = self.devices[preferredSlot],
+                   preferred.position == .back,
+                   preferred.hasTorch,
+                   preferred.isTorchAvailable {
+                    return preferredSlot
+                }
+                return self.devices.indices.first { index in
+                    guard let device = self.devices[index] else { return false }
+                    return device.position == .back && device.hasTorch && device.isTorchAvailable
+                }
+            }()
+
+            if let oldSlot = self.recordingTorchSlot,
+               oldSlot != targetSlot,
+               self.devices.indices.contains(oldSlot),
+               let oldDevice = self.devices[oldSlot],
+               oldDevice.hasTorch {
+                do {
+                    try oldDevice.lockForConfiguration()
+                    oldDevice.torchMode = .off
+                    oldDevice.unlockForConfiguration()
+                } catch {
+                    oldDevice.unlockForConfiguration()
+                    NSLog("[DualCam] Could not release previous recording torch: %@", error.localizedDescription)
+                }
+            }
+
+            guard let targetSlot,
+                  self.devices.indices.contains(targetSlot),
+                  let device = self.devices[targetSlot] else {
+                self.recordingTorchSlot = nil
+                self.applyNightAssistTorchOnSessionQueue()
+                return
+            }
+
+            do {
+                try device.lockForConfiguration()
+                defer { device.unlockForConfiguration() }
+                try device.setTorchModeOn(level: 1.0)
+                self.recordingTorchSlot = targetSlot
+            } catch {
+                self.recordingTorchSlot = nil
+                DispatchQueue.main.async {
+                    self.showToast("录像补光暂不可用：\\(error.localizedDescription)")
+                }
+                self.applyNightAssistTorchOnSessionQueue()
             }
         }
     }
@@ -2878,7 +2950,7 @@ final class CameraManager: NSObject, ObservableObject {
                     self.recTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
                         self?.recordSeconds += 1
                     }
-                    if useFlash, self.slotInfos[slot].hasTorch { self.setTorch(slot: slot, on: true) }
+                    if useFlash { self.setRecordingTorch(enabled: true) }
                 }
             } catch {
                 self.showToast("无法开始录像：\(error.localizedDescription)")
@@ -2892,8 +2964,9 @@ final class CameraManager: NSObject, ObservableObject {
         isRecording = false
         recTimer?.invalidate()
         recTimer = nil
-        let slot = mainSlot
-        if slotInfos[slot].hasTorch { setTorch(slot: slot, on: false) }
+        // Turn off the exact physical LED used by this recording, not whichever
+        // camera happens to be selected after the last in-recording swap.
+        setRecordingTorch(enabled: false)
         videoQueue.async {
             self.drainCompositeRenderQueue()
             self.recLock.lock()
