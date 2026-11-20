@@ -143,6 +143,8 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var recordSeconds = 0
     @Published var countdown: Int? = nil
     @Published var screenFlash = false
+    @Published private(set) var fillLightActive = false
+    private var screenFillRequested = false
     @Published var flashEnabled = launchSettings?.flashEnabled ?? false {
         didSet {
             scheduleSettingsPersistence()
@@ -1730,7 +1732,13 @@ final class CameraManager: NSObject, ObservableObject {
 
     /// Continuous rear LED fill survives temporary still-photo sessions; the hardware flash
     /// gets priority during exposure and the fill returns when the MultiCam graph is restored.
+    func setScreenFillActive(_ enabled: Bool) {
+        screenFillRequested = enabled
+        fillLightActive = enabled || nightAssistTorchRequested
+    }
+
     func setNightAssistTorch(enabled: Bool, level: Float = 0.72) {
+        fillLightActive = enabled || screenFillRequested
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
             self.nightAssistTorchRequested = enabled
@@ -1745,18 +1753,19 @@ final class CameraManager: NSObject, ObservableObject {
     }
 
     private func flash(on: Bool) {
-        let slot = mainSlot
-        if slotInfos[slot].hasTorch {
-            setTorch(slot: slot, on: on)
-        } else {
-            screenFlash = on
+        // DualCam lights both active sides together: rear hardware LED + front screen flash.
+        let frontActive = slotFront.contains(true)
+        let rearFlashSlot = slotFront.indices.first {
+            !slotFront[$0] && slotInfos.indices.contains($0) && slotInfos[$0].hasTorch
         }
+        if frontActive { screenFlash = on }
+        if let rearFlashSlot { setTorch(slot: rearFlashSlot, on: on) }
     }
 
     func takePhoto() {
         guard !isCapturingPhoto else { return }
         CaptureCuePlayer.shared.play(.shutter)
-        let useFlash = flashEnabled
+        let useFlash = flashEnabled && !fillLightActive
         let captureConfig = cfg
         // Native still capture is used whenever Live Photo is off. Live Photos stay on the
         // existing still/movie pair path so their content identifiers and motion frames remain paired.
@@ -1764,7 +1773,7 @@ final class CameraManager: NSObject, ObservableObject {
         let primarySlot = captureConfig.swapped ? 1 : 0
         // 后置高清静态照由 AVCapturePhotoOutput 直接触发硬件闪光灯，不提前点亮手电筒，
         // 避免固定等待 450 ms；前置无闪光灯时仍保留屏幕补光和曝光等待。
-        let useScreenFlash = useFlash && (!useHighResolutionCapture || !slotInfos[primarySlot].hasTorch)
+        let useScreenFlash = useFlash && !useHighResolutionCapture
         // 快门黑场 + 「处理中」遮罩，盖住切换单摄会话时预览的短暂停顿
         shutterPulse &+= 1
         if useHighResolutionCapture {
@@ -1785,9 +1794,12 @@ final class CameraManager: NSObject, ObservableObject {
                     // independently exportable original in the in-app composite archive.
                     let slots = [primarySlot, 1 - primarySlot]
 
+                    let rearFlashSlot = useFlash
+                        ? self.slotFront.indices.first(where: { !self.slotFront[$0] && self.slotInfos[$0].hasTorch })
+                        : nil
                     self.captureHighResolutionPhotos(
                         slots: slots,
-                        flashSlot: useFlash ? primarySlot : nil
+                        flashSlot: rearFlashSlot
                     ) { highResolutionPhotos in
                         // Do image composition and JPEG encoding off the main thread. A composite
                         // uses the native still from the displayed main camera and the other camera's
@@ -1896,11 +1908,14 @@ final class CameraManager: NSObject, ObservableObject {
         captureStatus = "准备连拍…"
         HapticFeedback.play(.shutter)
         CaptureCuePlayer.shared.play(.shutter)
-        if flashEnabled { flash(on: true) }
+        let useFlash = flashEnabled && !fillLightActive
+        if useFlash { flash(on: true) }
 
         captureHighResolutionPhotos(
             slots: Array(repeating: primarySlot, count: burstLimit),
-            flashSlot: flashEnabled ? primarySlot : nil,
+            flashSlot: useFlash
+                ? slotFront.indices.first(where: { !slotFront[$0] && slotInfos[$0].hasTorch })
+                : nil,
             burstCompletion: { [weak self] primaryPhotos in
                 guard let self else { return }
                 self.compositeRenderQueue.async {
@@ -1952,7 +1967,7 @@ final class CameraManager: NSObject, ObservableObject {
                     }
 
                     DispatchQueue.main.async {
-                        self.flash(on: false)
+                        if useFlash { self.flash(on: false) }
                         self.isBurstCapturing = false
                         self.isCapturingPhoto = false
                         self.burstCaptureCount = capturedPhotos.count
@@ -2175,6 +2190,12 @@ final class CameraManager: NSObject, ObservableObject {
            output.supportedFlashModes.contains(.on) {
             settings.flashMode = .on
         }
+        let useFrontScreenFlash = highResolutionBatchFlashSlot != nil
+            && device.position == .front
+            && !fillLightActive
+        if useFrontScreenFlash {
+            DispatchQueue.main.async { self.screenFlash = true }
+        }
 
         let uniqueID = settings.uniqueID
         let token = highResolutionBatchToken
@@ -2183,6 +2204,9 @@ final class CameraManager: NSObject, ObservableObject {
             guard let self = self else { return }
             self.sessionQueue.async {
                 self.pendingPhotoDelegates.removeValue(forKey: finishedID)
+                if useFrontScreenFlash {
+                    DispatchQueue.main.async { self.screenFlash = false }
+                }
                 // A late callback for a step the watchdog already skipped must not advance twice.
                 guard self.highResolutionBatchActive,
                       self.highResolutionBatchToken == token,
@@ -2209,7 +2233,13 @@ final class CameraManager: NSObject, ObservableObject {
             }
         }
         pendingPhotoDelegates[uniqueID] = delegate
-        output.capturePhoto(with: settings, delegate: delegate)
+        if useFrontScreenFlash {
+            sessionQueue.asyncAfter(deadline: .now() + 0.12) {
+                output.capturePhoto(with: settings, delegate: delegate)
+            }
+        } else {
+            output.capturePhoto(with: settings, delegate: delegate)
+        }
 
         // Watchdog: without it a still that never completes leaves the UI on the "processing"
         // overlay and the MultiCam preview permanently stopped.
@@ -2219,6 +2249,9 @@ final class CameraManager: NSObject, ObservableObject {
                   self.highResolutionBatchToken == token,
                   self.highResolutionBatchIndex == stepIndex else { return }
             NSLog("[DualCam] High-resolution still for slot %ld timed out; skipping", Int(slot))
+            if useFrontScreenFlash {
+                DispatchQueue.main.async { self.screenFlash = false }
+            }
             self.pendingPhotoDelegates.removeValue(forKey: uniqueID)
             self.highResolutionBatchIndex += 1
             self.advanceHighResolutionCaptureBatch()
