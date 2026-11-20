@@ -2083,9 +2083,12 @@ final class CameraManager: NSObject, ObservableObject {
             self.highResolutionBatchToken &+= 1
             self.highResolutionBatchFlashSlot = flashSlot
 
-            // The continuous LED is preview fill, not the exposure flash. Release it before
-            // the native photo pipeline fires so the hardware flash has clean priority.
-            self.suspendNightAssistTorchForStillCapture()
+            // Flash and continuous fill are mutually exclusive. Only release the preview
+            // torch when this capture will actually fire a flash; when fill is selected, keep
+            // the rear LED running throughout the still capture instead of creating a dark gap.
+            if flashSlot != nil {
+                self.suspendNightAssistTorchForStillCapture()
+            }
 
             // Drain coalesced device writes and release the MultiCam inputs before opening the
             // single-camera session. The previous video frames were already snapshotted for fallback.
