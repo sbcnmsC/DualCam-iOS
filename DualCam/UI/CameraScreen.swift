@@ -533,6 +533,7 @@ struct CameraScreen: View {
             }
         }
         .onChange(of: screenFillEnabled) { _, enabled in
+            cam.setScreenFillActive(enabled)
             if enabled {
                 if originalScreenBrightness == nil {
                     originalScreenBrightness = UIScreen.main.brightness
