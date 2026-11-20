@@ -186,6 +186,24 @@ final class CameraManager: NSObject, ObservableObject {
         !isRecording && !cfg.livePhoto && timerSeconds == 0
     }
 
+    /// Whether the Live Photo preference can be changed without interrupting a capture.
+    var canChangeLivePhotoSetting: Bool {
+        !isRecording && !isCapturingPhoto && !isBurstCapturing
+    }
+
+    /// The camera configuration is a value type; assign the complete updated value so
+    /// ObservableObject publishes the change and the capture pipeline receives one snapshot.
+    var canToggleLivePhoto: Bool {
+        captureMode == .photo && canChangeLivePhotoSetting
+    }
+
+    func setLivePhotoEnabled(_ enabled: Bool) {
+        guard canChangeLivePhotoSetting, cfg.livePhoto != enabled else { return }
+        var updatedConfig = cfg
+        updatedConfig.livePhoto = enabled
+        cfg = updatedConfig
+    }
+
     /// Suspend local capture when this device is only displaying a remote monitor stream.
     /// AVCaptureSession lifecycle is owned by sessionQueue.
     func setLocalCameraCaptureSuspended(_ suspended: Bool) {
