@@ -787,7 +787,12 @@ struct SettingsTab: View {
                 .foregroundStyle(Color.white.opacity(0.66))
                 .fixedSize(horizontal: false, vertical: true)
 
-            Toggle("实况照片（开启时使用兼容分辨率）", isOn: $cam.cfg.livePhoto).font(.system(size: 13))
+            Toggle("实况照片（开启时使用兼容分辨率）", isOn: Binding(
+                get: { cam.cfg.livePhoto },
+                set: { cam.setLivePhotoEnabled($0) }
+            ))
+            .font(.system(size: 13))
+            .disabled(!cam.canChangeLivePhotoSetting)
             if cam.cfg.livePhoto {
                 HStack {
                     Text("动态").font(.system(size: 13)).frame(width: 64, alignment: .leading)
@@ -1600,7 +1605,12 @@ VStack(alignment: .leading, spacing: 9) {
                 }.pickerStyle(.segmented).disabled(cam.isRecording)
             }
         case .livePhoto:
-            Toggle("实况照片", isOn: $cam.cfg.livePhoto).font(.system(size: 12))
+            Toggle("实况照片", isOn: Binding(
+                get: { cam.cfg.livePhoto },
+                set: { cam.setLivePhotoEnabled($0) }
+            ))
+            .font(.system(size: 12))
+            .disabled(!cam.canChangeLivePhotoSetting)
         case .liveMotion:
             Picker("实况动态来源", selection: $cam.cfg.liveMotion) {
                 ForEach(LiveMotionSource.allCases) { Text($0.rawValue).tag($0) }
