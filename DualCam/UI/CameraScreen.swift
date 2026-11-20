@@ -1836,11 +1836,18 @@ struct TopBar: View {
                 cam.flashEnabled.toggle()
             }
         case "livePhoto":
-            iconButton(actionKey: key, icon: cam.cfg.livePhoto ? "livephoto" : "livephoto.slash",
-                       active: cam.cfg.livePhoto && cam.captureMode == .photo,
-                       dimmed: cam.captureMode == .video, label: "实况照片") {
+            iconButton(
+                actionKey: key,
+                icon: cam.cfg.livePhoto ? "livephoto" : "livephoto.slash",
+                active: cam.cfg.livePhoto && cam.captureMode == .photo,
+                dimmed: !cam.canToggleLivePhoto && !isCustomizing,
+                disabled: !cam.canToggleLivePhoto,
+                label: cam.captureMode == .photo
+                    ? (cam.cfg.livePhoto ? "关闭实况照片" : "开启实况照片")
+                    : "实况照片仅在拍照模式下可用"
+            ) {
                 HapticFeedback.play(.selection)
-                cam.cfg.livePhoto.toggle()
+                cam.setLivePhotoEnabled(!cam.cfg.livePhoto)
             }
         case "liveMotion":
             if showLiveSource {
@@ -1923,6 +1930,7 @@ struct TopBar: View {
 
     private func iconButton(
         actionKey: String, icon: String, active: Bool, dimmed: Bool = false,
+        disabled: Bool = false,
         label: String, badge: String? = nil, activeTint: Color = .yellow,
         action: @escaping () -> Void
     ) -> some View {
@@ -1953,6 +1961,7 @@ struct TopBar: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(disabled && !isCustomizing)
         .contentShape(Rectangle())
         .accessibilityLabel(isCustomizing ? "删除按钮：\(actionTitle(actionKey))" : label)
         .opacity(dimmed ? 0.4 : 1)
