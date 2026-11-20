@@ -1653,10 +1653,9 @@ final class CameraManager: NSObject, ObservableObject {
                oldDevice.hasTorch {
                 do {
                     try oldDevice.lockForConfiguration()
+                    defer { oldDevice.unlockForConfiguration() }
                     oldDevice.torchMode = .off
-                    oldDevice.unlockForConfiguration()
                 } catch {
-                    oldDevice.unlockForConfiguration()
                     NSLog("[DualCam] Could not release previous recording torch: %@", error.localizedDescription)
                 }
             }
@@ -1686,7 +1685,7 @@ final class CameraManager: NSObject, ObservableObject {
 
     /// Apply the requested continuous fill to the active rear camera. sessionQueue-only.
     private func applyNightAssistTorchOnSessionQueue() {
-        guard !highResolutionBatchActive else { return }
+        guard !highResolutionBatchActive, recordingTorchSlot == nil else { return }
         guard let device = devices.compactMap({ $0 }).first(where: { $0.position == .back }),
               device.hasTorch, device.isTorchAvailable else { return }
         do {
@@ -2880,7 +2879,6 @@ final class CameraManager: NSObject, ObservableObject {
     func startRecording() {
         guard !isRecording else { return }
         let useFlash = flashEnabled
-        let slot = mainSlot
 
         // Play the start cue before creating writers. Leave a short lead-in so the cue
         // finishes before the first audio/video samples can enter the movie.
