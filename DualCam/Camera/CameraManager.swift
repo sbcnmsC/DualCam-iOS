@@ -1637,19 +1637,17 @@ final class CameraManager: NSObject, ObservableObject {
         sessionQueue.async { [weak self] in
             guard let self else { return }
 
+            // Never light the secondary rear camera when the user is recording
+            // with the front camera: that LED points away from the selected subject.
+            // Front-camera users can use the independent screen-fill control instead.
             let targetSlot: Int? = {
-                guard enabled else { return nil }
-                if self.devices.indices.contains(preferredSlot),
-                   let preferred = self.devices[preferredSlot],
-                   preferred.position == .back,
-                   preferred.hasTorch,
-                   preferred.isTorchAvailable {
-                    return preferredSlot
-                }
-                return self.devices.indices.first { index in
-                    guard let device = self.devices[index] else { return false }
-                    return device.position == .back && device.hasTorch && device.isTorchAvailable
-                }
+                guard enabled,
+                      self.devices.indices.contains(preferredSlot),
+                      let preferred = self.devices[preferredSlot],
+                      preferred.position == .back,
+                      preferred.hasTorch,
+                      preferred.isTorchAvailable else { return nil }
+                return preferredSlot
             }()
 
             if let oldSlot = self.recordingTorchSlot,
@@ -1670,6 +1668,15 @@ final class CameraManager: NSObject, ObservableObject {
                   self.devices.indices.contains(targetSlot),
                   let device = self.devices[targetSlot] else {
                 self.recordingTorchSlot = nil
+                if enabled {
+                    let frontSelected = self.devices.indices.contains(preferredSlot)
+                        && self.devices[preferredSlot]?.position == .front
+                    DispatchQueue.main.async {
+                        self.showToast(frontSelected
+                            ? "前置镜头没有硬件闪光灯，请使用屏幕补光"
+                            : "当前镜头没有可用的硬件闪光灯")
+                    }
+                }
                 self.applyNightAssistTorchOnSessionQueue()
                 return
             }
