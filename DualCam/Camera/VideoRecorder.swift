@@ -37,15 +37,24 @@ final class VideoRecorder {
         url = fileURL
         writer = w
 
-        let bitrate = max(4_000_000, width * height * 5)
+        // Live Photo motion is only 1.6 seconds, so spend more bitrate on preserving fine
+        // texture and reducing HEVC smearing than on long-form recording. Keep a hard ceiling
+        // to avoid oversized 4K buffers/files; ordinary video recording keeps its existing profile.
+        let bitrate = liveID != nil
+            ? min(55_000_000, max(12_000_000, width * height * 8))
+            : max(4_000_000, width * height * 5)
+        var compression: [String: Any] = [
+            AVVideoAverageBitRateKey: bitrate,
+            AVVideoExpectedSourceFrameRateKey: fps
+        ]
+        if liveID != nil {
+            compression[AVVideoMaxKeyFrameIntervalDurationKey] = 1.0
+        }
         var settings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.hevc,
             AVVideoWidthKey: width,
             AVVideoHeightKey: height,
-            AVVideoCompressionPropertiesKey: [
-                AVVideoAverageBitRateKey: bitrate,
-                AVVideoExpectedSourceFrameRateKey: fps
-            ] as [String: Any]
+            AVVideoCompressionPropertiesKey: compression
         ]
         if !w.canApply(outputSettings: settings, forMediaType: .video) {
             settings[AVVideoCodecKey] = AVVideoCodecType.h264
