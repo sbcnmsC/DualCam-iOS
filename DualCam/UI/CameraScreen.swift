@@ -533,6 +533,7 @@ struct CameraScreen: View {
             }
         }
         .onChange(of: screenFillEnabled) { _, enabled in
+            cam.setScreenFillActive(enabled)
             if enabled {
                 if originalScreenBrightness == nil {
                     originalScreenBrightness = UIScreen.main.brightness
@@ -1830,8 +1831,12 @@ struct TopBar: View {
     private func actionButton(for key: String) -> some View {
         switch key {
         case "flash":
+            let isVideoMode = cam.captureMode == .video
+            let flashLabel = isVideoMode
+                ? (cam.flashEnabled ? "关闭录像补光" : "开启录像补光")
+                : (cam.flashEnabled ? "关闭拍照闪光灯" : "开启拍照闪光灯")
             iconButton(actionKey: key, icon: cam.flashEnabled ? "bolt.fill" : "bolt.slash",
-                       active: cam.flashEnabled, label: cam.flashEnabled ? "关闭闪光灯" : "开启闪光灯") {
+                       active: cam.flashEnabled, label: flashLabel) {
                 HapticFeedback.play(.button)
                 cam.flashEnabled.toggle()
             }
@@ -1896,7 +1901,9 @@ struct TopBar: View {
             }
         case "swapCamera":
             iconButton(actionKey: key, icon: "arrow.triangle.2.circlepath", active: false,
-                       label: "切换主副摄像头") { cam.swapCameras() }
+                       label: cam.captureMode == .video ? "切换前后主摄（录像可用）" : "切换主副摄像头") {
+                cam.swapCameras()
+            }
         case "wireless":
             iconButton(actionKey: key, icon: "dot.radiowaves.left.and.right", active: false,
                        label: "无线监看") {

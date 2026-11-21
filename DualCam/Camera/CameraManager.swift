@@ -143,8 +143,15 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var recordSeconds = 0
     @Published var countdown: Int? = nil
     @Published var screenFlash = false
+    @Published private(set) var fillLightActive = false
+    private var screenFillRequested = false
     @Published var flashEnabled = launchSettings?.flashEnabled ?? false {
-        didSet { scheduleSettingsPersistence() }
+        didSet {
+            scheduleSettingsPersistence()
+            // The same control acts as a still-photo flash preference and a live
+            // continuous-light switch while recording.
+            if isRecording { setRecordingTorch(enabled: flashEnabled) }
+        }
     }
     @Published var timerSeconds = launchSettings?.timerSeconds ?? 0 {
         didSet { scheduleSettingsPersistence() }
@@ -268,6 +275,10 @@ final class CameraManager: NSObject, ObservableObject {
     /// All access is serialized on sessionQueue.
     private var nightAssistTorchRequested = false
     private var nightAssistTorchLevel: Float = 0.72
+    /// The physical slot whose rear LED was enabled for the current movie.
+    /// Access is serialized on sessionQueue so swapping the displayed camera cannot
+    /// make stopRecording turn off the wrong device.
+    private var recordingTorchSlot: Int? = nil
     /// If a still never reports back (interruption, camera taken by another app), give up on that
     /// lens after this many seconds so the MultiCam preview is always restored.
     private static let highResolutionCaptureTimeout: TimeInterval = 8
@@ -324,6 +335,9 @@ final class CameraManager: NSObject, ObservableObject {
     // 录制状态（用 recLock 保护）
     private let recLock = NSLock()
     private var recorder: VideoRecorder?
+    /// Fixed output dimensions for the entire recording. Swapping front/rear sources
+    /// must not change the pixel-buffer dimensions expected by AVAssetWriter.
+    private var recordingCanvasSize: CGSize? = nil
     private var rawRecorders: [VideoRecorder?] = [nil, nil]
     // 实况照片的配套短视频（同样用 recLock 保护）
     private var liveComposite: VideoRecorder?
@@ -932,13 +946,16 @@ final class CameraManager: NSObject, ObservableObject {
 
         // The capture canvas remains full resolution. Only downscale the idle preview render graph.
         // Composite video and Live Photo motion still use the full-resolution canvas.
-        let canvas = Compositor.canvasSize(aspect: c.aspect, resolution: c.resolution,
-                                           sourceWidth: mainImage.extent.width, aspectRatio: c.aspectRatio)
+        let proposedCanvas = Compositor.canvasSize(aspect: c.aspect, resolution: c.resolution,
+                                                   sourceWidth: mainImage.extent.width, aspectRatio: c.aspectRatio)
         recLock.lock()
         let rec = recorder
         let live = liveComposite
+        let lockedRecordingCanvas = recordingCanvasSize
         recLock.unlock()
-        let needsFullResolution = rec != nil || live != nil
+        // Keep the movie writer's input dimensions stable when the user swaps the main camera.
+        let canvas = lockedRecordingCanvas ?? proposedCanvas
+        let needsFullResolution = rec != nil || live != nil || lockedRecordingCanvas != nil
         let renderCanvas: CGSize
         if needsFullResolution {
             renderCanvas = canvas
@@ -1449,6 +1466,8 @@ final class CameraManager: NSObject, ObservableObject {
     func swapCameras() {
         HapticFeedback.play(.selection)
         cfg.swapped.toggle()
+        // Keep recording light state synchronized with the newly selected main camera.
+        if isRecording { setRecordingTorch(enabled: flashEnabled) }
     }
 
     func resetPiP() {
@@ -1612,9 +1631,76 @@ final class CameraManager: NSObject, ObservableObject {
         }
     }
 
+    /// Route the movie light to an available rear camera and remember the physical slot.
+    /// This is intentionally independent of mainSlot at stop time: the user may swap cameras
+    /// several times during one recording.
+    private func setRecordingTorch(enabled: Bool) {
+        let preferredSlot = mainSlot
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+
+            // Never light the secondary rear camera when the user is recording
+            // with the front camera: that LED points away from the selected subject.
+            // Front-camera users can use the independent screen-fill control instead.
+            let targetSlot: Int? = {
+                guard enabled,
+                      self.devices.indices.contains(preferredSlot),
+                      let preferred = self.devices[preferredSlot],
+                      preferred.position == .back,
+                      preferred.hasTorch,
+                      preferred.isTorchAvailable else { return nil }
+                return preferredSlot
+            }()
+
+            if let oldSlot = self.recordingTorchSlot,
+               oldSlot != targetSlot,
+               self.devices.indices.contains(oldSlot),
+               let oldDevice = self.devices[oldSlot],
+               oldDevice.hasTorch {
+                do {
+                    try oldDevice.lockForConfiguration()
+                    defer { oldDevice.unlockForConfiguration() }
+                    oldDevice.torchMode = .off
+                } catch {
+                    NSLog("[DualCam] Could not release previous recording torch: %@", error.localizedDescription)
+                }
+            }
+
+            guard let targetSlot,
+                  self.devices.indices.contains(targetSlot),
+                  let device = self.devices[targetSlot] else {
+                self.recordingTorchSlot = nil
+                if enabled {
+                    let frontSelected = self.devices.indices.contains(preferredSlot)
+                        && self.devices[preferredSlot]?.position == .front
+                    DispatchQueue.main.async {
+                        self.showToast(frontSelected
+                            ? "前置镜头没有硬件闪光灯，请使用屏幕补光"
+                            : "当前镜头没有可用的硬件闪光灯")
+                    }
+                }
+                self.applyNightAssistTorchOnSessionQueue()
+                return
+            }
+
+            do {
+                try device.lockForConfiguration()
+                defer { device.unlockForConfiguration() }
+                try device.setTorchModeOn(level: 1.0)
+                self.recordingTorchSlot = targetSlot
+            } catch {
+                self.recordingTorchSlot = nil
+                DispatchQueue.main.async {
+                    self.showToast("录像补光暂不可用：\\(error.localizedDescription)")
+                }
+                self.applyNightAssistTorchOnSessionQueue()
+            }
+        }
+    }
+
     /// Apply the requested continuous fill to the active rear camera. sessionQueue-only.
     private func applyNightAssistTorchOnSessionQueue() {
-        guard !highResolutionBatchActive else { return }
+        guard !highResolutionBatchActive, recordingTorchSlot == nil else { return }
         guard let device = devices.compactMap({ $0 }).first(where: { $0.position == .back }),
               device.hasTorch, device.isTorchAvailable else { return }
         do {
@@ -1646,7 +1732,13 @@ final class CameraManager: NSObject, ObservableObject {
 
     /// Continuous rear LED fill survives temporary still-photo sessions; the hardware flash
     /// gets priority during exposure and the fill returns when the MultiCam graph is restored.
+    func setScreenFillActive(_ enabled: Bool) {
+        screenFillRequested = enabled
+        fillLightActive = enabled || nightAssistTorchRequested
+    }
+
     func setNightAssistTorch(enabled: Bool, level: Float = 0.72) {
+        fillLightActive = enabled || screenFillRequested
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
             self.nightAssistTorchRequested = enabled
@@ -1661,18 +1753,19 @@ final class CameraManager: NSObject, ObservableObject {
     }
 
     private func flash(on: Bool) {
-        let slot = mainSlot
-        if slotInfos[slot].hasTorch {
-            setTorch(slot: slot, on: on)
-        } else {
-            screenFlash = on
+        // DualCam lights both active sides together: rear hardware LED + front screen flash.
+        let frontActive = slotFront.contains(true)
+        let rearFlashSlot = slotFront.indices.first {
+            !slotFront[$0] && slotInfos.indices.contains($0) && slotInfos[$0].hasTorch
         }
+        if frontActive { screenFlash = on }
+        if let rearFlashSlot { setTorch(slot: rearFlashSlot, on: on) }
     }
 
     func takePhoto() {
         guard !isCapturingPhoto else { return }
         CaptureCuePlayer.shared.play(.shutter)
-        let useFlash = flashEnabled
+        let useFlash = flashEnabled && !fillLightActive
         let captureConfig = cfg
         // Native still capture is used whenever Live Photo is off. Live Photos stay on the
         // existing still/movie pair path so their content identifiers and motion frames remain paired.
@@ -1680,7 +1773,7 @@ final class CameraManager: NSObject, ObservableObject {
         let primarySlot = captureConfig.swapped ? 1 : 0
         // 后置高清静态照由 AVCapturePhotoOutput 直接触发硬件闪光灯，不提前点亮手电筒，
         // 避免固定等待 450 ms；前置无闪光灯时仍保留屏幕补光和曝光等待。
-        let useScreenFlash = useFlash && (!useHighResolutionCapture || !slotInfos[primarySlot].hasTorch)
+        let useScreenFlash = useFlash && !useHighResolutionCapture
         // 快门黑场 + 「处理中」遮罩，盖住切换单摄会话时预览的短暂停顿
         shutterPulse &+= 1
         if useHighResolutionCapture {
@@ -1701,9 +1794,12 @@ final class CameraManager: NSObject, ObservableObject {
                     // independently exportable original in the in-app composite archive.
                     let slots = [primarySlot, 1 - primarySlot]
 
+                    let rearFlashSlot = useFlash
+                        ? self.slotFront.indices.first(where: { !self.slotFront[$0] && self.slotInfos[$0].hasTorch })
+                        : nil
                     self.captureHighResolutionPhotos(
                         slots: slots,
-                        flashSlot: useFlash ? primarySlot : nil
+                        flashSlot: rearFlashSlot
                     ) { highResolutionPhotos in
                         // Do image composition and JPEG encoding off the main thread. A composite
                         // uses the native still from the displayed main camera and the other camera's
@@ -1736,7 +1832,8 @@ final class CameraManager: NSObject, ObservableObject {
                                     mainPhotoData: mainData,
                                     secondaryFrame: fallbackFrames[1 - primarySlot],
                                     config: captureConfig,
-                                    mainSlot: primarySlot
+                                    mainSlot: primarySlot,
+                                    secondaryPhotoData: highResolutionPhotos[1 - primarySlot]
                                 ) {
                                     datas.append(composite)
                                     compositeDatas.append(composite)
@@ -1812,11 +1909,14 @@ final class CameraManager: NSObject, ObservableObject {
         captureStatus = "准备连拍…"
         HapticFeedback.play(.shutter)
         CaptureCuePlayer.shared.play(.shutter)
-        if flashEnabled { flash(on: true) }
+        let useFlash = flashEnabled && !fillLightActive
+        if useFlash { flash(on: true) }
 
         captureHighResolutionPhotos(
             slots: Array(repeating: primarySlot, count: burstLimit),
-            flashSlot: flashEnabled ? primarySlot : nil,
+            flashSlot: useFlash
+                ? slotFront.indices.first(where: { !slotFront[$0] && slotInfos[$0].hasTorch })
+                : nil,
             burstCompletion: { [weak self] primaryPhotos in
                 guard let self else { return }
                 self.compositeRenderQueue.async {
@@ -1868,7 +1968,7 @@ final class CameraManager: NSObject, ObservableObject {
                     }
 
                     DispatchQueue.main.async {
-                        self.flash(on: false)
+                        if useFlash { self.flash(on: false) }
                         self.isBurstCapturing = false
                         self.isCapturingPhoto = false
                         self.burstCaptureCount = capturedPhotos.count
@@ -1917,7 +2017,8 @@ final class CameraManager: NSObject, ObservableObject {
         mainPhotoData: Data?,
         secondaryFrame: CVPixelBuffer?,
         config: Config,
-        mainSlot: Int
+        mainSlot: Int,
+        secondaryPhotoData: Data? = nil
     ) -> Data? {
         guard let mainPhotoData,
               var main = CIImage(data: mainPhotoData, options: [.applyOrientationProperty: true]) else {
@@ -1933,10 +2034,20 @@ final class CameraManager: NSObject, ObservableObject {
         }
 
         var sub: CIImage? = nil
-        if let buffer = secondaryFrame {
-            // Use the live frame directly instead of a JPEG encode/decode round trip.
+        let subSlot = 1 - mainSlot
+        if let secondaryPhotoData,
+           var secondary = CIImage(data: secondaryPhotoData, options: [.applyOrientationProperty: true]) {
+            // Prefer the second sensor's native still image. Using its preview video frame here
+            // made the PiP/split region visibly softer even though a full-resolution still had
+            // already been captured for that camera.
+            secondary = orient(secondary)
+            if front.indices.contains(subSlot), front[subSlot] && config.mirrorFront {
+                secondary = secondary.oriented(.upMirrored)
+            }
+            sub = secondary
+        } else if let buffer = secondaryFrame {
+            // Fall back to the latest video frame only if native still capture failed.
             var secondary = orient(CIImage(cvPixelBuffer: buffer))
-            let subSlot = 1 - mainSlot
             if front.indices.contains(subSlot), front[subSlot] && config.mirrorFront {
                 secondary = secondary.oriented(.upMirrored)
             }
@@ -1984,9 +2095,12 @@ final class CameraManager: NSObject, ObservableObject {
             self.highResolutionBatchToken &+= 1
             self.highResolutionBatchFlashSlot = flashSlot
 
-            // The continuous LED is preview fill, not the exposure flash. Release it before
-            // the native photo pipeline fires so the hardware flash has clean priority.
-            self.suspendNightAssistTorchForStillCapture()
+            // Flash and continuous fill are mutually exclusive. Only release the preview
+            // torch when this capture will actually fire a flash; when fill is selected, keep
+            // the rear LED running throughout the still capture instead of creating a dark gap.
+            if flashSlot != nil {
+                self.suspendNightAssistTorchForStillCapture()
+            }
 
             // Drain coalesced device writes and release the MultiCam inputs before opening the
             // single-camera session. The previous video frames were already snapshotted for fallback.
@@ -2091,6 +2205,12 @@ final class CameraManager: NSObject, ObservableObject {
            output.supportedFlashModes.contains(.on) {
             settings.flashMode = .on
         }
+        let useFrontScreenFlash = highResolutionBatchFlashSlot != nil
+            && device.position == .front
+            && !fillLightActive
+        if useFrontScreenFlash {
+            DispatchQueue.main.async { self.screenFlash = true }
+        }
 
         let uniqueID = settings.uniqueID
         let token = highResolutionBatchToken
@@ -2099,6 +2219,9 @@ final class CameraManager: NSObject, ObservableObject {
             guard let self = self else { return }
             self.sessionQueue.async {
                 self.pendingPhotoDelegates.removeValue(forKey: finishedID)
+                if useFrontScreenFlash {
+                    DispatchQueue.main.async { self.screenFlash = false }
+                }
                 // A late callback for a step the watchdog already skipped must not advance twice.
                 guard self.highResolutionBatchActive,
                       self.highResolutionBatchToken == token,
@@ -2125,7 +2248,13 @@ final class CameraManager: NSObject, ObservableObject {
             }
         }
         pendingPhotoDelegates[uniqueID] = delegate
-        output.capturePhoto(with: settings, delegate: delegate)
+        if useFrontScreenFlash {
+            sessionQueue.asyncAfter(deadline: .now() + 0.12) {
+                output.capturePhoto(with: settings, delegate: delegate)
+            }
+        } else {
+            output.capturePhoto(with: settings, delegate: delegate)
+        }
 
         // Watchdog: without it a still that never completes leaves the UI on the "processing"
         // overlay and the MultiCam preview permanently stopped.
@@ -2135,6 +2264,9 @@ final class CameraManager: NSObject, ObservableObject {
                   self.highResolutionBatchToken == token,
                   self.highResolutionBatchIndex == stepIndex else { return }
             NSLog("[DualCam] High-resolution still for slot %ld timed out; skipping", Int(slot))
+            if useFrontScreenFlash {
+                DispatchQueue.main.async { self.screenFlash = false }
+            }
             self.pendingPhotoDelegates.removeValue(forKey: uniqueID)
             self.highResolutionBatchIndex += 1
             self.advanceHighResolutionCaptureBatch()
@@ -2497,7 +2629,9 @@ final class CameraManager: NSObject, ObservableObject {
             return nil
         }
         let props: [CFString: Any] = [
-            kCGImageDestinationLossyCompressionQuality: 0.97,
+            // Live Photo's still frame is the visual anchor for the motion clip; retain
+            // more fine detail when embedding the pairing identifier in its JPEG.
+            kCGImageDestinationLossyCompressionQuality: 0.99,
             kCGImagePropertyMakerAppleDictionary: ["17": id]
         ]
         CGImageDestinationAddImage(dest, cg, props as CFDictionary)
@@ -2808,7 +2942,6 @@ final class CameraManager: NSObject, ObservableObject {
     func startRecording() {
         guard !isRecording else { return }
         let useFlash = flashEnabled
-        let slot = mainSlot
 
         // Play the start cue before creating writers. Leave a short lead-in so the cue
         // finishes before the first audio/video samples can enter the movie.
@@ -2867,6 +3000,7 @@ final class CameraManager: NSObject, ObservableObject {
                     return
                 }
                 self.recLock.lock()
+                self.recordingCanvasSize = canvas
                 self.recorder = comp
                 self.rawRecorders = raws
                 self.recLock.unlock()
@@ -2878,7 +3012,7 @@ final class CameraManager: NSObject, ObservableObject {
                     self.recTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
                         self?.recordSeconds += 1
                     }
-                    if useFlash, self.slotInfos[slot].hasTorch { self.setTorch(slot: slot, on: true) }
+                    if useFlash { self.setRecordingTorch(enabled: true) }
                 }
             } catch {
                 self.showToast("无法开始录像：\(error.localizedDescription)")
@@ -2892,14 +3026,16 @@ final class CameraManager: NSObject, ObservableObject {
         isRecording = false
         recTimer?.invalidate()
         recTimer = nil
-        let slot = mainSlot
-        if slotInfos[slot].hasTorch { setTorch(slot: slot, on: false) }
+        // Turn off the exact physical LED used by this recording, not whichever
+        // camera happens to be selected after the last in-recording swap.
+        setRecordingTorch(enabled: false)
         videoQueue.async {
             self.drainCompositeRenderQueue()
             self.recLock.lock()
             let rec = self.recorder
             let raws = self.rawRecorders
             self.recorder = nil
+            self.recordingCanvasSize = nil
             self.rawRecorders = [nil, nil]
             self.recLock.unlock()
 
