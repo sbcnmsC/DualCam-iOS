@@ -2629,7 +2629,9 @@ final class CameraManager: NSObject, ObservableObject {
             return nil
         }
         let props: [CFString: Any] = [
-            kCGImageDestinationLossyCompressionQuality: 0.97,
+            // Live Photo's still frame is the visual anchor for the motion clip; retain
+            // more fine detail when embedding the pairing identifier in its JPEG.
+            kCGImageDestinationLossyCompressionQuality: 0.99,
             kCGImagePropertyMakerAppleDictionary: ["17": id]
         ]
         CGImageDestinationAddImage(dest, cg, props as CFDictionary)
