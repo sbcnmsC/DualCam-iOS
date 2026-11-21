@@ -1832,7 +1832,8 @@ final class CameraManager: NSObject, ObservableObject {
                                     mainPhotoData: mainData,
                                     secondaryFrame: fallbackFrames[1 - primarySlot],
                                     config: captureConfig,
-                                    mainSlot: primarySlot
+                                    mainSlot: primarySlot,
+                                    secondaryPhotoData: highResolutionPhotos[1 - primarySlot]
                                 ) {
                                     datas.append(composite)
                                     compositeDatas.append(composite)
@@ -2016,7 +2017,8 @@ final class CameraManager: NSObject, ObservableObject {
         mainPhotoData: Data?,
         secondaryFrame: CVPixelBuffer?,
         config: Config,
-        mainSlot: Int
+        mainSlot: Int,
+        secondaryPhotoData: Data? = nil
     ) -> Data? {
         guard let mainPhotoData,
               var main = CIImage(data: mainPhotoData, options: [.applyOrientationProperty: true]) else {
@@ -2032,10 +2034,20 @@ final class CameraManager: NSObject, ObservableObject {
         }
 
         var sub: CIImage? = nil
-        if let buffer = secondaryFrame {
-            // Use the live frame directly instead of a JPEG encode/decode round trip.
+        let subSlot = 1 - mainSlot
+        if let secondaryPhotoData,
+           var secondary = CIImage(data: secondaryPhotoData, options: [.applyOrientationProperty: true]) {
+            // Prefer the second sensor's native still image. Using its preview video frame here
+            // made the PiP/split region visibly softer even though a full-resolution still had
+            // already been captured for that camera.
+            secondary = orient(secondary)
+            if front.indices.contains(subSlot), front[subSlot] && config.mirrorFront {
+                secondary = secondary.oriented(.upMirrored)
+            }
+            sub = secondary
+        } else if let buffer = secondaryFrame {
+            // Fall back to the latest video frame only if native still capture failed.
             var secondary = orient(CIImage(cvPixelBuffer: buffer))
-            let subSlot = 1 - mainSlot
             if front.indices.contains(subSlot), front[subSlot] && config.mirrorFront {
                 secondary = secondary.oriented(.upMirrored)
             }
