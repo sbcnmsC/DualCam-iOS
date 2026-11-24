@@ -376,22 +376,19 @@ private final class GaussianSplatMetalRenderer: NSObject, MTKViewDelegate {
         )
 
         do {
-            let didRender = try splatRenderer.render(
+            try splatRenderer.render(
                 viewports: [descriptor],
                 colorTexture: view.multisampleColorTexture ?? drawable.texture,
                 colorStoreAction: view.multisampleColorTexture == nil ? .store : .multisampleResolve,
                 depthTexture: view.depthStencilTexture,
                 rasterizationRateMap: nil,
                 // This viewer renders one non-array MTKView drawable. MetalSplatter
-                // requires a target array length of 1 for a single-view render.
+                // expects one render-target array slice for a single-view render.
                 renderTargetArrayLength: 1,
                 to: commandBuffer
             )
-            // render() returns false while sorting is unavailable or there are no
-            // drawable splats. Do not present an incomplete/cleared frame.
-            if didRender {
-                commandBuffer.present(drawable)
-            }
+            // MetalSplatter.render returns Void; present after a successful throw-free render.
+            commandBuffer.present(drawable)
         } catch {
             onStatus("Metal 渲染失败：\(error.localizedDescription)", splatRenderer.splatCount)
         }
