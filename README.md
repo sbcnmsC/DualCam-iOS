@@ -1,6 +1,6 @@
 # DualCam 双摄相机
 
-iPhone 双摄原生相机（Swift / SwiftUI，基于 `AVCaptureMultiCamSession`，iOS 17+）。两个摄像头同时取景，实时合成为画中画或上下分屏，界面参照系统相机。
+iPhone 单摄 / 双摄原生相机（Swift / SwiftUI，基于 `AVCaptureMultiCamSession`，iOS 17+）。支持单摄、画中画和上下 / 左右分屏，双摄模式下两路同时取景并实时合成。
 
 > 状态：代码通过 GitHub Actions 云端编译，**尚未在真机上完整测试**。多摄支持因机型而异（需要 iPhone XS / XR 及以上），部分镜头组合、60 帧、最高分辨率在不同机型上可能自动退回较低规格。
 
@@ -10,7 +10,7 @@ iPhone 双摄原生相机（Swift / SwiftUI，基于 `AVCaptureMultiCamSession`�
 
 - 顶部：闪光灯 / 实况 / 夜景（弱光增亮），选中为黄色
 - 预览：3:4 取景，三分参考线；底部焦段条 `.5  1×  2  5`；左上角小胶囊点一下循环切换保存方式
-- 底部：缩略图（点开「照片」）· 视频 / 照片切换 · 换主副画面；快门左侧是布局（画中画 ↔ 上下分屏），右侧是更多设置
+- 底部：缩略图（点开「照片」）· 视频 / 照片切换 · 换主副画面；快门左侧布局按钮循环切换（画中画 → 分屏 → 单摄），右侧是更多设置
 
 **焦段 0.5 / 1 / 2 / 5**
 
@@ -27,7 +27,7 @@ iPhone 双摄原生相机（Swift / SwiftUI，基于 `AVCaptureMultiCamSession`�
 
 **原图直出 / 合成画面 / 两者都存**
 
-- 原图直出：关闭实况照片后，分别为两路镜头建立临时单摄 `AVCaptureSession`，选择传感器支持的最大静态照片格式，通过 `AVCapturePhotoOutput` 保存原片；**不合成、不加滤镜、不镜像、不裁切**。每次拍摄会短暂停止双摄预览，再自动恢复。
+- 原图直出：关闭实况照片后，通过临时单摄 `AVCaptureSession` 选择传感器支持的最大静态照片格式，并由 `AVCapturePhotoOutput` 保存原片；双摄布局分别拍摄两路，单摄布局只拍摄当前选中的镜头。原片**不合成、不加滤镜、不镜像、不裁切**。每次拍摄会短暂停止取景，再自动恢复。
 - 合成画面（默认）：只存预览里看到的样子（画中画 / 分屏 + 滤镜）
 - 两者都存
 
@@ -45,13 +45,20 @@ iPhone 双摄原生相机（Swift / SwiftUI，基于 `AVCaptureMultiCamSession`�
 
 单镜头的动态片段会按预览同样的方式处理（前置镜像、滤镜），并裁成静态图的画幅，避免系统相册播放时变形。「两者都存」时，两张原片的实况仍各自取自自己的镜头，只有合成图那张按这个选项走；「原图直出」没有合成图，这个选项不生效。
 
+**3D 实况（LiDAR + Gaussian Splat 初始采集）**
+
+- 顶部自定义控制栏增加「3D 实况」。打开后暂停 DualCam 的普通相机会话，交由 RealityKit / ARKit 管理空间相机，避免两个会话同时争用摄像头。
+- 仅当设备支持 ARKit Scene Depth 时启用（需要 LiDAR）；应用最多采集 56 组彩色帧、Float32 深度图、相机内参和相机到世界坐标变换。
+- 导出二进制 Gaussian PLY，包含 3DGS 常见的 XYZ、球谐 DC 颜色、opacity、log-scale 和 quaternion 字段；同时在应用 Documents 的 `DualCam3DLive` 目录保留逐帧 JPG、深度原始数据与 JSON 位姿记录。
+- 当前导出的是**由 LiDAR 深度初始化的 Gaussian 点元**，不是训练完成的高斯泼溅模型；尚未执行优化、稠密化、曝光 / 颜色一致性校准或新视角渲染。PLY 可导入兼容 3DGS 的查看器或后续训练管线。
+
 **视频**：HEVC，带声音；可同时录合成视频和每颗镜头的原始视频；录像中可随时切布局、拖小窗、换滤镜。
 
 **其他**：小窗拖动 / 缩放 / 形状 / 边框，14 个实时滤镜（新增海边、人文风格），主副镜头分别设置曝光 / ISO / 快门 / 白平衡 / 对焦，点按对焦，顶部定时器图标（关 / 3 秒 / 10 秒），画幅 9:16 / 3:4 / 1:1 / 16:9 / 21:9 / 全屏自由，分辨率 720p / 1080p / 最高，30 / 60 帧，视频防抖。
 
 ## 云端编译与签名
 
-工程由 [XcodeGen](https://github.com/yonaskolb/XcodeGen) 根据 `project.yml` 生成，不用 Mac。每次推送到 `main`（或在 Actions 页点 **Run workflow**），GitHub 的 macOS 服务器会编译，把 IPA 发布到 **Releases**。
+工程由 [XcodeGen](https://github.com/yonaskolb/XcodeGen) 根据 `project.yml` 生成，不用 Mac。推送到 workflow 已配置的功能分支（包括 `feature/single-dual-gaussian-3dlive-2026-11-24`），或在 Actions 页点 **Run workflow**，GitHub 的 macOS 服务器会编译并上传 IPA 构建产物；仅 `main` 分支会发布 Release。
 
 ### 方式 A：未签名 IPA + Sideloadly（免费 Apple ID，默认）
 
@@ -95,6 +102,7 @@ open DualCam.xcodeproj
 
 - `DualCam/Camera/`：相机会话（`CameraManager`）、画面合成（`Compositor`）、视频 / 实况写入（`VideoRecorder`）、滤镜、数据模型
 - `DualCam/UI/`：取景界面、工具面板、预览层
+- `DualCam/Spatial/`：ARKit LiDAR 深度采集、相机位姿记录与 Gaussian PLY 导出
 - `project.yml`：XcodeGen 工程描述
 - `scripts/DualCam-AppIcon.svg`：应用图标矢量母版；构建前生成至 `DualCam/Assets.xcassets/AppIcon.appiconset/AppIcon.png`
 - `.github/workflows/build-ipa.yml`：云端编译、签名、发布
