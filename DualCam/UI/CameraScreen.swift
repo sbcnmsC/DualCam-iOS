@@ -2146,17 +2146,19 @@ struct BottomBar: View {
         })
     }
 
+    private var splitButtonIcon: String {
+        switch cam.cfg.layout {
+        case .pip: return "rectangle.on.rectangle"
+        case .split:
+            return Compositor.splitIsSideBySide(cfg: cam.cfg)
+                ? "rectangle.split.2x1" : "rectangle.split.1x2"
+        case .single: return "camera"
+        }
+    }
+
     private var splitButton: some View {
         Button { cam.toggleLayout() } label: {
-            let icon: String
-            switch cam.cfg.layout {
-            case .pip: icon = "rectangle.on.rectangle"
-            case .split:
-                icon = Compositor.splitIsSideBySide(cfg: cam.cfg)
-                    ? "rectangle.split.2x1" : "rectangle.split.1x2"
-            case .single: icon = "camera"
-            }
-            Image(systemName: icon)
+            Image(systemName: splitButtonIcon)
                 .rotationEffect(.degrees(iconRotationDegrees))
                 .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
                 .font(.system(size: 17, weight: .semibold))
