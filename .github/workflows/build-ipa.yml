@@ -14,7 +14,7 @@ permissions:
 jobs:
   build:
     runs-on: macos-15
-    timeout-minutes: 40
+    timeout-minutes: 70
     env:
       APP_NAME: DualCam
       DEFAULT_BUNDLE_ID: com.dualcam.app
@@ -23,7 +23,18 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install build tools
-        run: brew install xcodegen librsvg
+        run: brew install cmake xcodegen librsvg
+
+      - name: Build pinned on-device 3DGS engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p Vendor
+          git clone https://github.com/frs0n/msplat-ios.git Vendor/msplat-ios
+          git -C Vendor/msplat-ios checkout e8611098583059b82e0b7d35259fb4e9c42df248
+          BUILD_JOBS=4 IOS_DEPLOYMENT_TARGET=18.0 bash Vendor/msplat-ios/scripts/build-xcframework.sh
+          test -d Vendor/msplat-ios/MsplatCore.xcframework
+          test -f Vendor/msplat-ios/swift/Sources/Msplat/Resources/default-ios.metallib
 
       - name: Render App Icon
         run: ./scripts/generate-app-icon.sh
