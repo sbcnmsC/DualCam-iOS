@@ -286,7 +286,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
                 DispatchQueue.main.async {
                     self.frameCount = currentFrames
                     self.splatCount = currentSplats
-                    self.status = "采集中 · \\(currentFrames)/\\(self.maximumFrames) 帧"
+                    self.status = "采集中 · \(currentFrames)/\(self.maximumFrames) 帧"
                 }
             }
         } catch {
