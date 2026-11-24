@@ -29,6 +29,7 @@ final class GaussianTrainingManager: ObservableObject {
 
     /// 1K is useful for a quick pipeline check; 2K is the balanced default.
     @Published var iterationTarget = 2_000
+    var onTrainingFinished: (() -> Void)?
 
     private let cancelFlag = CancellationFlag()
     private var worker: Thread?
@@ -124,6 +125,10 @@ final class GaussianTrainingManager: ObservableObject {
                     guard let self else { return }
                     self.phase = .failed(error.localizedDescription)
                     self.status = error.localizedDescription
+                    self.worker = nil
+                    let completion = self.onTrainingFinished
+                    self.onTrainingFinished = nil
+                    completion?()
                 }
             }
         }
@@ -145,16 +150,22 @@ final class GaussianTrainingManager: ObservableObject {
         let trainer = GaussianTrainer(dataset: dataset, config: config)
         guard trainer.splatCount > 0 else {
             DispatchQueue.main.async { [weak self] in
-                self?.phase = .failed(TrainingError.emptyInitialization.localizedDescription)
-                self?.status = TrainingError.emptyInitialization.localizedDescription
+                guard let self else { return }
+                self.phase = .failed(TrainingError.emptyInitialization.localizedDescription)
+                self.status = TrainingError.emptyInitialization.localizedDescription
+                self.worker = nil
+                let completion = self.onTrainingFinished
+                self.onTrainingFinished = nil
+                completion?()
             }
             return
         }
 
+        let initialSplatCount = trainer.splatCount
         DispatchQueue.main.async { [weak self] in
             self?.phase = .training
             self?.status = "正在执行多视角 Gaussian 优化…"
-            self?.splatCount = trainer.splatCount
+            self?.splatCount = initialSplatCount
         }
 
         let previewInterval = max(iterations / 32, 40)
@@ -207,11 +218,13 @@ final class GaussianTrainingManager: ObservableObject {
         let hasPLY = FileManager.default.fileExists(atPath: plyURL.path)
         let hasSPZ = FileManager.default.fileExists(atPath: spzURL.path)
         let wasCancelled = cancelFlag.isCancelled
+        let finalIteration = trainer.iteration
+        let finalSplatCount = trainer.splatCount
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            self.iteration = trainer.iteration
-            self.splatCount = trainer.splatCount
+            self.iteration = finalIteration
+            self.splatCount = finalSplatCount
             self.exportedPLY = hasPLY ? plyURL : nil
             self.exportedSPZ = hasSPZ ? spzURL : nil
             if hasPLY {
@@ -222,6 +235,9 @@ final class GaussianTrainingManager: ObservableObject {
                 self.status = "训练结果导出失败"
             }
             self.worker = nil
+            let completion = self.onTrainingFinished
+            self.onTrainingFinished = nil
+            completion?()
         }
     }
 
