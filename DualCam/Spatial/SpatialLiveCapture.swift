@@ -991,6 +991,14 @@ struct SpatialLiveCaptureView: View {
                         .foregroundStyle(.white)
                         .multilineTextAlignment(.center)
 
+                    Label(
+                        capture.trackingStatus,
+                        systemImage: capture.isSessionReady ? "checkmark.circle.fill" : "viewfinder"
+                    )
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(capture.isSessionReady ? Color.green : Color.orange)
+                    .multilineTextAlignment(.center)
+
                     HStack(spacing: 18) {
                         Label("\(capture.frameCount) 视角", systemImage: "camera")
                         Label("\(capture.splatCount.formatted()) 个初始点", systemImage: "point.3.connected.trianglepath.dotted")
@@ -1034,8 +1042,12 @@ struct SpatialLiveCaptureView: View {
                         .background(capture.isCapturing ? Color.orange : Color.white, in: Capsule())
                     }
                     .buttonStyle(.plain)
-                    .disabled(training.isWorking || (!capture.isSupported && !capture.isCapturing))
-                    .opacity(capture.isSupported || capture.isCapturing ? 1 : 0.45)
+                    .disabled(
+                        training.isWorking
+                            || (!capture.isSupported && !capture.isCapturing)
+                            || (!capture.isCapturing && !capture.isSessionReady)
+                    )
+                    .opacity((capture.isSupported && capture.isSessionReady) || capture.isCapturing ? 1 : 0.45)
 
                     if let initialPLY = capture.plyURL {
                         VStack(spacing: 10) {
