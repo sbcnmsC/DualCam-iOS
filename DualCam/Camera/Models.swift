@@ -4,6 +4,7 @@ import SwiftUI
 enum LayoutMode: String, CaseIterable, Identifiable, Codable {
     case pip = "画中画"
     case split = "分屏"
+    case single = "单摄"
     var id: String { rawValue }
 }
 
