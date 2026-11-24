@@ -835,6 +835,7 @@ struct SpatialLiveCaptureView: View {
     @StateObject private var training = GaussianTrainingManager()
     @State private var showGaussianViewer = false
     @State private var selectedViewerURL: URL?
+    @State private var isClosingCapture = false
 
     var body: some View {
         ZStack {
@@ -861,6 +862,7 @@ struct SpatialLiveCaptureView: View {
                             .background(.ultraThinMaterial, in: Circle())
                     }
                     .accessibilityLabel("关闭 3D 实况")
+                    .disabled(training.isWorking)
 
                     Spacer()
 
@@ -1033,6 +1035,7 @@ struct SpatialLiveCaptureView: View {
         }
         .background(Color.black)
         .statusBarHidden(true)
+        .interactiveDismissDisabled(training.isWorking)
         .sheet(
             isPresented: $showGaussianViewer,
             onDismiss: { capture.resumeSpatialSessionAfterViewer() }
@@ -1044,7 +1047,7 @@ struct SpatialLiveCaptureView: View {
         .onChange(of: training.phase) { oldPhase, newPhase in
             let wasWorking = oldPhase == .loading || oldPhase == .training
             let isWorking = newPhase == .loading || newPhase == .training
-            if wasWorking && !isWorking {
+            if wasWorking && !isWorking && !isClosingCapture {
                 capture.resumeSpatialSessionAfterViewer()
             }
         }
@@ -1054,9 +1057,18 @@ struct SpatialLiveCaptureView: View {
             }
         }
         .onDisappear {
-            if training.isWorking { training.cancelTraining() }
-            capture.stopSession {
-                camera.setLocalCameraCaptureSuspended(false)
+            if training.isWorking {
+                isClosingCapture = true
+                training.onTrainingFinished = {
+                    capture.stopSession {
+                        camera.setLocalCameraCaptureSuspended(false)
+                    }
+                }
+                training.cancelTraining()
+            } else {
+                capture.stopSession {
+                    camera.setLocalCameraCaptureSuspended(false)
+                }
             }
         }
     }
