@@ -460,7 +460,9 @@ struct CameraScreen: View {
             }
         }
         .background(Color.black.ignoresSafeArea())
-        .fullScreenCover(isPresented: $showSpatialResult) {
+        .fullScreenCover(isPresented: $showSpatialResult, onDismiss: {
+            cam.setLocalCameraCaptureSuspended(false)
+        }) {
             if let url = selectedSpatialResultURL {
                 SpatialCaptureResultView(previewURL: url)
             }
@@ -660,10 +662,8 @@ struct CameraScreen: View {
         shouldAutoStartSpatialCapture = false
         isSpatialCapturePresented = false
         spatialCapture.stopSession {
-            self.cam.setLocalCameraCaptureSuspended(false) {
-                self.selectedSpatialResultURL = url
-                self.showSpatialResult = true
-            }
+            self.selectedSpatialResultURL = url
+            self.showSpatialResult = true
         }
     }
 
