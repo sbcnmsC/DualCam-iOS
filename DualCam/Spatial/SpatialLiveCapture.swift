@@ -986,12 +986,24 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
     }
 
     private func sceneBounds() -> (minimum: SIMD3<Float>, maximum: SIMD3<Float>) {
-        guard let first = gaussianSeeds.first else { return (.zero, .zero) }
-        var minimum = SIMD3<Float>(first.x, first.y, first.z)
-        var maximum = minimum
-        for point in gaussianSeeds.dropFirst() {
-            minimum = simd_min(minimum, SIMD3<Float>(point.x, point.y, point.z))
-            maximum = simd_max(maximum, SIMD3<Float>(point.x, point.y, point.z))
+        let firstPosition: SIMD3<Float>?
+        if let first = gaussianSeeds.first {
+            firstPosition = SIMD3<Float>(first.x, first.y, first.z)
+        } else {
+            firstPosition = meshPointSeeds.first?.position
+        }
+        guard let firstPosition else { return (.zero, .zero) }
+
+        var minimum = firstPosition
+        var maximum = firstPosition
+        for point in gaussianSeeds {
+            let position = SIMD3<Float>(point.x, point.y, point.z)
+            minimum = simd_min(minimum, position)
+            maximum = simd_max(maximum, position)
+        }
+        for point in meshPointSeeds {
+            minimum = simd_min(minimum, point.position)
+            maximum = simd_max(maximum, point.position)
         }
         return (minimum, maximum)
     }
