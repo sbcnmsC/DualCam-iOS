@@ -244,7 +244,7 @@ struct SpatialCaptureResultView: View {
                     .disabled(training.isWorking || training.phase == .loading)
                 }
                 Spacer(minLength: 0)
-                if training.isWorking || training.phase == .failed("待处理") {
+                if training.isWorking {
                     trainingProgressPanel
                 } else if case .failed(let message) = training.phase {
                     Text(message)
