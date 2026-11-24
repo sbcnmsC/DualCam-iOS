@@ -310,14 +310,17 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
 
         for anchor in frame.anchors.compactMap({ $0 as? ARMeshAnchor }) {
             let geometry = anchor.geometry
-            guard geometry.classification != nil else { continue }
-            let faceCount = geometry.faces.count
+            guard let classifications = geometry.classification else { continue }
+            let faceCount = min(geometry.faces.count, classifications.count)
             guard faceCount > 0 else { continue }
             let sampleStep = max(1, faceCount / 1_500)
 
             for faceIndex in Swift.stride(from: 0, to: faceCount, by: sampleStep) {
                 sampledFaces += 1
-                let classification = geometry.classificationOf(faceWithIndex: faceIndex)
+                let classificationAddress = classifications.buffer.contents()
+                    .advanced(by: classifications.offset + faceIndex * classifications.stride)
+                let rawClassification = Int(classificationAddress.assumingMemoryBound(to: UInt8.self).pointee)
+                let classification = ARMeshClassification(rawValue: rawClassification) ?? .none
                 let label: String
                 switch classification {
                 case .floor: label = "地面"
