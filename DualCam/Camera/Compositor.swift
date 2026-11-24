@@ -127,6 +127,8 @@ enum Compositor {
         let full = CGRect(x: 0, y: 0, width: W, height: H)
 
         switch cfg.layout {
+        case .single:
+            return fill(main, into: full).cropped(to: full)
         case .pip:
             let base = fill(main, into: full)
             guard let sub = sub else { return base.cropped(to: full) }
