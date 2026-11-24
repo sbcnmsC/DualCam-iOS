@@ -18,6 +18,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
     @Published private(set) var status = "正在准备空间相机…"
     @Published private(set) var frameCount = 0
     @Published private(set) var splatCount = 0
+    @Published private(set) var meshPointCount = 0
     @Published private(set) var plyURL: URL?
     @Published private(set) var surfaceSummary = "正在识别空间表面…"
     @Published private(set) var sampledMeshFaces = 0
@@ -39,6 +40,9 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
     private var frameRecords: [[String: Any]] = []
     private var gaussianSeeds: [GaussianSeed] = []
     private var voxelIndices: [VoxelKey: Int] = [:]
+    private var meshPointSeeds: [MeshPointSeed] = []
+    private var meshVoxelIndices: [VoxelKey: Int] = [:]
+    private var lastMeshFusionTimestamp: TimeInterval = 0
     private var lastSampleTimestamp: TimeInterval = 0
     private var lastSurfaceUpdateTimestamp: TimeInterval = 0
     private var lastKeyframeTransform: simd_float4x4?
@@ -50,6 +54,8 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
     private let minimumFrameInterval: TimeInterval = 0.22
     private let maximumFrames = 96
     private let maximumSplats = 180_000
+    private let maximumMeshPoints = 80_000
+    private let meshFusionInterval: TimeInterval = 0.75
     private let voxelSize: Float = 0.018
     private let minimumTranslationForKeyframe: Float = 0.035
     private let minimumRotationForKeyframe: Float = 0.087
@@ -59,6 +65,25 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
         let x: Int32
         let y: Int32
         let z: Int32
+    }
+
+    private struct MeshPointSeed {
+        var position: SIMD3<Float>
+        var red: Float
+        var green: Float
+        var blue: Float
+        var sampleCount: Int
+
+        mutating func fuse(position incomingPosition: SIMD3<Float>, red incomingRed: Float,
+                           green incomingGreen: Float, blue incomingBlue: Float) {
+            sampleCount += 1
+            let blend = 1 / Float(sampleCount)
+            let keep = 1 - blend
+            position = position * keep + incomingPosition * blend
+            red = red * keep + incomingRed * blend
+            green = green * keep + incomingGreen * blend
+            blue = blue * keep + incomingBlue * blend
+        }
     }
 
     private struct GaussianSeed {
@@ -219,6 +244,9 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
                 self.frameRecords.removeAll(keepingCapacity: true)
                 self.gaussianSeeds.removeAll(keepingCapacity: true)
                 self.voxelIndices.removeAll(keepingCapacity: true)
+                self.meshPointSeeds.removeAll(keepingCapacity: true)
+                self.meshVoxelIndices.removeAll(keepingCapacity: true)
+                self.lastMeshFusionTimestamp = 0
                 self.lastSampleTimestamp = 0
                 self.lastSurfaceUpdateTimestamp = 0
                 self.lastKeyframeTransform = nil
@@ -230,6 +258,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
                 DispatchQueue.main.async {
                     self.frameCount = 0
                     self.splatCount = 0
+                    self.meshPointCount = 0
                     self.isCapturing = true
                     self.status = "正在采集彩色帧、深度与相机位姿…"
                 }
@@ -424,6 +453,96 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
         return translation >= minimumTranslationForKeyframe || rotation >= minimumRotationForKeyframe
     }
 
+    /// Fuse RGB-coloured ARKit scene-mesh vertices into the LiDAR point-cloud prior.
+    /// A mesh vertex is accepted only if it projects into the current RGB frame and its
+    /// metric range agrees with the current LiDAR depth map, rejecting hidden/ghost surfaces.
+    private func fuseVisibleARMeshPoints(
+        frame: ARFrame,
+        intrinsics: simd_float3x3,
+        depthBase: UnsafePointer<Float32>,
+        depthRows: Int,
+        depthWidth: Int,
+        depthHeight: Int,
+        colorBase: UnsafePointer<UInt8>,
+        colorBytesPerRow: Int,
+        imageWidth: Int,
+        imageHeight: Int
+    ) {
+        guard frame.timestamp - lastMeshFusionTimestamp >= meshFusionInterval,
+              meshPointSeeds.count < maximumMeshPoints else { return }
+        lastMeshFusionTimestamp = frame.timestamp
+
+        let worldToCamera = simd_inverse(frame.camera.transform)
+        let fx = intrinsics.columns.0.x
+        let fy = intrinsics.columns.1.y
+        let cx = intrinsics.columns.2.x
+        let cy = intrinsics.columns.2.y
+
+        for anchor in frame.anchors.compactMap({ $0 as? ARMeshAnchor }) {
+            if meshPointSeeds.count >= maximumMeshPoints { break }
+            let vertices = anchor.geometry.vertices
+            guard vertices.format == .float3, vertices.count > 0 else { continue }
+
+            // Bound per-anchor work while retaining spatially distributed vertices.
+            let vertexStep = max(1, vertices.count / 700)
+            let vertexBytes = vertices.buffer.contents().advanced(by: vertices.offset)
+            for vertexIndex in Swift.stride(from: 0, to: vertices.count, by: vertexStep) {
+                if meshPointSeeds.count >= maximumMeshPoints { break }
+
+                let address = vertexBytes.advanced(by: vertexIndex * vertices.stride)
+                    .assumingMemoryBound(to: Float.self)
+                let localPoint = SIMD4<Float>(address[0], address[1], address[2], 1)
+                let worldPoint = anchor.transform * localPoint
+                let cameraPoint = worldToCamera * worldPoint
+                let distance = -cameraPoint.z
+                guard distance.isFinite, distance >= 0.18, distance <= 5.5 else { continue }
+
+                // ARKit camera coordinates use +Y up and -Z forward; image rows go down.
+                let pixelX = fx * (cameraPoint.x / distance) + cx
+                let pixelY = cy - fy * (cameraPoint.y / distance)
+                guard pixelX.isFinite, pixelY.isFinite,
+                      pixelX >= 0, pixelY >= 0,
+                      pixelX < Float(imageWidth), pixelY < Float(imageHeight) else { continue }
+
+                let x = Int(pixelX)
+                let y = Int(pixelY)
+                let depthX = min(depthWidth - 1, max(0, Int(Float(x) * Float(depthWidth) / Float(imageWidth))))
+                let depthY = min(depthHeight - 1, max(0, Int(Float(y) * Float(depthHeight) / Float(imageHeight))))
+                let measuredDepth = depthBase[depthY * depthRows + depthX]
+                let tolerance = max(0.045, distance * 0.04)
+                guard measuredDepth.isFinite, measuredDepth >= 0.18,
+                      abs(measuredDepth - distance) <= tolerance else { continue }
+
+                let colorOffset = y * colorBytesPerRow + x * 4
+                let blue = Float(colorBase[colorOffset]) / 255
+                let green = Float(colorBase[colorOffset + 1]) / 255
+                let red = Float(colorBase[colorOffset + 2]) / 255
+                let position = SIMD3<Float>(worldPoint.x, worldPoint.y, worldPoint.z)
+                let key = voxelKey(for: position)
+
+                if let existingIndex = meshVoxelIndices[key] {
+                    meshPointSeeds[existingIndex].fuse(
+                        position: position, red: red, green: green, blue: blue
+                    )
+                } else {
+                    meshVoxelIndices[key] = meshPointSeeds.count
+                    meshPointSeeds.append(MeshPointSeed(
+                        position: position,
+                        red: red,
+                        green: green,
+                        blue: blue,
+                        sampleCount: 1
+                    ))
+                }
+            }
+        }
+
+        let count = meshPointSeeds.count
+        DispatchQueue.main.async {
+            self.meshPointCount = count
+        }
+    }
+
     private func voxelKey(for point: SIMD3<Float>) -> VoxelKey {
         VoxelKey(
             x: Int32(floor(point.x / voxelSize)),
@@ -514,6 +633,21 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
         let colorBase = colorBaseAddress.assumingMemoryBound(to: UInt8.self)
 
         let intrinsics = frame.camera.intrinsics
+        // Fuse temporally accumulated ARKit scene-mesh vertices only after they project
+        // into this RGB frame and agree with the current LiDAR depth observation.
+        fuseVisibleARMeshPoints(
+            frame: frame,
+            intrinsics: intrinsics,
+            depthBase: depthBase,
+            depthRows: depthRows,
+            depthWidth: depthWidth,
+            depthHeight: depthHeight,
+            colorBase: colorBase,
+            colorBytesPerRow: colorBytesPerRow,
+            imageWidth: imageWidth,
+            imageHeight: imageHeight
+        )
+
         let scaleX = Float(depthWidth) / Float(imageWidth)
         let scaleY = Float(depthHeight) / Float(imageHeight)
         let fx = max(intrinsics.columns.0.x * scaleX, 1)
