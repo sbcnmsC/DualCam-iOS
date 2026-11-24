@@ -705,7 +705,9 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
         property uchar blue
         end_header
         """
-        var data = Data(header.utf8)
+        // Swift multiline strings omit the final newline. PLY requires a line break
+        // after end_header before the binary vertex payload begins.
+        var data = Data((header + "\n").utf8)
         data.reserveCapacity(data.count + gaussianSeeds.count * 15)
 
         for point in gaussianSeeds {
@@ -807,7 +809,9 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
         end_header
         """
 
-        var data = Data(header.utf8)
+        // Swift multiline strings omit the final newline. PLY requires a line break
+        // after end_header before the binary vertex payload begins.
+        var data = Data((header + "\n").utf8)
         data.reserveCapacity(data.count + gaussianSeeds.count * 14 * MemoryLayout<Float>.size)
         for point in gaussianSeeds {
             let values: [Float] = [
