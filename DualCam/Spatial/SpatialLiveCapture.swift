@@ -119,6 +119,16 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
         configureAndRun(session)
     }
 
+    /// Release camera and rendering work while the Metal Gaussian viewer is on top.
+    func pauseSpatialSessionForViewer() {
+        arSession?.pause()
+    }
+
+    func resumeSpatialSessionAfterViewer() {
+        guard startRequested, let session = arSession else { return }
+        configureAndRun(session)
+    }
+
     private func configureAndRun(_ session: ARSession) {
         guard ARWorldTrackingConfiguration.isSupported else {
             isSupported = false
@@ -751,6 +761,7 @@ struct SpatialLiveCaptureView: View {
 
                     if let plyURL = capture.plyURL {
                         Button {
+                            capture.pauseSpatialSessionForViewer()
                             showGaussianViewer = true
                         } label: {
                             Label("打开 3D 场景", systemImage: "cube.transparent")
@@ -785,7 +796,10 @@ struct SpatialLiveCaptureView: View {
         }
         .background(Color.black)
         .statusBarHidden(true)
-        .sheet(isPresented: $showGaussianViewer) {
+        .sheet(
+            isPresented: $showGaussianViewer,
+            onDismiss: { capture.resumeSpatialSessionAfterViewer() }
+        ) {
             if let url = capture.plyURL {
                 GaussianSplatViewerScreen(url: url)
             }
