@@ -202,18 +202,71 @@ final class SpatialSceneLibrary: ObservableObject {
 struct SpatialCaptureResultView: View {
     let previewURL: URL
 
-    @Environment(\.dismiss) private var dismiss
+    @StateObject private var training = GaussianTrainingManager()
+    @State private var selectedViewerURL: URL
     @State private var isSaving = false
     @State private var isSaved = false
     @State private var saveError: String?
 
+    init(previewURL: URL) {
+        self.previewURL = previewURL
+        _selectedViewerURL = State(initialValue: previewURL)
+    }
+
     var body: some View {
-        GaussianSplatViewerScreen(
-            url: previewURL,
-            onSave: saveToAlbum,
-            isSaved: isSaved,
-            isSaving: isSaving
-        )
+        ZStack {
+            GaussianSplatViewerScreen(
+                url: selectedViewerURL,
+                onSave: training.isWorking ? nil : saveToAlbum,
+                isSaved: isSaved,
+                isSaving: isSaving
+            )
+            .id(selectedViewerURL)
+
+            VStack(spacing: 10) {
+                HStack {
+                    Spacer()
+                    Menu {
+                        Button("快速优化 · 1K") { startTraining(iterations: 1_000) }
+                        Button("均衡优化 · 2K") { startTraining(iterations: 2_000) }
+                        Button("高质量优化 · 4K") { startTraining(iterations: 4_000) }
+                    } label: {
+                        Label(
+                            training.isWorking ? "正在优化" : "Gaussian 优化",
+                            systemImage: training.isWorking ? "cpu" : "sparkles"
+                        )
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 9)
+                        .background(.ultraThinMaterial, in: Capsule())
+                    }
+                    .disabled(training.isWorking || training.phase == .loading)
+                }
+                Spacer(minLength: 0)
+                if training.isWorking || training.phase == .failed("待处理") {
+                    trainingProgressPanel
+                } else if case .failed(let message) = training.phase {
+                    Text(message)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.orange)
+                        .padding(11)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+                } else if training.phase == .finished {
+                    Label("Gaussian 优化完成", systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.green)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 9)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 66)
+            .padding(.bottom, 164)
+        }
         .alert("保存 3D 场景", isPresented: Binding(
             get: { saveError != nil },
             set: { if !$0 { saveError = nil } }
@@ -222,12 +275,56 @@ struct SpatialCaptureResultView: View {
         } message: {
             Text(saveError ?? "")
         }
+        .onChange(of: training.previewPLY) { _, newURL in
+            guard let newURL else { return }
+            selectedViewerURL = newURL
+        }
+    }
+
+    private var trainingProgressPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(training.status)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                Spacer(minLength: 8)
+                Button("停止") {
+                    training.cancelTraining()
+                }
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.orange)
+            }
+            ProgressView(value: training.progress)
+                .tint(.cyan)
+            HStack {
+                Text("\(training.iteration) / \(training.totalIterations) 步")
+                Spacer()
+                Text("\(training.availableMemoryMB) MB 可用")
+            }
+            .font(.system(size: 10, weight: .medium, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(.white.opacity(0.68))
+        }
+        .padding(12)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private func startTraining(iterations: Int) {
+        guard !training.isWorking else { return }
+        isSaved = false
+        training.iterationTarget = iterations
+        training.startTraining(datasetURL: previewURL.deletingLastPathComponent())
     }
 
     private func saveToAlbum() {
-        guard !isSaving, !isSaved else { return }
+        guard !isSaving, !isSaved, !training.isWorking else { return }
         isSaving = true
-        SpatialSceneLibrary.shared.saveScene(previewPLY: previewURL) { result in
+        SpatialSceneLibrary.shared.saveScene(
+            previewPLY: selectedViewerURL,
+            standardPLY: training.exportedPLY,
+            spz: training.exportedSPZ
+        ) { result in
             isSaving = false
             switch result {
             case .success:
