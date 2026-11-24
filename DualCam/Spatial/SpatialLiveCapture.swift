@@ -12,7 +12,7 @@ import UIKit
 /// LiDAR-backed spatial capture. The exported PLY contains depth-initialized Gaussian
 /// primitives in ARKit world space; it is deliberately labelled as an initialisation
 /// rather than a trained/optimised 3DGS reconstruction.
-final class SpatialLiveCaptureManager: NSObject, ObservableObject, ARSessionDelegate {
+final class SpatialLiveCaptureManager: NSObject, ObservableObject {
     @Published private(set) var isSupported = false
     @Published private(set) var isCapturing = false
     @Published private(set) var status = "正在准备空间相机…"
@@ -29,6 +29,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject, ARSessionDele
     // all dataset writes are serialised on captureQueue.
     private weak var arSession: ARSession?
     private var startRequested = false
+    private var framePollingTimer: DispatchSourceTimer?
     private var isCapturingOnQueue = false
     private var sessionDirectory: URL?
     private var frameRecords: [[String: Any]] = []
@@ -61,8 +62,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject, ARSessionDele
     func attach(session: ARSession) {
         guard arSession !== session else { return }
         arSession = session
-        session.delegate = self
-        session.delegateQueue = captureQueue
+        // Keep the ARView-owned delegate intact; frames are sampled from currentFrame.
         if startRequested {
             configureAndRun(session)
         }
@@ -104,6 +104,22 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject, ARSessionDele
         errorMessage = nil
         status = "LiDAR 深度已就绪，缓慢环绕拍摄对象"
         session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
+        captureQueue.async { self.startFramePollingIfNeeded() }
+    }
+
+    private func startFramePollingIfNeeded() {
+        guard framePollingTimer == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: captureQueue)
+        timer.schedule(deadline: .now() + .milliseconds(120), repeating: .milliseconds(180), leeway: .milliseconds(20))
+        timer.setEventHandler { [weak self] in self?.consumeCurrentFrame() }
+        framePollingTimer = timer
+        timer.resume()
+    }
+
+    private func stopFramePolling() {
+        framePollingTimer?.setEventHandler {}
+        framePollingTimer?.cancel()
+        framePollingTimer = nil
     }
 
     func startCapture() {
@@ -159,6 +175,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject, ARSessionDele
         startRequested = false
         arSession?.pause()
         captureQueue.async {
+            self.stopFramePolling()
             if self.isCapturingOnQueue {
                 self.isCapturingOnQueue = false
                 self.finishDataset()
@@ -169,9 +186,10 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject, ARSessionDele
         }
     }
 
-    func session(_ session: ARSession, didUpdate frame: ARFrame) {
-        guard isCapturingOnQueue else { return }
-        guard frame.timestamp - lastSampleTimestamp >= minimumFrameInterval else { return }
+    private func consumeCurrentFrame() {
+        guard isCapturingOnQueue,
+              let frame = arSession?.currentFrame,
+              frame.timestamp - lastSampleTimestamp >= minimumFrameInterval else { return }
         guard let depthData = frame.smoothedSceneDepth ?? frame.sceneDepth else { return }
         guard nextFrameIndex < maximumFrames, gaussianSeeds.count < maximumSplats else {
             isCapturingOnQueue = false
@@ -193,7 +211,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject, ARSessionDele
                 DispatchQueue.main.async {
                     self.frameCount = currentFrames
                     self.splatCount = currentSplats
-                    self.status = "采集中 · (currentFrames)/(self.maximumFrames) 帧"
+                    self.status = "采集中 · \\(currentFrames)/\\(self.maximumFrames) 帧"
                 }
             }
         } catch {
@@ -203,25 +221,6 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject, ARSessionDele
                 self.status = "采集遇到问题，已停止"
             }
             finishDataset()
-        }
-    }
-
-    func session(_ session: ARSession, didFailWithError error: Error) {
-        DispatchQueue.main.async {
-            self.errorMessage = error.localizedDescription
-            self.status = "AR 相机启动失败"
-        }
-    }
-
-    func sessionWasInterrupted(_ session: ARSession) {
-        DispatchQueue.main.async {
-            self.status = "空间相机被系统中断"
-        }
-    }
-
-    func sessionInterruptionEnded(_ session: ARSession) {
-        DispatchQueue.main.async {
-            self.status = self.isCapturing ? "正在恢复空间相机…" : "空间相机已恢复"
         }
     }
 
