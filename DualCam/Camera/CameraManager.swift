@@ -1839,12 +1839,15 @@ final class CameraManager: NSObject, ObservableObject {
 
                     let rearFlashSlot: Int? = {
                         guard useFlash else { return nil }
-                        if captureConfig.layout == .single,
-                           self.slotFront.indices.contains(primarySlot),
-                           self.slotFront[primarySlot] {
-                            // A non-nil sentinel requests the front screen flash without firing
-                            // an unused rear LED while the front camera is the only active sensor.
-                            return -1
+                        if captureConfig.layout == .single {
+                            guard self.slotFront.indices.contains(primarySlot) else { return nil }
+                            if self.slotFront[primarySlot] {
+                                // A non-nil sentinel requests the front screen flash without firing
+                                // an unused rear LED while the front camera is the only active sensor.
+                                return -1
+                            }
+                            return self.slotInfos.indices.contains(primarySlot) && self.slotInfos[primarySlot].hasTorch
+                                ? primarySlot : nil
                         }
                         return self.slotFront.indices.first(where: { !self.slotFront[$0] && self.slotInfos[$0].hasTorch })
                     }()
@@ -1967,9 +1970,12 @@ final class CameraManager: NSObject, ObservableObject {
 
         let burstFlashSlot: Int? = {
             guard useFlash else { return nil }
-            if captureConfig.layout == .single,
-               slotFront.indices.contains(primarySlot),
-               slotFront[primarySlot] { return -1 }
+            if captureConfig.layout == .single {
+                guard slotFront.indices.contains(primarySlot) else { return nil }
+                if slotFront[primarySlot] { return -1 }
+                return slotInfos.indices.contains(primarySlot) && slotInfos[primarySlot].hasTorch
+                    ? primarySlot : nil
+            }
             return slotFront.indices.first(where: { !slotFront[$0] && slotInfos[$0].hasTorch })
         }()
         captureHighResolutionPhotos(
@@ -2522,9 +2528,8 @@ final class CameraManager: NSObject, ObservableObject {
         let composed = Compositor.compose(main: mainImage, sub: subImage, cfg: c, canvas: canvas)
         let finalImage = c.filter.apply(to: composed, intensity: c.filterIntensity).cropped(to: full)
 
-        // Keep both sensor originals beside every composite archive entry. Use rawA/rawB rather
-        // than the mirrored/filtered display images, and resolve the visible main/sub roles only
-        // after applying the user's camera-swap setting.
+        // Keep the selected sensor original beside each composite archive entry. Use raw,
+        // unmirrored sensor frames rather than the filtered display images.
         let primaryOriginalData = jpeg(mainOriginalImage)
         let secondaryOriginalData = c.layout == .single
             ? nil
