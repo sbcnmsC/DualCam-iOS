@@ -1129,7 +1129,8 @@ struct SpatialLiveCaptureView: View {
     }
 
     private var instructionTitle: String {
-        guard capture.isSessionReady || capture.isCapturing else { return "正在建立空间定位" }
+        if capture.isCapturing && !capture.isSessionReady { return "先恢复空间跟踪" }
+        guard capture.isSessionReady else { return "正在建立空间定位" }
         guard capture.isCapturing else { return "从主体正面开始" }
         switch scanStage {
         case 0: return "先采集正面与近景"
@@ -1139,9 +1140,10 @@ struct SpatialLiveCaptureView: View {
     }
 
     private var instructionDetail: String {
-        guard capture.isSessionReady || capture.isCapturing else {
+        if capture.isCapturing && !capture.isSessionReady {
             return capture.trackingStatus
         }
+        guard capture.isSessionReady else { return capture.trackingStatus }
         guard capture.isCapturing else {
             return "让主体完整进入画面，缓慢移动手机，确认深度状态正常后开始。"
         }
@@ -1156,7 +1158,8 @@ struct SpatialLiveCaptureView: View {
     }
 
     private var instructionIcon: String {
-        guard capture.isSessionReady || capture.isCapturing else { return "scope" }
+        if capture.isCapturing && !capture.isSessionReady { return "exclamationmark.triangle.fill" }
+        guard capture.isSessionReady else { return "scope" }
         switch scanStage {
         case 0: return "viewfinder"
         case 1: return "arrow.trianglehead.2.clockwise.rotate.90"
@@ -1166,12 +1169,12 @@ struct SpatialLiveCaptureView: View {
 
     private var readinessColor: Color {
         if capture.errorMessage != nil { return .orange }
-        if capture.isCapturing { return .green }
+        if capture.isCapturing { return capture.isSessionReady ? .green : .orange }
         return capture.isSessionReady ? .cyan : .orange
     }
 
     private var readinessTitle: String {
-        if capture.isCapturing { return "正在扫描" }
+        if capture.isCapturing { return capture.isSessionReady ? "正在扫描" : "跟踪受限" }
         if capture.plyURL != nil { return "采集完成" }
         return capture.isSessionReady ? "扫描已就绪" : "空间定位中"
     }
