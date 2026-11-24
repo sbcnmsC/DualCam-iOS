@@ -350,6 +350,7 @@ final class GaussianTrainingManager: ObservableObject {
             }
             do {
                 guard let output = try? FileHandle(forWritingTo: temporaryURL) else {
+                    try? manager.removeItem(at: temporaryURL)
                     return false
                 }
                 defer { try? output.close() }
