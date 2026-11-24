@@ -21,6 +21,8 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
     @Published private(set) var plyURL: URL?
     @Published private(set) var surfaceSummary = "正在识别空间表面…"
     @Published private(set) var sampledMeshFaces = 0
+    @Published private(set) var isSessionReady = false
+    @Published private(set) var trackingStatus = "正在连接 LiDAR 深度…"
     @Published private(set) var errorMessage: String?
 
     private let captureQueue = DispatchQueue(label: "dualcam.spatial.capture", qos: .userInitiated)
@@ -42,6 +44,8 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
     private var lastKeyframeTransform: simd_float4x4?
     private var nextFrameIndex = 0
     private var rawGaussianObservations = 0
+    private var lastReadinessPublishTimestamp: TimeInterval = 0
+    private var lastPublishedReadiness: Bool?
 
     private let minimumFrameInterval: TimeInterval = 0.22
     private let maximumFrames = 96
@@ -125,6 +129,10 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
     /// Release camera and rendering work while the Metal Gaussian viewer is on top.
     func pauseSpatialSessionForViewer() {
         arSession?.pause()
+        DispatchQueue.main.async {
+            self.isSessionReady = false
+            self.trackingStatus = "空间相机已暂停"
+        }
         captureQueue.async { self.stopFramePolling() }
     }
 
@@ -163,8 +171,12 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
             configuration.sceneReconstruction = .mesh
         }
         isSupported = true
+        isSessionReady = false
+        trackingStatus = "正在等待 ARKit 首帧与 LiDAR 深度…"
         errorMessage = nil
-        status = "LiDAR 网格与深度已就绪，环绕主体扫描"
+        status = "正在启动空间相机…"
+        lastReadinessPublishTimestamp = 0
+        lastPublishedReadiness = nil
         session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
         captureQueue.async { self.startFramePollingIfNeeded() }
     }
@@ -185,7 +197,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
     }
 
     func startCapture() {
-        guard isSupported, !isCapturing else { return }
+        guard isSupported, isSessionReady, !isCapturing else { return }
         errorMessage = nil
         plyURL = nil
         captureQueue.async {
@@ -258,13 +270,57 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
 
     private func consumeCurrentFrame() {
         guard let frame = arSession?.currentFrame else { return }
+
+        let depthData = frame.smoothedSceneDepth ?? frame.sceneDepth
+        let readiness: (Bool, String)
+        switch frame.camera.trackingState {
+        case .normal:
+            if depthData != nil {
+                readiness = (true, "LiDAR 深度与空间跟踪已就绪")
+            } else {
+                readiness = (false, "ARKit 已定位，正在等待 LiDAR 深度帧…")
+            }
+        case .notAvailable:
+            readiness = (false, "ARKit 相机暂不可用，请重新进入扫描")
+        case .limited(let reason):
+            let message: String
+            switch reason {
+            case .initializing:
+                message = "正在初始化空间定位…"
+            case .excessiveMotion:
+                message = "移动过快，请放慢扫描速度"
+            case .insufficientFeatures:
+                message = "环境纹理不足，请对准有细节的物体或表面"
+            case .relocalizing:
+                message = "正在重新定位，请保持手机稳定"
+            @unknown default:
+                message = "空间定位受限，请缓慢移动并保持稳定"
+            }
+            readiness = (false, message)
+        }
+
+        if frame.timestamp - lastReadinessPublishTimestamp >= 0.5
+            || lastPublishedReadiness != readiness.0 {
+            lastReadinessPublishTimestamp = frame.timestamp
+            lastPublishedReadiness = readiness.0
+            DispatchQueue.main.async {
+                self.isSessionReady = readiness.0
+                self.trackingStatus = readiness.1
+                if !self.isCapturing {
+                    self.status = readiness.0
+                        ? "空间相机已就绪，环绕主体开始扫描"
+                        : "等待扫描条件：\(readiness.1)"
+                }
+            }
+        }
+
         updateSurfaceRecognition(from: frame)
 
         guard isCapturingOnQueue,
               case .normal = frame.camera.trackingState,
               frame.timestamp - lastSampleTimestamp >= minimumFrameInterval,
               isUsefulKeyframe(frame) else { return }
-        guard let depthData = frame.smoothedSceneDepth ?? frame.sceneDepth else { return }
+        guard let depthData else { return }
         guard nextFrameIndex < maximumFrames, gaussianSeeds.count < maximumSplats else {
             isCapturingOnQueue = false
             finishDataset()
@@ -658,7 +714,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
                     "min": [bounds.minimum.x, bounds.minimum.y, bounds.minimum.z],
                     "max": [bounds.maximum.x, bounds.maximum.y, bounds.maximum.z]
                 ],
-                "plySchema": "x y z f_dc_0 f_dc_1 f_dc_2 opacity scale_0 scale_1 scale_2 rot_0 rot_1 rot_2 rot_3",
+                "plySchema": "x y z nx ny nz f_dc_0 f_dc_1 f_dc_2 opacity scale_0 scale_1 scale_2 rot_0 rot_1 rot_2 rot_3",
                 "reconstructionStage": "ARKit LiDAR depth fusion initialisation; Nerfstudio camera dataset exported for on-device photometric 3DGS training",
                 "notes": "Captured RGB frames, raw Float32 depth maps, camera intrinsics and camera-to-world transforms are saved alongside the fused PLY.",
                 "frames": frameRecords
@@ -795,6 +851,9 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
         property float x
         property float y
         property float z
+        property float nx
+        property float ny
+        property float nz
         property float f_dc_0
         property float f_dc_1
         property float f_dc_2
@@ -812,10 +871,11 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
         // Swift multiline strings omit the final newline. PLY requires a line break
         // after end_header before the binary vertex payload begins.
         var data = Data((header + "\n").utf8)
-        data.reserveCapacity(data.count + gaussianSeeds.count * 14 * MemoryLayout<Float>.size)
+        data.reserveCapacity(data.count + gaussianSeeds.count * 17 * MemoryLayout<Float>.size)
         for point in gaussianSeeds {
             let values: [Float] = [
                 point.x, point.y, point.z,
+                0, 0, 0,
                 point.redDC, point.greenDC, point.blueDC,
                 point.opacityLogit,
                 point.scaleX, point.scaleY, point.scaleZ,
