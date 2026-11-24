@@ -12,7 +12,12 @@ private enum WirelessSetupSheetRoute: String, Identifiable {
 struct CameraScreen: View {
     @EnvironmentObject private var cam: CameraManager
     @State private var showPanel = false
-    @State private var showSpatialLiveCapture = false
+    @StateObject private var spatialCapture = SpatialLiveCaptureManager()
+    @State private var isSpatialCapturePresented = false
+    @State private var shouldAutoStartSpatialCapture = false
+    @State private var didPresentSpatialResult = false
+    @State private var selectedSpatialResultURL: URL?
+    @State private var showSpatialResult = false
     @State private var panelTab: PanelTab = .pip
     @AppStorage("dualcam.quickParameterSelected") private var selectedQuickParameterName = "曝光补偿"
     @State private var showTimerSettings = false
@@ -127,25 +132,37 @@ struct CameraScreen: View {
 
                     }
 
-                    // PiP and split composition live inside the uniformly scaled preview.
-                    // Its normalized placement is retained by PreviewStage; only its canvas
-                    // bounds change while fill is active, and the original layout returns on exit.
-                    PreviewStage(size: activePreviewSize, iconRotationDegrees: iconRotationDegrees)
-                        .frame(width: activePreviewSize.width, height: activePreviewSize.height)
-                        .frame(width: canvasSize.width, height: canvasSize.height, alignment: .top)
-                        // The full-width parent frame already centers its child horizontally.
-                        // Adding another half-difference offset would shift the preview off-center.
-                        .offset(
-                            x: canvasOffset.width,
-                            y: canvasOffset.height + activePreviewTop
-                        )
-                        // Animate the actual fitted geometry, not just the aspect enum.
-                        // This keeps width, height and vertical centering moving as one unit.
-                        .geometryGroup()
-                        .animation(.smooth(duration: 0.38), value: activePreviewSize)
-                        .animation(.smooth(duration: 0.38), value: activePreviewTop)
-                        .animation(.smooth(duration: 0.22), value: screenFillEnabled)
-                        .animation(.easeInOut(duration: 0.18), value: screenFillRingWidth)
+                    // During LiDAR capture, use the ARKit camera only inside the original
+                    // preview rectangle. The real camera chrome, shutter and bottom controls stay
+                    // mounted and in their original positions.
+                    if isSpatialCapturePresented {
+                        SpatialARPreview(manager: spatialCapture)
+                            .frame(width: activePreviewSize.width, height: activePreviewSize.height)
+                            .overlay {
+                                SpatialScanHUD(capture: spatialCapture)
+                            }
+                            .clipShape(RoundedRectangle(cornerRadius: fillCornerRadius, style: .continuous))
+                            .frame(width: canvasSize.width, height: canvasSize.height, alignment: .top)
+                            .offset(
+                                x: canvasOffset.width,
+                                y: canvasOffset.height + activePreviewTop
+                            )
+                            .allowsHitTesting(false)
+                    } else {
+                        // PiP and split composition live inside the uniformly scaled preview.
+                        PreviewStage(size: activePreviewSize, iconRotationDegrees: iconRotationDegrees)
+                            .frame(width: activePreviewSize.width, height: activePreviewSize.height)
+                            .frame(width: canvasSize.width, height: canvasSize.height, alignment: .top)
+                            .offset(
+                                x: canvasOffset.width,
+                                y: canvasOffset.height + activePreviewTop
+                            )
+                            .geometryGroup()
+                            .animation(.smooth(duration: 0.38), value: activePreviewSize)
+                            .animation(.smooth(duration: 0.38), value: activePreviewTop)
+                            .animation(.smooth(duration: 0.22), value: screenFillEnabled)
+                            .animation(.easeInOut(duration: 0.18), value: screenFillRingWidth)
+                    }
                 }
 
                 // Close the illumination panel from the unused preview area. Keep this
@@ -223,17 +240,8 @@ struct CameraScreen: View {
                                 }
                                 HapticFeedback.play(.selection)
                             },
-                            onSpatialLiveTap: {
-                                guard !cam.isRecording, !cam.isCapturingPhoto else {
-                                    cam.showToast("请先结束当前拍摄")
-                                    return
-                                }
-                                guard wirelessSession.mode == .idle else {
-                                    cam.showToast("请先结束无线监看")
-                                    return
-                                }
-                                showSpatialLiveCapture = true
-                            },
+                            onSpatialLiveTap: toggleSpatialCapture,
+                            isSpatialCaptureActive: isSpatialCapturePresented,
                             onWirelessMonitorTap: {
                                 // A single tap opens the wireless feature's own mode screen.
                                 if wirelessSession.isSecurelyPaired {
@@ -452,9 +460,10 @@ struct CameraScreen: View {
             }
         }
         .background(Color.black.ignoresSafeArea())
-        .fullScreenCover(isPresented: $showSpatialLiveCapture) {
-            SpatialLiveCaptureView()
-                .environmentObject(cam)
+        .fullScreenCover(isPresented: $showSpatialResult) {
+            if let url = selectedSpatialResultURL {
+                SpatialCaptureResultView(previewURL: url)
+            }
         }
         // The stop button lives in the UIWindow, outside the camera canvas layout, so it never
         // changes preview size, previewTop or safe-area calculations.
@@ -577,6 +586,13 @@ struct CameraScreen: View {
             }
         }
         .onDisappear {
+            if isSpatialCapturePresented {
+                isSpatialCapturePresented = false
+                shouldAutoStartSpatialCapture = false
+                spatialCapture.stopSession {
+                    self.cam.setLocalCameraCaptureSuspended(false)
+                }
+            }
             if let original = originalScreenBrightness {
                 UIScreen.main.brightness = original
                 originalScreenBrightness = nil
@@ -587,6 +603,68 @@ struct CameraScreen: View {
             }
         }
         .modifier(HardwareCameraCaptureModifier())
+        .onChange(of: spatialCapture.isSessionReady) { _, ready in
+            guard ready,
+                  isSpatialCapturePresented,
+                  shouldAutoStartSpatialCapture,
+                  spatialCapture.plyURL == nil else { return }
+            shouldAutoStartSpatialCapture = false
+            spatialCapture.startCapture()
+        }
+        .onChange(of: spatialCapture.plyURL) { _, newURL in
+            guard let newURL, isSpatialCapturePresented, !didPresentSpatialResult else { return }
+            presentSpatialResult(newURL)
+        }
+    }
+
+    private func toggleSpatialCapture() {
+        HapticFeedback.play(.selection)
+        if isSpatialCapturePresented {
+            shouldAutoStartSpatialCapture = false
+            if spatialCapture.isCapturing {
+                spatialCapture.stopCapture()
+            } else if spatialCapture.plyURL == nil {
+                closeSpatialCaptureWithoutResult()
+            }
+            return
+        }
+
+        guard !cam.isRecording, !cam.isCapturingPhoto else {
+            cam.showToast("请先结束当前拍摄")
+            return
+        }
+        guard wirelessSession.mode == .idle else {
+            cam.showToast("请先结束无线监看")
+            return
+        }
+
+        didPresentSpatialResult = false
+        shouldAutoStartSpatialCapture = true
+        isSpatialCapturePresented = true
+        cam.setLocalCameraCaptureSuspended(true) {
+            self.spatialCapture.startSession()
+        }
+    }
+
+    private func closeSpatialCaptureWithoutResult() {
+        shouldAutoStartSpatialCapture = false
+        isSpatialCapturePresented = false
+        spatialCapture.stopSession {
+            self.cam.setLocalCameraCaptureSuspended(false)
+        }
+    }
+
+    private func presentSpatialResult(_ url: URL) {
+        guard !didPresentSpatialResult else { return }
+        didPresentSpatialResult = true
+        shouldAutoStartSpatialCapture = false
+        isSpatialCapturePresented = false
+        spatialCapture.stopSession {
+            self.cam.setLocalCameraCaptureSuspended(false) {
+                self.selectedSpatialResultURL = url
+                self.showSpatialResult = true
+            }
+        }
     }
 
     /// Close the role picker first; onDismiss then resumes this pending role after the sheet
