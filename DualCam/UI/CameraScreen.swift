@@ -2166,7 +2166,7 @@ struct BottomBar: View {
                 .overlay(Circle().stroke(Color.yellow, lineWidth: 2))
         }
         .buttonStyle(.plain)
-        .disabled(cam.isRecording || cam.isCapturingPhoto)
+        .disabled(cam.isCapturingPhoto)
         .accessibilityLabel({
             switch cam.cfg.layout {
             case .pip: return "当前画中画，切换分屏"
