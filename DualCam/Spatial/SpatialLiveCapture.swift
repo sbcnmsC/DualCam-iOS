@@ -57,8 +57,8 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
     private let maximumMeshPoints = 80_000
     private let meshFusionInterval: TimeInterval = 0.75
     private let voxelSize: Float = 0.018
-    private let minimumTranslationForKeyframe: Float = 0.035
-    private let minimumRotationForKeyframe: Float = 0.087
+    private let minimumTranslationForKeyframe: Float = 0.025
+    private let minimumRotationForKeyframe: Float = 0.061
     private let sphericalHarmonicDC: Float = 0.28209479177387814
 
     private struct VoxelKey: Hashable {
@@ -510,14 +510,18 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
                 let y = Int(pixelY)
                 let depthX = min(depthWidth - 1, max(0, Int(Float(x) * Float(depthWidth) / Float(imageWidth))))
                 let depthY = min(depthHeight - 1, max(0, Int(Float(y) * Float(depthHeight) / Float(imageHeight))))
-                let measuredDepth = depthBase[depthY * depthRows + depthX]
-                if let confidenceBase,
-                   confidenceBase[depthY * confidenceBytesPerRow + depthX] < 1 {
-                    continue
-                }
-                let tolerance = max(0.045, distance * 0.04)
-                guard measuredDepth.isFinite, measuredDepth >= 0.18,
-                      abs(measuredDepth - distance) <= tolerance else { continue }
+                guard let measuredDepth = filteredDepthSample(
+                    depthBase: depthBase,
+                    depthRows: depthRows,
+                    depthWidth: depthWidth,
+                    depthHeight: depthHeight,
+                    x: depthX,
+                    y: depthY,
+                    confidenceBase: confidenceBase,
+                    confidenceBytesPerRow: confidenceBytesPerRow
+                ) else { continue }
+                let tolerance = max(0.03, distance * 0.03)
+                guard abs(measuredDepth - distance) <= tolerance else { continue }
 
                 let colorOffset = y * colorBytesPerRow + x * 4
                 let blue = Float(colorBase[colorOffset]) / 255
@@ -566,6 +570,74 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
             voxelIndices[key] = gaussianSeeds.count
             gaussianSeeds.append(candidate)
         }
+    }
+
+    /// Edge-aware cross median for ARKit scene depth. Reject isolated spikes and samples
+    /// without enough nearby support; medium/high confidence neighbours only are accepted.
+    private func filteredDepthSample(
+        depthBase: UnsafePointer<Float32>,
+        depthRows: Int,
+        depthWidth: Int,
+        depthHeight: Int,
+        x: Int,
+        y: Int,
+        confidenceBase: UnsafeMutablePointer<UInt8>?,
+        confidenceBytesPerRow: Int
+    ) -> Float? {
+        guard x >= 0, y >= 0, x < depthWidth, y < depthHeight else { return nil }
+        let center = depthBase[y * depthRows + x]
+        guard center.isFinite, center >= 0.18, center <= 5.5 else { return nil }
+        if let confidenceBase,
+           confidenceBase[y * confidenceBytesPerRow + x] < 1 {
+            return nil
+        }
+
+        let edgeLimit = max(0.03, center * 0.03)
+        var v0 = center
+        var v1 = center
+        var v2 = center
+        var v3 = center
+        var v4 = center
+        var sampleCount = 1
+
+        func appendNeighbour(_ nx: Int, _ ny: Int) {
+            guard nx >= 0, ny >= 0, nx < depthWidth, ny < depthHeight else { return }
+            if let confidenceBase,
+               confidenceBase[ny * confidenceBytesPerRow + nx] < 1 {
+                return
+            }
+            let value = depthBase[ny * depthRows + nx]
+            guard value.isFinite, value >= 0.18, value <= 5.5,
+                  abs(value - center) <= edgeLimit else { return }
+            switch sampleCount {
+            case 1: v1 = value
+            case 2: v2 = value
+            case 3: v3 = value
+            case 4: v4 = value
+            default: return
+            }
+            sampleCount += 1
+        }
+
+        appendNeighbour(x - 1, y)
+        appendNeighbour(x + 1, y)
+        appendNeighbour(x, y - 1)
+        appendNeighbour(x, y + 1)
+        guard sampleCount >= 3 else { return nil }
+
+        func compareSwap(_ lhs: inout Float, _ rhs: inout Float) {
+            if lhs > rhs { swap(&lhs, &rhs) }
+        }
+        compareSwap(&v0, &v1)
+        compareSwap(&v3, &v4)
+        compareSwap(&v2, &v4)
+        compareSwap(&v2, &v3)
+        compareSwap(&v1, &v4)
+        compareSwap(&v0, &v3)
+        compareSwap(&v0, &v2)
+        compareSwap(&v1, &v3)
+        compareSwap(&v1, &v2)
+        return v2
     }
 
     private func appendFrame(_ frame: ARFrame, depthData: ARDepthData) throws {
@@ -675,24 +747,42 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
             if gaussianSeeds.count >= maximumSplats { break }
             for x in Swift.stride(from: 0, to: depthWidth, by: sampleStride) {
                 if gaussianSeeds.count >= maximumSplats { break }
-                if let confidencePointer {
-                    let confidence = confidencePointer[y * confidenceBytesPerRow + x]
-                    // ARKit confidence: 0 low, 1 medium, 2 high.
-                    if confidence < 1 { continue }
-                }
+                // Require a locally supported, confidence-checked depth estimate.
+                guard let distance = filteredDepthSample(
+                    depthBase: depthBase,
+                    depthRows: depthRows,
+                    depthWidth: depthWidth,
+                    depthHeight: depthHeight,
+                    x: x,
+                    y: y,
+                    confidenceBase: confidencePointer,
+                    confidenceBytesPerRow: confidenceBytesPerRow
+                ) else { continue }
 
-                let distance = depthBase[y * depthRows + x]
-                guard distance.isFinite, distance >= 0.18, distance <= 5.5 else { continue }
-
-                // Reject depth discontinuities that commonly create flying pixels at silhouettes.
+                // Use the same robust estimate for tangent neighbours; reject silhouettes and holes.
                 let rightX = min(depthWidth - 1, x + sampleStride)
                 let downY = min(depthHeight - 1, y + sampleStride)
-                let rightDepth = depthBase[y * depthRows + rightX]
-                let downDepth = depthBase[downY * depthRows + x]
-                let edgeThreshold = max(0.05, distance * 0.045)
-                guard rightDepth.isFinite, downDepth.isFinite,
-                      rightDepth >= 0.18, downDepth >= 0.18,
-                      abs(rightDepth - distance) <= edgeThreshold,
+                guard let rightDepth = filteredDepthSample(
+                    depthBase: depthBase,
+                    depthRows: depthRows,
+                    depthWidth: depthWidth,
+                    depthHeight: depthHeight,
+                    x: rightX,
+                    y: y,
+                    confidenceBase: confidencePointer,
+                    confidenceBytesPerRow: confidenceBytesPerRow
+                ), let downDepth = filteredDepthSample(
+                    depthBase: depthBase,
+                    depthRows: depthRows,
+                    depthWidth: depthWidth,
+                    depthHeight: depthHeight,
+                    x: x,
+                    y: downY,
+                    confidenceBase: confidencePointer,
+                    confidenceBytesPerRow: confidenceBytesPerRow
+                ) else { continue }
+                let edgeThreshold = max(0.035, distance * 0.035)
+                guard abs(rightDepth - distance) <= edgeThreshold,
                       abs(downDepth - distance) <= edgeThreshold else { continue }
 
                 let colorX = min(imageWidth - 1, max(0, Int((Float(x) + 0.5) / Float(depthWidth) * Float(imageWidth))))
@@ -853,7 +943,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
                 "fusedVoxelCount": gaussianSeeds.count,
                 "pointCloudFusion": "LiDAR depth back-projection plus RGB-projected and depth-verified ARKit mesh vertices; duplicate 18 mm voxels omitted",
                 "voxelSizeMeters": voxelSize,
-                "keyframePolicy": "retain frame after 0.035m translation or 0.087rad view rotation",
+                "keyframePolicy": "retain frame after 0.025m translation or 0.061rad view rotation; minimum interval 0.22s",
                 "depthSource": "ARKit sceneDepth / smoothedSceneDepth",
                 "rgbEncoding": "JPEG quality 0.92 for multi-view photometric training",
                 "coordinateSystem": "ARKit world coordinates, meters",
