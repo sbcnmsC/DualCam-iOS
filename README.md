@@ -50,7 +50,8 @@ iPhone 单摄 / 双摄原生相机（Swift / SwiftUI，基于 `AVCaptureMultiCam
 - 进入 3D 实况会暂停普通相机会话，由 ARKit / RealityKit 使用 LiDAR。ARKit 开启 \`.meshWithClassification\` 场景重建和水平 / 垂直平面检测，扫描画面显示实时场景网格。
 - 扫描页统计 ARKit 网格面片的分类样本：地面、墙面、天花板、桌面、座椅、门、窗。它是 ARKit 的空间表面分类，不等同于通用目标检测或任意物体识别。
 - 采集最多 96 个有效关键帧。只有相机追踪状态正常时才保存，位姿变化阈值约 3.5 cm / 5°；LiDAR 过滤低置信度像素，并在深度突变处剔除边缘飞点。深度点融合为初始 Gaussian 时，椭球切向由局部深度邻域估计，不再统一沿相机朝向。
-- 每次扫描以 JPEG 质量 0.92 保存 RGB 关键帧、Float32 深度、相机内参和 camera-to-world 位姿，并生成 Nerfstudio 兼容的 \`transforms.json\`。提高关键帧压缩质量，保留多视角光度优化所需的纹理细节；这是训练阶段的输入，不是仅供展示的 PLY。
+- **LiDAR + ARKit Mesh 几何融合**：除深度图反投影点外，每隔约 0.75 秒采样 ARKit 累积场景网格顶点；把顶点变换到 ARKit 世界坐标，再投影到当前 RGB 帧。只有投影在画面内、且与当前 LiDAR 深度一致的网格顶点才接纳，并从对应 RGB 像素取色。最终只补充深度点云未覆盖的 18 mm 体素，并限制网格补点数量，降低隐藏面、重影和重复点对初始化的污染。
+- 每次扫描以 JPEG 质量 0.92 保存 RGB 关键帧、Float32 深度、相机内参和 camera-to-world 位姿，并生成 Nerfstudio 兼容的 `transforms.json`。训练初始化点云由米制 LiDAR 深度点与 RGB / 深度验证过的 ARKit 网格点合并而成；RGB 关键帧、相机内参与位姿继续用于后续光度优化。
 - 采集完成后可在设备端启动 \`msplat\` Metal 训练，支持 1K / 2K / 4K 步数；默认半分辨率，包含多视角光度优化、Gaussian densification 和 SH3（45 个高阶颜色系数）拟合，与 MetalSplatter 的训练 PLY 解析格式保持一致。训练过程周期性生成预览，监控可用内存与热状态；可安全停止并导出当前结果。
 - 训练启用 `keepCrs`，导出的 Gaussian PLY / SPZ 恢复到原始 ARKit 世界坐标；因此 MetalSplatter 预览使用的 `session.json` 场景包围盒和训练产物坐标一致，避免训练完成后场景偏移或缩放错误。原始 GraphDECO PLY 保持训练器的 SH 通道顺序用于分享；App 另生成 MetalSplatter 专用预览副本，将 45 个 SH 系数流式重排为 RGB 三元组，不修改原始导出文件。也可导出压缩 SPZ；LiDAR 初始化 PLY 仍可单独分享，用于诊断采集覆盖和数据质量。
 - **设备要求**：需要支持 ARKit Scene Depth / Scene Reconstruction 的 LiDAR 设备。msplat 训练引擎最低要求 iOS 18；因此此功能分支的 App 最低系统版本调整为 iOS 18。训练时会暂停 ARKit 相机以降低 GPU 争用；当可用内存低于保护阈值或设备温度达到 serious 热状态时，会阻止训练启动或停止迭代，并尝试导出已有结果。
