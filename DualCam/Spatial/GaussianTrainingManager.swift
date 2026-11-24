@@ -345,13 +345,16 @@ final class GaussianTrainingManager: ObservableObject {
 
             try? manager.removeItem(at: temporaryURL)
             try? manager.removeItem(at: destinationURL)
-            guard manager.createFile(atPath: temporaryURL.path, contents: nil),
-                  let output = try? FileHandle(forWritingTo: temporaryURL) else {
+            guard manager.createFile(atPath: temporaryURL.path, contents: nil) else {
                 return false
             }
-            defer { try? output.close() }
+            do {
+                guard let output = try? FileHandle(forWritingTo: temporaryURL) else {
+                    return false
+                }
+                defer { try? output.close() }
 
-            try output.write(contentsOf: headerData)
+                try output.write(contentsOf: headerData)
             try input.seek(toOffset: UInt64(headerData.count))
 
             var remaining = vertexCount
@@ -388,9 +391,8 @@ final class GaussianTrainingManager: ObservableObject {
                 remaining -= rowCount
             }
 
-            try output.synchronize()
-            try? output.close()
-            try input.close()
+                try output.synchronize()
+            }
 
             try manager.moveItem(at: temporaryURL, to: destinationURL)
             return manager.fileExists(atPath: destinationURL.path)
