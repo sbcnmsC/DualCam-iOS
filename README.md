@@ -45,12 +45,14 @@ iPhone 单摄 / 双摄原生相机（Swift / SwiftUI，基于 `AVCaptureMultiCam
 
 单镜头的动态片段会按预览同样的方式处理（前置镜像、滤镜），并裁成静态图的画幅，避免系统相册播放时变形。「两者都存」时，两张原片的实况仍各自取自自己的镜头，只有合成图那张按这个选项走；「原图直出」没有合成图，这个选项不生效。
 
-**3D 实况（LiDAR + Gaussian Splat 初始采集）**
+**3D 实况（LiDAR + Metal Gaussian Splat）**
 
-- 顶部自定义控制栏增加「3D 实况」。打开后暂停 DualCam 的普通相机会话，交由 RealityKit / ARKit 管理空间相机，避免两个会话同时争用摄像头。
-- 仅当设备支持 ARKit Scene Depth 时启用（需要 LiDAR）；应用最多采集 56 组彩色帧、Float32 深度图、相机内参和相机到世界坐标变换。
-- 导出二进制 Gaussian PLY，包含 3DGS 常见的 XYZ、球谐 DC 颜色、opacity、log-scale 和 quaternion 字段；同时在应用 Documents 的 `DualCam3DLive` 目录保留逐帧 JPG、深度原始数据与 JSON 位姿记录。
-- 当前导出的是**由 LiDAR 深度初始化的 Gaussian 点元**，不是训练完成的高斯泼溅模型；尚未执行优化、稠密化、曝光 / 颜色一致性校准或新视角渲染。PLY 可导入兼容 3DGS 的查看器或后续训练管线。
+- 顶部自定义控制栏增加「3D 实况」。打开后暂停 DualCam 普通相机会话，交由 RealityKit / ARKit 管理空间相机，避免两个会话同时争用摄像头。
+- 仅当设备支持 ARKit Scene Depth 时启用（需要 LiDAR）；最多记录 72 个有效关键帧。关键帧按相机位姿变化筛选（约 2.5 cm 位移或 0.075 rad 视角变化），逐帧保存 JPG、Float32 深度、相机内参和 camera-to-world 位姿。
+- 将深度反投影到 ARKit 世界坐标，并按 18 mm 体素进行多视角融合：位置、球谐 DC 颜色、尺度、透明度与旋转四元数进行加权融合，减少重复点；输出场景包围盒和观测 / 融合统计。
+- 导出兼容 GraphDECO / MetalSplatter 的二进制 Gaussian PLY（XYZ、SH DC、opacity logit、log-scale、WXYZ quaternion）。采集结束后可直接打开 App 内 Metal 场景查看器：单指旋转、平移模式、双指缩放、自动旋转、重置视角；也可以分享 PLY。
+- **重建边界**：当前已实现 LiDAR 多视角位姿对齐、深度点融合、Gaussian 初始化和实时 Metal 渲染；尚未在手机端执行基于多视图 RGB 光度损失的训练优化、densification 或 SH 高阶拟合。其视觉细节受 LiDAR 深度分辨率与采集覆盖影响，不应视为训练完成的生产级 3DGS。
+- 渲染依赖 MIT 授权的 MetalSplatter（iOS 17 / Swift 5.9 兼容分支）；许可证副本保存在 `ThirdPartyLicenses/MetalSplatter-MIT.txt`。
 
 **视频**：HEVC，带声音；可同时录合成视频和每颗镜头的原始视频；录像中可随时切布局、拖小窗、换滤镜。
 
@@ -102,7 +104,8 @@ open DualCam.xcodeproj
 
 - `DualCam/Camera/`：相机会话（`CameraManager`）、画面合成（`Compositor`）、视频 / 实况写入（`VideoRecorder`）、滤镜、数据模型
 - `DualCam/UI/`：取景界面、工具面板、预览层
-- `DualCam/Spatial/`：ARKit LiDAR 深度采集、相机位姿记录与 Gaussian PLY 导出
+- `DualCam/Spatial/`：ARKit LiDAR 关键帧采集、世界坐标体素融合、Gaussian PLY 导出与 Metal 场景查看器
+- `ThirdPartyLicenses/`：第三方渲染库许可证
 - `project.yml`：XcodeGen 工程描述
 - `scripts/DualCam-AppIcon.svg`：应用图标矢量母版；构建前生成至 `DualCam/Assets.xcassets/AppIcon.appiconset/AppIcon.png`
 - `.github/workflows/build-ipa.yml`：云端编译、签名、发布
