@@ -1118,219 +1118,85 @@ struct SpatialLiveCaptureView: View {
     @State private var selectedViewerURL: URL?
     @State private var isClosingCapture = false
 
+    private var scanProgress: Double {
+        min(Double(capture.frameCount) / 96.0, 1)
+    }
+
+    private var scanStage: Int {
+        if capture.frameCount < 16 { return 0 }
+        if capture.frameCount < 48 { return 1 }
+        return 2
+    }
+
+    private var instructionTitle: String {
+        guard capture.isSessionReady || capture.isCapturing else { return "正在建立空间定位" }
+        guard capture.isCapturing else { return "从主体正面开始" }
+        switch scanStage {
+        case 0: return "先采集正面与近景"
+        case 1: return "继续环绕主体"
+        default: return "补充高低角度与细节"
+        }
+    }
+
+    private var instructionDetail: String {
+        guard capture.isSessionReady || capture.isCapturing else {
+            return capture.trackingStatus
+        }
+        guard capture.isCapturing else {
+            return "让主体完整进入画面，缓慢移动手机，确认深度状态正常后开始。"
+        }
+        switch scanStage {
+        case 0:
+            return "先获取主体正面和两侧，保持手机稳定，避免快速转动。"
+        case 1:
+            return "逐步绕到侧面与背面，相邻视角尽量保留重叠内容。"
+        default:
+            return "抬高再降低手机，补充顶部、底部和容易被遮挡的区域。"
+        }
+    }
+
+    private var instructionIcon: String {
+        guard capture.isSessionReady || capture.isCapturing else { return "scope" }
+        switch scanStage {
+        case 0: return "viewfinder"
+        case 1: return "arrow.trianglehead.2.clockwise.rotate.90"
+        default: return "arrow.up.and.down"
+        }
+    }
+
+    private var readinessColor: Color {
+        if capture.errorMessage != nil { return .orange }
+        if capture.isCapturing { return .green }
+        return capture.isSessionReady ? .cyan : .orange
+    }
+
+    private var readinessTitle: String {
+        if capture.isCapturing { return "正在扫描" }
+        if capture.plyURL != nil { return "采集完成" }
+        return capture.isSessionReady ? "扫描已就绪" : "空间定位中"
+    }
+
     var body: some View {
         ZStack {
             SpatialARPreview(manager: capture)
                 .ignoresSafeArea()
 
             LinearGradient(
-                colors: [.black.opacity(0.72), .clear, .black.opacity(0.78)],
+                colors: [.black.opacity(0.48), .clear, .black.opacity(0.74)],
                 startPoint: .top,
                 endPoint: .bottom
             )
             .ignoresSafeArea()
             .allowsHitTesting(false)
 
-            VStack(spacing: 18) {
-                HStack {
-                    Button {
-                        dismiss()
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 42, height: 42)
-                            .background(.ultraThinMaterial, in: Circle())
-                    }
-                    .accessibilityLabel("关闭 3D 实况")
-                    .disabled(training.isWorking)
-
-                    Spacer()
-
-                    Label("3D 实况 · LiDAR + Gaussian", systemImage: "cube.transparent")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.white)
-
-                    Spacer()
-
-                    Color.clear.frame(width: 42, height: 42)
-                }
-                .padding(.top, 10)
-
-                Spacer()
-
-                ScrollView(.vertical) {
-                    VStack(spacing: 10) {
-                    Text(capture.status)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .multilineTextAlignment(.center)
-
-                    Label(
-                        capture.trackingStatus,
-                        systemImage: capture.isSessionReady ? "checkmark.circle.fill" : "viewfinder"
-                    )
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(capture.isSessionReady ? Color.green : Color.orange)
-                    .multilineTextAlignment(.center)
-
-                    HStack(spacing: 12) {
-                        Label("\(capture.frameCount) 视角", systemImage: "camera")
-                        Label("\(capture.splatCount.formatted()) 深度点", systemImage: "point.3.connected.trianglepath.dotted")
-                        Label("\(capture.meshPointCount.formatted()) 网格点", systemImage: "square.3.layers.3d")
-                    }
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.82))
-
-                    Text("空间分类 · \(capture.surfaceSummary)")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.cyan.opacity(0.95))
-                        .multilineTextAlignment(.center)
-
-                    Text("缓慢环绕主体并从高低角度补拍。LiDAR 深度提供米制几何，ARKit 网格补充可见表面；多视角 RGB 与相机位姿用于 3D Gaussian 优化。")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.76))
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    if let error = capture.errorMessage {
-                        Text(error)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.orange)
-                            .multilineTextAlignment(.center)
-                    }
-
-                    Button {
-                        if capture.isCapturing {
-                            capture.stopCapture()
-                        } else {
-                            capture.startCapture()
-                        }
-                    } label: {
-                        Label(
-                            capture.isCapturing ? "停止并生成 3D 场景" : "开始 3D 采集",
-                            systemImage: capture.isCapturing ? "stop.fill" : "record.circle"
-                        )
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.black)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 52)
-                        .background(capture.isCapturing ? Color.orange : Color.white, in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(
-                        training.isWorking
-                            || (!capture.isSupported && !capture.isCapturing)
-                            || (!capture.isCapturing && !capture.isSessionReady)
-                    )
-                    .opacity((capture.isSupported && capture.isSessionReady) || capture.isCapturing ? 1 : 0.45)
-
-                    if let initialPLY = capture.plyURL {
-                        VStack(spacing: 10) {
-                            Picker("训练步数", selection: $training.iterationTarget) {
-                                Text("快速 1K").tag(1_000)
-                                Text("均衡 2K").tag(2_000)
-                                Text("高质量 4K").tag(4_000)
-                            }
-                            .pickerStyle(.segmented)
-                            .disabled(training.isWorking)
-
-                            Button {
-                                if training.isWorking {
-                                    training.cancelTraining()
-                                } else {
-                                    capture.pauseSpatialSessionForViewer()
-                                    training.startTraining(datasetURL: initialPLY.deletingLastPathComponent())
-                                    if !training.isWorking {
-                                        capture.resumeSpatialSessionAfterViewer()
-                                    }
-                                }
-                            } label: {
-                                Label(
-                                    training.isWorking ? "停止训练" : "开始真正的 3DGS 训练",
-                                    systemImage: training.isWorking ? "stop.fill" : "cpu"
-                                )
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(.black)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 46)
-                                .background(training.isWorking ? Color.orange : Color.white, in: Capsule())
-                            }
-                            .disabled(training.phase == .loading || capture.frameCount < 6 || capture.splatCount < 100)
-
-                            if training.isWorking {
-                                ProgressView(value: training.progress)
-                                    .tint(.cyan)
-                                HStack {
-                                    Text("\(training.iteration) / \(training.totalIterations) 步")
-                                    Spacer()
-                                    Text("\(training.availableMemoryMB) MB 可用")
-                                }
-                                .font(.system(size: 10, weight: .medium, design: .rounded))
-                                .foregroundStyle(.white.opacity(0.7))
-                            }
-
-                            if let preview = training.previewImage {
-                                Image(uiImage: preview)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fit)
-                                    .frame(maxHeight: 112)
-                                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                            }
-
-                            Text(training.status)
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.76))
-                                .multilineTextAlignment(.center)
-
-                            Button {
-                                selectedViewerURL = training.previewPLY ?? initialPLY
-                                capture.pauseSpatialSessionForViewer()
-                                showGaussianViewer = true
-                            } label: {
-                                Label(
-                                    training.previewPLY == nil ? "预览 LiDAR 初始场景" : "预览训练后的 3D 场景",
-                                    systemImage: "cube.transparent"
-                                )
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(.black)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 44)
-                                .background(Color.white, in: Capsule())
-                            }
-
-                            if let outputPLY = training.exportedPLY {
-                                ShareLink(item: outputPLY) {
-                                    Label("导出标准 Gaussian PLY", systemImage: "square.and.arrow.up")
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .foregroundStyle(.white)
-                                }
-                            }
-                            if let outputSPZ = training.exportedSPZ {
-                                ShareLink(item: outputSPZ) {
-                                    Label("导出压缩 SPZ", systemImage: "shippingbox")
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .foregroundStyle(.white)
-                                }
-                            }
-                            ShareLink(item: initialPLY) {
-                                Label("分享 LiDAR 初始 PLY", systemImage: "point.3.connected.trianglepath.dotted")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundStyle(.white.opacity(0.75))
-                            }
-                        }
-                    }
-                }
-                .padding(18)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .padding(18)
-            .frame(maxHeight: 560)
-            .scrollIndicators(.hidden)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .padding(.bottom, 18)
+            VStack(spacing: 0) {
+                header
+                Spacer(minLength: 18)
+                scannerPanel
             }
             .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 10)
         }
         .background(Color.black)
         .statusBarHidden(true)
@@ -1370,5 +1236,335 @@ struct SpatialLiveCaptureView: View {
                 }
             }
         }
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 42, height: 42)
+                    .background(.ultraThinMaterial, in: Circle())
+            }
+            .accessibilityLabel("关闭 3D 实况")
+            .disabled(training.isWorking)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("3D 实况")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white)
+                Text("LiDAR 深度 · AR 网格 · Gaussian")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.65))
+            }
+
+            Spacer(minLength: 8)
+
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(readinessColor)
+                    .frame(width: 7, height: 7)
+                Text(readinessTitle)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+            .padding(.horizontal, 11)
+            .padding(.vertical, 9)
+            .background(.ultraThinMaterial, in: Capsule())
+        }
+    }
+
+    private var scannerPanel: some View {
+        ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .center) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(capture.isCapturing ? "空间采集中" : capture.plyURL == nil ? "扫描工作台" : "采集数据已准备")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(.white)
+                        Text(capture.status)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.68))
+                            .lineLimit(2)
+                    }
+                    Spacer()
+                    Image(systemName: capture.isCapturing ? "dot.radiowaves.left.and.right" : "cube.transparent")
+                        .font(.system(size: 21, weight: .medium))
+                        .foregroundStyle(readinessColor)
+                        .frame(width: 42, height: 42)
+                        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+                }
+
+                HStack(spacing: 8) {
+                    metricCard(
+                        value: "\(capture.frameCount)/96",
+                        title: "有效视角",
+                        icon: "camera.viewfinder"
+                    )
+                    metricCard(
+                        value: capture.splatCount.formatted(),
+                        title: "LiDAR 深度点",
+                        icon: "point.3.connected.trianglepath.dotted"
+                    )
+                    metricCard(
+                        value: capture.meshPointCount.formatted(),
+                        title: "融合网格点",
+                        icon: "square.3.layers.3d"
+                    )
+                }
+
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack {
+                        Text("采集帧进度")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.84))
+                        Spacer()
+                        Text("\(Int(scanProgress * 100))%")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(.white)
+                    }
+                    ProgressView(value: scanProgress)
+                        .tint(capture.isCapturing ? .green : .cyan)
+                    Text("按有效视角帧计数，不代表空间覆盖率；建议环绕主体并补扫高低角度。")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.white.opacity(0.52))
+                }
+
+                HStack(alignment: .top, spacing: 11) {
+                    Image(systemName: instructionIcon)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.cyan)
+                        .frame(width: 34, height: 34)
+                        .background(Color.cyan.opacity(0.12), in: RoundedRectangle(cornerRadius: 11))
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            Text("扫描建议")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.cyan)
+                            if capture.isCapturing {
+                                Text("第 \(scanStage + 1) 阶段")
+                                    .font(.system(size: 9, weight: .medium))
+                                    .foregroundStyle(.white.opacity(0.5))
+                            }
+                        }
+                        Text(instructionTitle)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.white)
+                        Text(instructionDetail)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.white.opacity(0.68))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "square.3.layers.3d")
+                        .foregroundStyle(.cyan)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("场景表面识别")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.78))
+                        Text(capture.surfaceSummary)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.62))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                }
+
+                if let error = capture.errorMessage {
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Button {
+                    if capture.isCapturing {
+                        capture.stopCapture()
+                    } else {
+                        capture.startCapture()
+                    }
+                } label: {
+                    HStack(spacing: 9) {
+                        Image(systemName: capture.isCapturing ? "stop.fill" : "record.circle")
+                        Text(capture.isCapturing ? "结束采集并生成场景" : "开始 3D 扫描")
+                    }
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.black)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 50)
+                    .background(capture.isCapturing ? Color.orange : Color.white, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(
+                    training.isWorking
+                        || (!capture.isSupported && !capture.isCapturing)
+                        || (!capture.isCapturing && !capture.isSessionReady)
+                )
+                .opacity((capture.isSupported && capture.isSessionReady) || capture.isCapturing ? 1 : 0.45)
+
+                if let initialPLY = capture.plyURL {
+                    trainingPanel(initialPLY: initialPLY)
+                }
+            }
+            .padding(16)
+        }
+        .frame(maxHeight: 480)
+        .scrollIndicators(.hidden)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .overlay(alignment: .top) {
+            Capsule()
+                .fill(Color.white.opacity(0.30))
+                .frame(width: 34, height: 4)
+                .padding(.top, 7)
+        }
+    }
+
+    private func metricCard(value: String, title: String, icon: String) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.cyan)
+            Text(value)
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(title)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.white.opacity(0.58))
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Color.white.opacity(0.075), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private func trainingPanel(initialPLY: URL) -> some View {
+        VStack(alignment: .leading, spacing: 11) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Gaussian 重建")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Text("用多视角 RGB 优化初始 LiDAR 点云")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.white.opacity(0.58))
+                }
+                Spacer()
+                Image(systemName: "cpu")
+                    .foregroundStyle(.cyan)
+            }
+
+            Picker("训练质量", selection: $training.iterationTarget) {
+                Text("快速 1K").tag(1_000)
+                Text("均衡 2K").tag(2_000)
+                Text("高质量 4K").tag(4_000)
+            }
+            .pickerStyle(.segmented)
+            .disabled(training.isWorking)
+
+            Button {
+                if training.isWorking {
+                    training.cancelTraining()
+                } else {
+                    capture.pauseSpatialSessionForViewer()
+                    training.startTraining(datasetURL: initialPLY.deletingLastPathComponent())
+                    if !training.isWorking {
+                        capture.resumeSpatialSessionAfterViewer()
+                    }
+                }
+            } label: {
+                Label(
+                    training.isWorking ? "停止训练" : "开始 Gaussian 优化",
+                    systemImage: training.isWorking ? "stop.fill" : "sparkles"
+                )
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.black)
+                .frame(maxWidth: .infinity)
+                .frame(height: 44)
+                .background(training.isWorking ? Color.orange : Color.white, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(training.phase == .loading || capture.frameCount < 6 || capture.splatCount < 100)
+
+            if training.isWorking {
+                ProgressView(value: training.progress)
+                    .tint(.cyan)
+                HStack {
+                    Text("\(training.iteration) / \(training.totalIterations) 步")
+                    Spacer()
+                    Text("\(training.availableMemoryMB) MB 可用")
+                }
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.white.opacity(0.66))
+            }
+
+            if let preview = training.previewImage {
+                Image(uiImage: preview)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxHeight: 128)
+                    .clipShape(RoundedRectangle(cornerRadius: 13))
+            }
+
+            Text(training.status)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.white.opacity(0.68))
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button {
+                selectedViewerURL = training.previewPLY ?? initialPLY
+                capture.pauseSpatialSessionForViewer()
+                showGaussianViewer = true
+            } label: {
+                Label(
+                    training.previewPLY == nil ? "预览 LiDAR 初始点云" : "打开 Gaussian 3D 预览",
+                    systemImage: "cube.transparent"
+                )
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .frame(height: 42)
+                .background(Color.cyan.opacity(0.18), in: Capsule())
+                .overlay(Capsule().stroke(Color.cyan.opacity(0.35), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+
+            if let outputPLY = training.exportedPLY {
+                ShareLink(item: outputPLY) {
+                    Label("导出标准 Gaussian PLY", systemImage: "square.and.arrow.up")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.84))
+                }
+            }
+            if let outputSPZ = training.exportedSPZ {
+                ShareLink(item: outputSPZ) {
+                    Label("导出压缩 SPZ", systemImage: "shippingbox")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.84))
+                }
+            }
+            ShareLink(item: initialPLY) {
+                Label("分享 LiDAR 初始点云", systemImage: "point.3.connected.trianglepath.dotted")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.62))
+            }
+        }
+        .padding(13)
+        .background(Color.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Color.white.opacity(0.10), lineWidth: 1))
     }
 }
