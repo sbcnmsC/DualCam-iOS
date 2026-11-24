@@ -1490,7 +1490,7 @@ final class CameraManager: NSObject, ObservableObject {
     // MARK: - 布局操作
 
     func toggleLayout() {
-        guard !isRecording, !isCapturingPhoto else { return }
+        guard !isCapturingPhoto else { return }
         HapticFeedback.play(.selection)
         switch cfg.layout {
         case .pip: cfg.layout = .split
@@ -1790,7 +1790,8 @@ final class CameraManager: NSObject, ObservableObject {
 
     private func flash(on: Bool) {
         // Dual-camera mode coordinates both sides; single mode illuminates only its selected camera.
-        let activeSlots = cfg.layout == .single ? [mainSlot] : [0, 1]
+        let selectedSlot = cfg.swapped ? 1 : 0
+        let activeSlots = cfg.layout == .single ? [selectedSlot] : [0, 1]
         let frontActive = activeSlots.contains { slot in
             slotFront.indices.contains(slot) && slotFront[slot]
         }
@@ -1989,11 +1990,12 @@ final class CameraManager: NSObject, ObservableObject {
                     var compositePhotos: [Data] = []
                     var compositePrimaryPhotos: [Data?] = []
                     var compositeSecondaryPhotos: [Data?] = []
-                    let secondaryPreview = self.highResolutionSecondaryJPEG(
-                        secondaryFrame: fallbackFrames[1 - primarySlot],
-                        config: captureConfig,
-                        slot: 1 - primarySlot
-                    )
+                    let secondaryPreview = captureConfig.layout == .single ? nil :
+                        self.highResolutionSecondaryJPEG(
+                            secondaryFrame: fallbackFrames[1 - primarySlot],
+                            config: captureConfig,
+                            slot: 1 - primarySlot
+                        )
                     if captureConfig.outputMode.savesOriginal {
                         outputPhotos.append(contentsOf: capturedPhotos)
                     }
@@ -2001,7 +2003,7 @@ final class CameraManager: NSObject, ObservableObject {
                         for photo in capturedPhotos {
                             if let composite = self.highResolutionCompositeJPEG(
                                 mainPhotoData: photo,
-                                secondaryFrame: fallbackFrames[1 - primarySlot],
+                                secondaryFrame: captureConfig.layout == .single ? nil : fallbackFrames[1 - primarySlot],
                                 config: captureConfig,
                                 mainSlot: primarySlot
                             ) {
