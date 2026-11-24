@@ -74,6 +74,8 @@ enum Compositor {
     /// 主画面和副画面各自占据的区域。
     static func regions(cfg: Config) -> (main: CGRect, sub: CGRect) {
         switch cfg.layout {
+        case .single:
+            return (CGRect(x: 0, y: 0, width: 1, height: 1), .zero)
         case .pip:
             return (CGRect(x: 0, y: 0, width: 1, height: 1), pipRectNormalized(cfg: cfg))
         case .split:
@@ -125,6 +127,8 @@ enum Compositor {
         let full = CGRect(x: 0, y: 0, width: W, height: H)
 
         switch cfg.layout {
+        case .single:
+            return fill(main, into: full).cropped(to: full)
         case .pip:
             let base = fill(main, into: full)
             guard let sub = sub else { return base.cropped(to: full) }

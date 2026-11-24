@@ -5,8 +5,13 @@ name: Build IPA
 # - 没配置 → 产出「未签名」IPA，用 Sideloadly / AltStore 用自己的 Apple ID 签名后安装
 on:
   push:
-    branches: [main, optimize/high-res-preview-app-icon, fix/wireless-black-screen-latest-ipa-2026-10-27, feature/night-vision-2026-11-11, fix/flash-fill-coordination-2026-11-14, fix/ui-outputmode-pip-resize-2026-11-14, fix/build-202-camera-ui-final, fix/build-212-exposure-outputmode-pip, fix/live-photo-button-2026-11-20, fix/recording-flash-camera-switch-2026-11-20]
+    branches: [main, optimize/high-res-preview-app-icon, fix/wireless-black-screen-latest-ipa-2026-10-27, feature/night-vision-2026-11-11, fix/flash-fill-coordination-2026-11-14, fix/ui-outputmode-pip-resize-2026-11-14, fix/build-202-camera-ui-final, fix/build-212-exposure-outputmode-pip, fix/live-photo-button-2026-11-20, fix/recording-flash-camera-switch-2026-11-20, feature/single-dual-gaussian-3dlive-2026-11-24]
   workflow_dispatch:
+
+# Keep only the newest build for each branch; stale queued IPA jobs are cancelled.
+concurrency:
+  group: dualcam-ipa-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -14,7 +19,7 @@ permissions:
 jobs:
   build:
     runs-on: macos-15
-    timeout-minutes: 40
+    timeout-minutes: 70
     env:
       APP_NAME: DualCam
       DEFAULT_BUNDLE_ID: com.dualcam.app
@@ -23,7 +28,22 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install build tools
-        run: brew install xcodegen librsvg
+        run: brew install cmake xcodegen librsvg
+
+      - name: Build pinned on-device 3DGS engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p Vendor
+          git clone https://github.com/frs0n/msplat-ios.git Vendor/msplat-ios
+          git -C Vendor/msplat-ios checkout e8611098583059b82e0b7d35259fb4e9c42df248
+          # The pinned shader uses portable Metal compute APIs; target Metal 3.2
+          # so Xcode 16 / macos-15 can compile it while retaining iOS 18 support.
+          sed -i '' 's/set(MSPLAT_METAL_LANGUAGE_STANDARD "metal4.0" CACHE STRING/set(MSPLAT_METAL_LANGUAGE_STANDARD "metal3.2" CACHE STRING/' Vendor/msplat-ios/CMakeLists.txt
+          grep 'MSPLAT_METAL_LANGUAGE_STANDARD' Vendor/msplat-ios/CMakeLists.txt
+          BUILD_JOBS=4 IOS_DEPLOYMENT_TARGET=18.0 bash Vendor/msplat-ios/scripts/build-xcframework.sh
+          test -d Vendor/msplat-ios/MsplatCore.xcframework
+          test -f Vendor/msplat-ios/swift/Sources/Msplat/Resources/default-ios.metallib
 
       - name: Render App Icon
         run: ./scripts/generate-app-icon.sh

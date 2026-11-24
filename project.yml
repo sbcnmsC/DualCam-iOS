@@ -4,12 +4,17 @@ name: DualCam
 options:
   bundleIdPrefix: com.dualcam
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "18.0"
 
 packages:
   WebRTC:
     url: https://github.com/stasel/WebRTC.git
     from: 155.0.0
+  MetalSplatter:
+    url: https://github.com/jgautsch/metalsplatter.git
+    revision: 50a24784f8c6a3f89bee139a61f9ec14c44e4e75
+  Msplat:
+    path: Vendor/msplat-ios/swift
 
 settings:
   base:
@@ -25,6 +30,10 @@ targets:
           - Info.plist
     dependencies:
       - package: WebRTC
+      - package: MetalSplatter
+        product: MetalSplatter
+      - package: Msplat
+        product: Msplat
       - target: DualCamLiveActivityExtension
         embed: true
     settings:

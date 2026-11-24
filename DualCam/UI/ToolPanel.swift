@@ -1553,7 +1553,7 @@ VStack(alignment: .leading, spacing: 9) {
             LabeledSlider(title: Compositor.splitIsSideBySide(cfg: cam.cfg) ? "左右比例" : "上下比例",
                           value: configNumber(\.splitRatio, range: 0.25...0.75),
                           range: 0.25...0.75, valueText: "\(Int(cam.cfg.splitRatio * 100))%",
-                          disabled: cam.cfg.layout == .pip)
+                          disabled: cam.cfg.layout != .split)
         case .aspect:
             HStack {
                 Text("画幅").font(.system(size: 12, weight: .semibold))

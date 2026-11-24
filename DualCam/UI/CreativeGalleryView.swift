@@ -4,11 +4,19 @@ import AVKit
 import ImageIO
 import Photos
 
-/// DualCam 私有相机相册：仅浏览拍摄的合成照片、单独预览画中画小窗，以及导出到系统相册。
+private enum CreativeAlbumMode: String {
+    case photos = "照片"
+    case scenes = "3D 场景"
+}
+
+/// DualCam 私有相机相册：照片与可交互的 3D Gaussian 场景分区保存。
 struct CreativeGalleryView: View {
     @EnvironmentObject private var cam: CameraManager
     @Environment(\.dismiss) private var dismiss
+    @StateObject private var spatialLibrary = SpatialSceneLibrary.shared
+    @State private var albumMode: CreativeAlbumMode = .photos
     @State private var detailItem: SwipeUpCameraAlbumEntry20261027?
+    @State private var selectedScene: SpatialSceneRecord?
     @State private var selectionMode = false
     @State private var selectedForExport: Set<String> = []
     @State private var exportAlert = false
@@ -26,12 +34,19 @@ struct CreativeGalleryView: View {
             Color.black.ignoresSafeArea()
             VStack(spacing: 0) {
                 header
-                if cam.compositePhotoURLs.isEmpty {
-                    emptyState
+                albumModePicker
+                if albumMode == .photos {
+                    if cam.compositePhotoURLs.isEmpty {
+                        emptyState
+                    } else {
+                        photoGrid
+                    }
+                } else if spatialLibrary.scenes.isEmpty {
+                    emptySpatialState
                 } else {
-                    photoGrid
+                    spatialSceneGrid
                 }
-                if selectionMode && !selectedForExport.isEmpty {
+                if albumMode == .photos && selectionMode && !selectedForExport.isEmpty {
                     exportSelectionBar
                 }
             }
@@ -48,6 +63,9 @@ struct CreativeGalleryView: View {
                     selectedForExport.remove(url.path)
                 }
             )
+        }
+        .fullScreenCover(item: $selectedScene) { scene in
+            GaussianSplatViewerScreen(url: spatialLibrary.previewURL(for: scene))
         }
         .alert("导出到系统相册", isPresented: $exportAlert) {
             Button("好", role: .cancel) {}
@@ -66,6 +84,9 @@ struct CreativeGalleryView: View {
         } message: {
             Text("照片及其关联的小窗预览与实况片段会一起从 DualCam 相机相册中删除。")
         }
+        .onAppear {
+            spatialLibrary.reload()
+        }
     }
 
     private var header: some View {
@@ -74,12 +95,14 @@ struct CreativeGalleryView: View {
                 Text("相机相册")
                     .font(.system(size: 23, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
-                Text("\(cam.compositePhotoURLs.count) 张拍摄照片")
+                Text(albumMode == .photos
+                     ? "\(cam.compositePhotoURLs.count) 张拍摄照片"
+                     : "\(spatialLibrary.scenes.count) 个可交互 3D 场景")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.white.opacity(0.5))
             }
             Spacer(minLength: 6)
-            if selectionMode {
+            if albumMode == .photos && selectionMode {
                 Button("全选") {
                     selectedForExport = Set(cam.compositePhotoURLs.map(\.path))
                 }
@@ -91,7 +114,7 @@ struct CreativeGalleryView: View {
                 }
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.8))
-            } else if !cam.compositePhotoURLs.isEmpty {
+            } else if albumMode == .photos && !cam.compositePhotoURLs.isEmpty {
                 Button("选择") {
                     selectionMode = true
                     selectedForExport.removeAll()
@@ -112,6 +135,105 @@ struct CreativeGalleryView: View {
         .padding(.horizontal, 18)
         .padding(.top, 8)
         .padding(.bottom, 12)
+    }
+
+    private var albumModePicker: some View {
+        HStack(spacing: 8) {
+            albumModeButton(.photos, icon: "photo.on.rectangle")
+            albumModeButton(.scenes, icon: "cube.transparent")
+        }
+        .padding(.horizontal, 18)
+        .padding(.bottom, 12)
+    }
+
+    private func albumModeButton(_ mode: CreativeAlbumMode, icon: String) -> some View {
+        Button {
+            albumMode = mode
+            if mode == .scenes { spatialLibrary.reload() }
+            selectionMode = false
+            selectedForExport.removeAll()
+        } label: {
+            Label(mode.rawValue, systemImage: icon)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(albumMode == mode ? .black : .white.opacity(0.75))
+                .frame(maxWidth: .infinity)
+                .frame(height: 38)
+                .background(albumMode == mode ? Color.yellow : Color.white.opacity(0.08), in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var emptySpatialState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "cube.transparent")
+                .font(.system(size: 46, weight: .light))
+                .foregroundStyle(.cyan)
+            Text("还没有保存的 3D 场景")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white)
+            Text("完成 LiDAR 扫描后，在 3D 预览页点「保存到 3D 相册」，场景就会出现在这里。")
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.52))
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 280)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var spatialSceneGrid: some View {
+        ScrollView {
+            LazyVGrid(columns: columns, spacing: 8) {
+                ForEach(spatialLibrary.scenes) { scene in
+                    Button {
+                        selectedScene = scene
+                    } label: {
+                        ZStack(alignment: .bottomLeading) {
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(
+                                    LinearGradient(
+                                        colors: [Color(red: 0.07, green: 0.20, blue: 0.26), Color(red: 0.035, green: 0.055, blue: 0.08)],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                )
+                            Image(systemName: "cube.transparent")
+                                .font(.system(size: 48, weight: .ultraLight))
+                                .foregroundStyle(.cyan.opacity(0.78))
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(scene.title)
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(.white)
+                                    .lineLimit(1)
+                                Text("\(scene.frameCount) 视角 · \(scene.gaussianCount.formatted()) 点")
+                                    .font(.system(size: 9, weight: .medium, design: .rounded))
+                                    .foregroundStyle(.white.opacity(0.62))
+                                    .lineLimit(1)
+                            }
+                            .padding(9)
+                            HStack {
+                                Label("3D", systemImage: "cube.fill")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(.black)
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 4)
+                                    .background(Color.cyan, in: Capsule())
+                                Spacer()
+                                Image(systemName: "arrow.up.right")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(.white.opacity(0.75))
+                            }
+                            .padding(8)
+                            .frame(maxHeight: .infinity, alignment: .top)
+                        }
+                        .aspectRatio(1, contentMode: .fit)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 3)
+            .padding(.bottom, 18)
+        }
     }
 
     private var emptyState: some View {
