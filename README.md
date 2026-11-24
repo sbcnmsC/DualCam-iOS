@@ -97,6 +97,8 @@ brew install cmake xcodegen librsvg
 mkdir -p Vendor
 git clone https://github.com/frs0n/msplat-ios.git Vendor/msplat-ios
 git -C Vendor/msplat-ios checkout e8611098583059b82e0b7d35259fb4e9c42df248
+# Xcode 16 on macos-15 supports Metal 3.2; the shader path does not require Metal 4-only APIs.
+sed -i '' 's/set(MSPLAT_METAL_LANGUAGE_STANDARD "metal4.0" CACHE STRING/set(MSPLAT_METAL_LANGUAGE_STANDARD "metal3.2" CACHE STRING/' Vendor/msplat-ios/CMakeLists.txt
 BUILD_JOBS=4 IOS_DEPLOYMENT_TARGET=18.0 bash Vendor/msplat-ios/scripts/build-xcframework.sh
 ./scripts/generate-app-icon.sh
 xcodegen generate
