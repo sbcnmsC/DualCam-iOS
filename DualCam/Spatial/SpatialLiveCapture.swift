@@ -970,7 +970,7 @@ struct SpatialLiveCaptureView: View {
                         .background(capture.isCapturing ? Color.orange : Color.white, in: Capsule())
                     }
                     .buttonStyle(.plain)
-                    .disabled(!capture.isSupported && !capture.isCapturing)
+                    .disabled(training.isWorking || (!capture.isSupported && !capture.isCapturing))
                     .opacity(capture.isSupported || capture.isCapturing ? 1 : 0.45)
 
                     if let initialPLY = capture.plyURL {
