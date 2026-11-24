@@ -19,6 +19,8 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
     @Published private(set) var frameCount = 0
     @Published private(set) var splatCount = 0
     @Published private(set) var plyURL: URL?
+    @Published private(set) var surfaceSummary = "正在识别空间表面…"
+    @Published private(set) var sampledMeshFaces = 0
     @Published private(set) var errorMessage: String?
 
     private let captureQueue = DispatchQueue(label: "dualcam.spatial.capture", qos: .userInitiated)
@@ -36,16 +38,17 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
     private var gaussianSeeds: [GaussianSeed] = []
     private var voxelIndices: [VoxelKey: Int] = [:]
     private var lastSampleTimestamp: TimeInterval = 0
+    private var lastSurfaceUpdateTimestamp: TimeInterval = 0
     private var lastKeyframeTransform: simd_float4x4?
     private var nextFrameIndex = 0
     private var rawGaussianObservations = 0
 
-    private let minimumFrameInterval: TimeInterval = 0.18
-    private let maximumFrames = 72
+    private let minimumFrameInterval: TimeInterval = 0.22
+    private let maximumFrames = 96
     private let maximumSplats = 180_000
     private let voxelSize: Float = 0.018
-    private let minimumTranslationForKeyframe: Float = 0.025
-    private let minimumRotationForKeyframe: Float = 0.075
+    private let minimumTranslationForKeyframe: Float = 0.035
+    private let minimumRotationForKeyframe: Float = 0.087
     private let sphericalHarmonicDC: Float = 0.28209479177387814
 
     private struct VoxelKey: Hashable {
@@ -122,6 +125,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
     /// Release camera and rendering work while the Metal Gaussian viewer is on top.
     func pauseSpatialSessionForViewer() {
         arSession?.pause()
+        captureQueue.async { self.stopFramePolling() }
     }
 
     func resumeSpatialSessionAfterViewer() {
@@ -152,10 +156,17 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
         let configuration = ARWorldTrackingConfiguration()
         configuration.worldAlignment = .gravity
         configuration.frameSemantics = depthSemantics
+        configuration.planeDetection = [.horizontal, .vertical]
+        if ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification) {
+            configuration.sceneReconstruction = .meshWithClassification
+        } else if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
+            configuration.sceneReconstruction = .mesh
+        }
         isSupported = true
         errorMessage = nil
-        status = "LiDAR 深度已就绪，缓慢环绕拍摄对象"
+        status = "LiDAR 网格与深度已就绪，环绕主体扫描"
         session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
+        captureQueue.async { self.startFramePollingIfNeeded() }
     }
 
     private func startFramePollingIfNeeded() {
@@ -189,12 +200,15 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
                 try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
                 let folder = root.appendingPathComponent(UUID().uuidString, isDirectory: true)
                 try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                let imagesFolder = folder.appendingPathComponent("images", isDirectory: true)
+                try FileManager.default.createDirectory(at: imagesFolder, withIntermediateDirectories: true)
 
                 self.sessionDirectory = folder
                 self.frameRecords.removeAll(keepingCapacity: true)
                 self.gaussianSeeds.removeAll(keepingCapacity: true)
                 self.voxelIndices.removeAll(keepingCapacity: true)
                 self.lastSampleTimestamp = 0
+                self.lastSurfaceUpdateTimestamp = 0
                 self.lastKeyframeTransform = nil
                 self.nextFrameIndex = 0
                 self.rawGaussianObservations = 0
@@ -243,8 +257,11 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
     }
 
     private func consumeCurrentFrame() {
+        guard let frame = arSession?.currentFrame else { return }
+        updateSurfaceRecognition(from: frame)
+
         guard isCapturingOnQueue,
-              let frame = arSession?.currentFrame,
+              case .normal = frame.camera.trackingState,
               frame.timestamp - lastSampleTimestamp >= minimumFrameInterval,
               isUsefulKeyframe(frame) else { return }
         guard let depthData = frame.smoothedSceneDepth ?? frame.sceneDepth else { return }
@@ -279,6 +296,52 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
                 self.status = "采集遇到问题，已停止"
             }
             finishDataset()
+        }
+    }
+
+    /// Sample ARKit's classified scene mesh separately from Gaussian keyframes.
+    /// This reports architectural surface classes, not arbitrary object detection.
+    private func updateSurfaceRecognition(from frame: ARFrame) {
+        guard frame.timestamp - lastSurfaceUpdateTimestamp >= 1.0 else { return }
+        lastSurfaceUpdateTimestamp = frame.timestamp
+
+        var counts: [String: Int] = [:]
+        var sampledFaces = 0
+
+        for anchor in frame.anchors.compactMap({ $0 as? ARMeshAnchor }) {
+            let geometry = anchor.geometry
+            guard geometry.classification != nil else { continue }
+            let faceCount = geometry.faces.count
+            guard faceCount > 0 else { continue }
+            let sampleStep = max(1, faceCount / 1_500)
+
+            for faceIndex in Swift.stride(from: 0, to: faceCount, by: sampleStep) {
+                sampledFaces += 1
+                let classification = geometry.classificationOf(faceWithIndex: faceIndex)
+                let label: String
+                switch classification {
+                case .floor: label = "地面"
+                case .wall: label = "墙面"
+                case .ceiling: label = "天花板"
+                case .table: label = "桌面"
+                case .seat: label = "座椅"
+                case .window: label = "窗户"
+                case .door: label = "门"
+                case .none: continue
+                @unknown default: label = "其他表面"
+                }
+                counts[label, default: 0] += 1
+            }
+        }
+
+        let summary = counts
+            .sorted { $0.value > $1.value }
+            .prefix(4)
+            .map { "\($0.key) \($0.value)" }
+            .joined(separator: " · ")
+        DispatchQueue.main.async {
+            self.sampledMeshFaces = sampledFaces
+            self.surfaceSummary = summary.isEmpty ? "已建立场景网格，正在识别表面…" : summary
         }
     }
 
@@ -339,7 +402,9 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
         }
 
         let frameName = String(format: "frame_%04d", nextFrameIndex)
-        let imageURL = folder.appendingPathComponent(frameName).appendingPathExtension("jpg")
+        let imagesFolder = folder.appendingPathComponent("images", isDirectory: true)
+        try FileManager.default.createDirectory(at: imagesFolder, withIntermediateDirectories: true)
+        let imageURL = imagesFolder.appendingPathComponent(frameName).appendingPathExtension("jpg")
         try jpegData.write(to: imageURL, options: .atomic)
 
         let depthMap = depthData.depthMap
@@ -412,11 +477,23 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
                 if gaussianSeeds.count >= maximumSplats { break }
                 if let confidencePointer {
                     let confidence = confidencePointer[y * confidenceBytesPerRow + x]
-                    if confidence == 0 { continue }
+                    // ARKit confidence: 0 low, 1 medium, 2 high.
+                    if confidence < 1 { continue }
                 }
 
                 let distance = depthBase[y * depthRows + x]
                 guard distance.isFinite, distance >= 0.18, distance <= 5.5 else { continue }
+
+                // Reject depth discontinuities that commonly create flying pixels at silhouettes.
+                let rightX = min(depthWidth - 1, x + sampleStride)
+                let downY = min(depthHeight - 1, y + sampleStride)
+                let rightDepth = depthBase[y * depthRows + rightX]
+                let downDepth = depthBase[downY * depthRows + x]
+                let edgeThreshold = max(0.05, distance * 0.045)
+                guard rightDepth.isFinite, downDepth.isFinite,
+                      rightDepth >= 0.18, downDepth >= 0.18,
+                      abs(rightDepth - distance) <= edgeThreshold,
+                      abs(downDepth - distance) <= edgeThreshold else { continue }
 
                 let colorX = min(imageWidth - 1, max(0, Int((Float(x) + 0.5) / Float(depthWidth) * Float(imageWidth))))
                 let colorY = min(imageHeight - 1, max(0, Int((Float(y) + 0.5) / Float(depthHeight) * Float(imageHeight))))
@@ -433,9 +510,38 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
                     1
                 )
                 let worldPoint = cameraTransform * localPoint
-                let worldScaleX = max(distance * Float(sampleStride) / fx * 0.55, 0.001)
-                let worldScaleY = max(distance * Float(sampleStride) / fy * 0.55, 0.001)
-                let worldScaleZ = max(distance * 0.006, 0.001)
+                let center = SIMD3<Float>(worldPoint.x, worldPoint.y, worldPoint.z)
+
+                let localRight = SIMD4<Float>(
+                    (Float(rightX) + 0.5 - cx) / fx * rightDepth,
+                    -(Float(y) + 0.5 - cy) / fy * rightDepth,
+                    -rightDepth,
+                    1
+                )
+                let localDown = SIMD4<Float>(
+                    (Float(x) + 0.5 - cx) / fx * downDepth,
+                    -(Float(downY) + 0.5 - cy) / fy * downDepth,
+                    -downDepth,
+                    1
+                )
+                let worldRight4 = cameraTransform * localRight
+                let worldDown4 = cameraTransform * localDown
+                let tangentX = SIMD3<Float>(worldRight4.x, worldRight4.y, worldRight4.z) - center
+                let tangentY = SIMD3<Float>(worldDown4.x, worldDown4.y, worldDown4.z) - center
+
+                var gaussianRotation = simd_quatf(cameraRotationMatrix)
+                let worldScaleX = max(simd_length(tangentX) * 0.55, 0.001)
+                let worldScaleY = max(simd_length(tangentY) * 0.55, 0.001)
+                if simd_length(tangentX) > 0.0001 && simd_length(tangentY) > 0.0001 {
+                    let axisX = simd_normalize(tangentX)
+                    let yCandidate = simd_normalize(tangentY)
+                    let orthogonalY = simd_normalize(yCandidate - axisX * simd_dot(axisX, yCandidate))
+                    let normal = simd_normalize(simd_cross(axisX, orthogonalY))
+                    if normal.x.isFinite && normal.y.isFinite && normal.z.isFinite {
+                        gaussianRotation = simd_quatf(simd_float3x3(axisX, orthogonalY, normal))
+                    }
+                }
+                let worldScaleZ = max(distance * 0.003, 0.001)
 
                 appendOrFuse(
                     GaussianSeed(
@@ -449,10 +555,10 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
                         scaleX: log(worldScaleX),
                         scaleY: log(worldScaleY),
                         scaleZ: log(worldScaleZ),
-                        rotationW: cameraRotation.w,
-                        rotationX: cameraRotation.x,
-                        rotationY: cameraRotation.y,
-                        rotationZ: cameraRotation.z,
+                        rotationW: gaussianRotation.vector.w,
+                        rotationX: gaussianRotation.vector.x,
+                        rotationY: gaussianRotation.vector.y,
+                        rotationZ: gaussianRotation.vector.z,
                         sampleCount: 1
                     )
                 )
@@ -463,7 +569,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
         let record: [String: Any] = [
             "index": nextFrameIndex,
             "timestamp": frame.timestamp,
-            "image": imageURL.lastPathComponent,
+            "image": "images/\(imageURL.lastPathComponent)",
             "depth": depthURL.lastPathComponent,
             "imageWidth": imageWidth,
             "imageHeight": imageHeight,
@@ -527,6 +633,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
             }
             let plyURL = folder.appendingPathComponent("gaussian_splats.ply")
             try writeGaussianPLY(to: plyURL)
+            try writeNerfstudioTransforms(to: folder)
             let bounds = sceneBounds()
 
             let manifest: [String: Any] = [
@@ -537,7 +644,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
                 "rawDepthObservations": rawGaussianObservations,
                 "fusedVoxelCount": gaussianSeeds.count,
                 "voxelSizeMeters": voxelSize,
-                "keyframePolicy": "retain frame after 0.025m translation or 0.075rad view rotation",
+                "keyframePolicy": "retain frame after 0.035m translation or 0.087rad view rotation",
                 "depthSource": "ARKit sceneDepth / smoothedSceneDepth",
                 "coordinateSystem": "ARKit world coordinates, meters",
                 "sceneBounds": [
@@ -545,7 +652,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
                     "max": [bounds.maximum.x, bounds.maximum.y, bounds.maximum.z]
                 ],
                 "plySchema": "x y z f_dc_0 f_dc_1 f_dc_2 opacity scale_0 scale_1 scale_2 rot_0 rot_1 rot_2 rot_3",
-                "reconstructionStage": "ARKit world-space depth fusion and Gaussian initialisation; not photometrically trained",
+                "reconstructionStage": "ARKit LiDAR depth fusion initialisation; Nerfstudio camera dataset exported for on-device photometric 3DGS training",
                 "notes": "Captured RGB frames, raw Float32 depth maps, camera intrinsics and camera-to-world transforms are saved alongside the fused PLY.",
                 "frames": frameRecords
             ]
@@ -571,6 +678,58 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
                 self.status = "3D 文件导出失败"
             }
         }
+    }
+
+    /// Export the RGB frames, calibrated intrinsics, and camera-to-world poses in
+    /// Nerfstudio's transforms.json schema consumed by msplat's GaussianDataset.
+    private func writeNerfstudioTransforms(to folder: URL) throws {
+        guard let first = frameRecords.first,
+              let intrinsics = first["cameraIntrinsics"] as? [NSNumber],
+              intrinsics.count >= 9,
+              let width = first["imageWidth"] as? Int,
+              let height = first["imageHeight"] as? Int else {
+            throw CaptureError.transformsExportFailed
+        }
+
+        var frames: [[String: Any]] = []
+        frames.reserveCapacity(frameRecords.count)
+        for record in frameRecords {
+            guard let imagePath = record["image"] as? String,
+                  let matrix = record["cameraTransformColumnMajor"] as? [NSNumber],
+                  matrix.count == 16 else { continue }
+
+            let transformMatrix: [[Float]] = [
+                [matrix[0].floatValue, matrix[4].floatValue, matrix[8].floatValue, matrix[12].floatValue],
+                [matrix[1].floatValue, matrix[5].floatValue, matrix[9].floatValue, matrix[13].floatValue],
+                [matrix[2].floatValue, matrix[6].floatValue, matrix[10].floatValue, matrix[14].floatValue],
+                [matrix[3].floatValue, matrix[7].floatValue, matrix[11].floatValue, matrix[15].floatValue]
+            ]
+            frames.append([
+                "file_path": imagePath,
+                "transform_matrix": transformMatrix
+            ])
+        }
+
+        guard frames.count >= 5 else { throw CaptureError.transformsExportFailed }
+        let document: [String: Any] = [
+            "camera_model": "OPENCV",
+            "fl_x": intrinsics[0].doubleValue,
+            "fl_y": intrinsics[4].doubleValue,
+            "cx": intrinsics[6].doubleValue,
+            "cy": intrinsics[7].doubleValue,
+            "w": width,
+            "h": height,
+            "k1": 0.0,
+            "k2": 0.0,
+            "p1": 0.0,
+            "p2": 0.0,
+            "frames": frames
+        ]
+        let data = try JSONSerialization.data(
+            withJSONObject: document,
+            options: [.prettyPrinted, .sortedKeys]
+        )
+        try data.write(to: folder.appendingPathComponent("transforms.json"), options: .atomic)
     }
 
     private func sceneBounds() -> (minimum: SIMD3<Float>, maximum: SIMD3<Float>) {
@@ -635,6 +794,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
         case imageEncodingFailed
         case depthBufferUnavailable
         case colorBufferUnavailable
+        case transformsExportFailed
 
         var errorDescription: String? {
             switch self {
@@ -642,6 +802,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
             case .imageEncodingFailed: return "彩色帧编码失败。"
             case .depthBufferUnavailable: return "无法读取 LiDAR 深度缓冲区。"
             case .colorBufferUnavailable: return "无法读取相机颜色帧。"
+            case .transformsExportFailed: return "无法生成训练相机数据，请重新扫描并至少保留 6 个有效视角。"
             }
         }
     }
@@ -657,6 +818,7 @@ private struct SpatialARPreview: UIViewRepresentable {
             automaticallyConfigureSession: false
         )
         view.backgroundColor = .black
+        view.debugOptions.insert(.showSceneUnderstanding)
         manager.attach(session: view.session)
         return view
     }
@@ -670,7 +832,9 @@ struct SpatialLiveCaptureView: View {
     @EnvironmentObject private var camera: CameraManager
     @Environment(\.dismiss) private var dismiss
     @StateObject private var capture = SpatialLiveCaptureManager()
+    @StateObject private var training = GaussianTrainingManager()
     @State private var showGaussianViewer = false
+    @State private var selectedViewerURL: URL?
 
     var body: some View {
         ZStack {
@@ -700,7 +864,7 @@ struct SpatialLiveCaptureView: View {
 
                     Spacer()
 
-                    Label("3D 实况", systemImage: "cube.transparent")
+                    Label("3D 实况 · LiDAR", systemImage: "cube.transparent")
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(.white)
 
@@ -719,13 +883,18 @@ struct SpatialLiveCaptureView: View {
                         .multilineTextAlignment(.center)
 
                     HStack(spacing: 18) {
-                        Label("\(capture.frameCount) 帧", systemImage: "camera")
-                        Label("\(capture.splatCount.formatted()) 个 Gaussian", systemImage: "point.3.connected.trianglepath.dotted")
+                        Label("\(capture.frameCount) 视角", systemImage: "camera")
+                        Label("\(capture.splatCount.formatted()) 个初始点", systemImage: "point.3.connected.trianglepath.dotted")
                     }
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundStyle(.white.opacity(0.82))
 
-                    Text("缓慢环绕对象移动，保持主体完整并避免快速抖动。采集会保存彩色帧、原始深度和相机位姿。")
+                    Text("空间分类 · \(capture.surfaceSummary)")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.cyan.opacity(0.95))
+                        .multilineTextAlignment(.center)
+
+                    Text("保持主体始终在画面内，缓慢绕行一圈，再从略高和略低角度补拍。网格用于显示空间表面；训练使用彩色帧、相机内参与位姿。")
                         .font(.system(size: 12))
                         .foregroundStyle(.white.opacity(0.76))
                         .multilineTextAlignment(.center)
@@ -759,30 +928,98 @@ struct SpatialLiveCaptureView: View {
                     .disabled(!capture.isSupported && !capture.isCapturing)
                     .opacity(capture.isSupported || capture.isCapturing ? 1 : 0.45)
 
-                    if let plyURL = capture.plyURL {
-                        Button {
-                            capture.pauseSpatialSessionForViewer()
-                            showGaussianViewer = true
-                        } label: {
-                            Label("打开 3D 场景", systemImage: "cube.transparent")
+                    if let initialPLY = capture.plyURL {
+                        VStack(spacing: 10) {
+                            Picker("训练步数", selection: $training.iterationTarget) {
+                                Text("快速 1K").tag(1_000)
+                                Text("均衡 2K").tag(2_000)
+                                Text("高质量 4K").tag(4_000)
+                            }
+                            .pickerStyle(.segmented)
+                            .disabled(training.isWorking)
+
+                            Button {
+                                if training.isWorking {
+                                    training.cancelTraining()
+                                } else {
+                                    capture.pauseSpatialSessionForViewer()
+                                    training.startTraining(datasetURL: initialPLY.deletingLastPathComponent())
+                                }
+                            } label: {
+                                Label(
+                                    training.isWorking ? "停止训练" : "开始真正的 3DGS 训练",
+                                    systemImage: training.isWorking ? "stop.fill" : "cpu"
+                                )
                                 .font(.system(size: 14, weight: .semibold))
                                 .foregroundStyle(.black)
                                 .frame(maxWidth: .infinity)
                                 .frame(height: 46)
-                                .background(Color.white, in: Capsule())
-                        }
+                                .background(training.isWorking ? Color.orange : Color.white, in: Capsule())
+                            }
+                            .disabled(training.phase == .loading || capture.frameCount < 6)
 
-                        ShareLink(item: plyURL) {
-                            Label("分享 Gaussian PLY", systemImage: "square.and.arrow.up")
+                            if training.isWorking {
+                                ProgressView(value: training.progress)
+                                    .tint(.cyan)
+                                HStack {
+                                    Text("\(training.iteration) / \(training.totalIterations) 步")
+                                    Spacer()
+                                    Text("\(training.availableMemoryMB) MB 可用")
+                                }
+                                .font(.system(size: 10, weight: .medium, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.7))
+                            }
+
+                            if let preview = training.previewImage {
+                                Image(uiImage: preview)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fit)
+                                    .frame(maxHeight: 112)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                            }
+
+                            Text(training.status)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.76))
+                                .multilineTextAlignment(.center)
+
+                            Button {
+                                selectedViewerURL = training.exportedPLY ?? initialPLY
+                                capture.pauseSpatialSessionForViewer()
+                                showGaussianViewer = true
+                            } label: {
+                                Label(
+                                    training.exportedPLY == nil ? "预览 LiDAR 初始场景" : "预览训练后的 3D 场景",
+                                    systemImage: "cube.transparent"
+                                )
                                 .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(.white)
+                                .foregroundStyle(.black)
                                 .frame(maxWidth: .infinity)
                                 .frame(height: 44)
-                                .background(.ultraThinMaterial, in: Capsule())
+                                .background(Color.white, in: Capsule())
+                            }
+
+                            if let outputPLY = training.exportedPLY {
+                                ShareLink(item: outputPLY) {
+                                    Label("导出训练 PLY", systemImage: "square.and.arrow.up")
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundStyle(.white)
+                                }
+                            }
+                            if let outputSPZ = training.exportedSPZ {
+                                ShareLink(item: outputSPZ) {
+                                    Label("导出压缩 SPZ", systemImage: "shippingbox")
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundStyle(.white)
+                                }
+                            }
+                            ShareLink(item: initialPLY) {
+                                Label("分享 LiDAR 初始 PLY", systemImage: "point.3.connected.trianglepath.dotted")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(.white.opacity(0.75))
+                            }
                         }
                     }
-
-                    Text("已完成 ARKit 多视角位姿对齐与体素融合。此版本提供可交互 Gaussian 预览；尚未执行神经网络光度优化 / densification，细节仍受 LiDAR 深度分辨率限制。")
                         .font(.system(size: 10))
                         .foregroundStyle(.white.opacity(0.58))
                         .multilineTextAlignment(.center)
@@ -800,8 +1037,15 @@ struct SpatialLiveCaptureView: View {
             isPresented: $showGaussianViewer,
             onDismiss: { capture.resumeSpatialSessionAfterViewer() }
         ) {
-            if let url = capture.plyURL {
+            if let url = selectedViewerURL {
                 GaussianSplatViewerScreen(url: url)
+            }
+        }
+        .onChange(of: training.phase) { oldPhase, newPhase in
+            let wasWorking = oldPhase == .loading || oldPhase == .training
+            let isWorking = newPhase == .loading || newPhase == .training
+            if wasWorking && !isWorking {
+                capture.resumeSpatialSessionAfterViewer()
             }
         }
         .onAppear {
@@ -810,6 +1054,7 @@ struct SpatialLiveCaptureView: View {
             }
         }
         .onDisappear {
+            if training.isWorking { training.cancelTraining() }
             capture.stopSession {
                 camera.setLocalCameraCaptureSuspended(false)
             }
