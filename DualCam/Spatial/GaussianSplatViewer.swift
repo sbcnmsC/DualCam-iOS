@@ -129,15 +129,40 @@ struct GaussianSplatViewerScreen: View {
                         }
                     }
 
-                    HStack(spacing: 8) {
+                    HStack(spacing: 9) {
                         Image(systemName: "hand.draw")
                         Text(isPanMode ? "拖动平移 · 双指捏合缩放" : "拖动环绕 · 双指捏合缩放")
-                        Spacer()
-                        ShareLink(item: url) {
-                            Label("导出 PLY", systemImage: "square.and.arrow.up")
-                                .font(.system(size: 12, weight: .semibold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                        Spacer(minLength: 4)
+                        Button {
+                            zoomOut()
+                        } label: {
+                            Image(systemName: "minus.magnifyingglass")
+                                .font(.system(size: 14, weight: .semibold))
                                 .foregroundStyle(.white)
+                                .frame(width: 32, height: 32)
+                                .background(Color.white.opacity(0.10), in: Circle())
                         }
+                        .accessibilityLabel("缩小场景")
+                        Button {
+                            zoomIn()
+                        } label: {
+                            Image(systemName: "plus.magnifyingglass")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 32, height: 32)
+                                .background(Color.white.opacity(0.10), in: Circle())
+                        }
+                        .accessibilityLabel("放大场景")
+                        ShareLink(item: url) {
+                            Image(systemName: "square.and.arrow.up")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 32, height: 32)
+                                .background(Color.white.opacity(0.10), in: Circle())
+                        }
+                        .accessibilityLabel("导出 PLY")
                     }
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.white.opacity(0.74))
@@ -205,6 +230,16 @@ struct GaussianSplatViewerScreen: View {
         pitch = 0.12
         pan = .zero
         setInitialCamera()
+    }
+
+    private func zoomIn() {
+        distance = max(distance * 0.82, 0.08)
+        baseDistance = distance
+    }
+
+    private func zoomOut() {
+        distance = min(distance * 1.22, 80)
+        baseDistance = distance
     }
 }
 
