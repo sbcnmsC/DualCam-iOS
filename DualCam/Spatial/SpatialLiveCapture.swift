@@ -399,7 +399,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
         guard let jpegData = ciContext.jpegRepresentation(
             of: image,
             colorSpace: colorSpace,
-            options: [qualityKey: 0.84]
+            options: [qualityKey: 0.92]
         ) else {
             throw CaptureError.imageEncodingFailed
         }
@@ -652,6 +652,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
                 "voxelSizeMeters": voxelSize,
                 "keyframePolicy": "retain frame after 0.035m translation or 0.087rad view rotation",
                 "depthSource": "ARKit sceneDepth / smoothedSceneDepth",
+                "rgbEncoding": "JPEG quality 0.92 for multi-view photometric training",
                 "coordinateSystem": "ARKit world coordinates, meters",
                 "sceneBounds": [
                     "min": [bounds.minimum.x, bounds.minimum.y, bounds.minimum.z],
