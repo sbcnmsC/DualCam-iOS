@@ -34,29 +34,71 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
     private var sessionDirectory: URL?
     private var frameRecords: [[String: Any]] = []
     private var gaussianSeeds: [GaussianSeed] = []
+    private var voxelIndices: [VoxelKey: Int] = [:]
     private var lastSampleTimestamp: TimeInterval = 0
+    private var lastKeyframeTransform: simd_float4x4?
     private var nextFrameIndex = 0
+    private var rawGaussianObservations = 0
 
     private let minimumFrameInterval: TimeInterval = 0.18
-    private let maximumFrames = 56
+    private let maximumFrames = 72
     private let maximumSplats = 180_000
+    private let voxelSize: Float = 0.018
+    private let minimumTranslationForKeyframe: Float = 0.025
+    private let minimumRotationForKeyframe: Float = 0.075
     private let sphericalHarmonicDC: Float = 0.28209479177387814
 
+    private struct VoxelKey: Hashable {
+        let x: Int32
+        let y: Int32
+        let z: Int32
+    }
+
     private struct GaussianSeed {
-        let x: Float
-        let y: Float
-        let z: Float
-        let redDC: Float
-        let greenDC: Float
-        let blueDC: Float
-        let opacityLogit: Float
-        let scaleX: Float
-        let scaleY: Float
-        let scaleZ: Float
-        let rotationW: Float
-        let rotationX: Float
-        let rotationY: Float
-        let rotationZ: Float
+        var x: Float
+        var y: Float
+        var z: Float
+        var redDC: Float
+        var greenDC: Float
+        var blueDC: Float
+        var opacityLogit: Float
+        var scaleX: Float
+        var scaleY: Float
+        var scaleZ: Float
+        var rotationW: Float
+        var rotationX: Float
+        var rotationY: Float
+        var rotationZ: Float
+        var sampleCount: Int
+
+        mutating func fuse(_ other: GaussianSeed) {
+            let nextCount = sampleCount + other.sampleCount
+            let blend = Float(other.sampleCount) / Float(nextCount)
+            let keep = 1 - blend
+
+            x = x * keep + other.x * blend
+            y = y * keep + other.y * blend
+            z = z * keep + other.z * blend
+            redDC = redDC * keep + other.redDC * blend
+            greenDC = greenDC * keep + other.greenDC * blend
+            blueDC = blueDC * keep + other.blueDC * blend
+            opacityLogit = opacityLogit * keep + other.opacityLogit * blend
+            scaleX = scaleX * keep + other.scaleX * blend
+            scaleY = scaleY * keep + other.scaleY * blend
+            scaleZ = scaleZ * keep + other.scaleZ * blend
+
+            let current = simd_quatf(ix: rotationX, iy: rotationY, iz: rotationZ, r: rotationW)
+            let incoming = simd_quatf(ix: other.rotationX, iy: other.rotationY,
+                                      iz: other.rotationZ, r: other.rotationW)
+            let alignedIncoming = simd_dot(current.vector, incoming.vector) < 0
+                ? simd_quatf(vector: -incoming.vector) : incoming
+            let merged = simd_slerp(current, alignedIncoming, blend)
+            rotationW = merged.vector.w
+            rotationX = merged.vector.x
+            rotationY = merged.vector.y
+            rotationZ = merged.vector.z
+            sampleCount = nextCount
+        }
     }
 
     func attach(session: ARSession) {
@@ -141,8 +183,11 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
                 self.sessionDirectory = folder
                 self.frameRecords.removeAll(keepingCapacity: true)
                 self.gaussianSeeds.removeAll(keepingCapacity: true)
+                self.voxelIndices.removeAll(keepingCapacity: true)
                 self.lastSampleTimestamp = 0
+                self.lastKeyframeTransform = nil
                 self.nextFrameIndex = 0
+                self.rawGaussianObservations = 0
                 self.isCapturingOnQueue = true
                 self.startFramePollingIfNeeded()
 
@@ -190,7 +235,8 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
     private func consumeCurrentFrame() {
         guard isCapturingOnQueue,
               let frame = arSession?.currentFrame,
-              frame.timestamp - lastSampleTimestamp >= minimumFrameInterval else { return }
+              frame.timestamp - lastSampleTimestamp >= minimumFrameInterval,
+              isUsefulKeyframe(frame) else { return }
         guard let depthData = frame.smoothedSceneDepth ?? frame.sceneDepth else { return }
         guard nextFrameIndex < maximumFrames, gaussianSeeds.count < maximumSplats else {
             isCapturingOnQueue = false
@@ -201,6 +247,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
         do {
             try appendFrame(frame, depthData: depthData)
             lastSampleTimestamp = frame.timestamp
+            lastKeyframeTransform = frame.camera.transform
             nextFrameIndex += 1
 
             if nextFrameIndex >= maximumFrames || gaussianSeeds.count >= maximumSplats {
@@ -222,6 +269,45 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
                 self.status = "采集遇到问题，已停止"
             }
             finishDataset()
+        }
+    }
+
+    /// Keep frames only when the camera has materially changed pose, reducing near-duplicate
+    /// RGB/depth keyframes before the later world-space fusion pass.
+    private func isUsefulKeyframe(_ frame: ARFrame) -> Bool {
+        guard let previous = lastKeyframeTransform else { return true }
+        let current = frame.camera.transform
+        let previousPosition = SIMD3<Float>(previous.columns.3.x, previous.columns.3.y, previous.columns.3.z)
+        let currentPosition = SIMD3<Float>(current.columns.3.x, current.columns.3.y, current.columns.3.z)
+        let translation = simd_distance(previousPosition, currentPosition)
+
+        let previousForward = simd_normalize(SIMD3<Float>(
+            -previous.columns.2.x, -previous.columns.2.y, -previous.columns.2.z
+        ))
+        let currentForward = simd_normalize(SIMD3<Float>(
+            -current.columns.2.x, -current.columns.2.y, -current.columns.2.z
+        ))
+        let cosine = min(max(simd_dot(previousForward, currentForward), -1), 1)
+        let rotation = acos(cosine)
+        return translation >= minimumTranslationForKeyframe || rotation >= minimumRotationForKeyframe
+    }
+
+    private func voxelKey(for point: SIMD3<Float>) -> VoxelKey {
+        VoxelKey(
+            x: Int32(floor(point.x / voxelSize)),
+            y: Int32(floor(point.y / voxelSize)),
+            z: Int32(floor(point.z / voxelSize))
+        )
+    }
+
+    private func appendOrFuse(_ candidate: GaussianSeed) {
+        rawGaussianObservations += 1
+        let key = voxelKey(for: SIMD3<Float>(candidate.x, candidate.y, candidate.z))
+        if let index = voxelIndices[key], gaussianSeeds.indices.contains(index) {
+            gaussianSeeds[index].fuse(candidate)
+        } else if gaussianSeeds.count < maximumSplats {
+            voxelIndices[key] = gaussianSeeds.count
+            gaussianSeeds.append(candidate)
         }
     }
 
@@ -341,7 +427,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
                 let worldScaleY = max(distance * Float(sampleStride) / fy * 0.55, 0.001)
                 let worldScaleZ = max(distance * 0.006, 0.001)
 
-                gaussianSeeds.append(
+                appendOrFuse(
                     GaussianSeed(
                         x: worldPoint.x,
                         y: worldPoint.y,
@@ -356,7 +442,8 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
                         rotationW: cameraRotation.w,
                         rotationX: cameraRotation.x,
                         rotationY: cameraRotation.y,
-                        rotationZ: cameraRotation.z
+                        rotationZ: cameraRotation.z,
+                        sampleCount: 1
                     )
                 )
             }
@@ -425,19 +512,31 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
         }
 
         do {
+            DispatchQueue.main.async {
+                self.status = "正在融合多视角深度点并整理 Gaussian…"
+            }
             let plyURL = folder.appendingPathComponent("gaussian_splats.ply")
             try writeGaussianPLY(to: plyURL)
+            let bounds = sceneBounds()
 
             let manifest: [String: Any] = [
-                "format": "DualCam LiDAR Gaussian Splat initial capture",
+                "format": "DualCam LiDAR multi-view fused Gaussian Splat scene",
                 "createdAt": ISO8601DateFormatter().string(from: Date()),
                 "frameCount": frameRecords.count,
                 "gaussianSeedCount": gaussianSeeds.count,
+                "rawDepthObservations": rawGaussianObservations,
+                "fusedVoxelCount": gaussianSeeds.count,
+                "voxelSizeMeters": voxelSize,
+                "keyframePolicy": "retain frame after 0.025m translation or 0.075rad view rotation",
                 "depthSource": "ARKit sceneDepth / smoothedSceneDepth",
                 "coordinateSystem": "ARKit world coordinates, meters",
+                "sceneBounds": [
+                    "min": [bounds.minimum.x, bounds.minimum.y, bounds.minimum.z],
+                    "max": [bounds.maximum.x, bounds.maximum.y, bounds.maximum.z]
+                ],
                 "plySchema": "x y z f_dc_0 f_dc_1 f_dc_2 opacity scale_0 scale_1 scale_2 rot_0 rot_1 rot_2 rot_3",
-                "reconstructionStage": "depth-initialized Gaussian primitives; not trained or densified",
-                "notes": "Captured RGB frames, raw Float32 depth maps, camera intrinsics and camera-to-world transforms are saved alongside the PLY.",
+                "reconstructionStage": "ARKit world-space depth fusion and Gaussian initialisation; not photometrically trained",
+                "notes": "Captured RGB frames, raw Float32 depth maps, camera intrinsics and camera-to-world transforms are saved alongside the fused PLY.",
                 "frames": frameRecords
             ]
             let manifestData = try JSONSerialization.data(
@@ -453,7 +552,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
                 self.isCapturing = false
                 self.status = self.gaussianSeeds.isEmpty
                     ? "已结束，但没有获得有效深度点"
-                    : "3D 初始场景已导出，可分享 Gaussian PLY"
+                    : "多视角融合完成，可预览 3D Gaussian 场景"
             }
         } catch {
             DispatchQueue.main.async {
@@ -462,6 +561,17 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
                 self.status = "3D 文件导出失败"
             }
         }
+    }
+
+    private func sceneBounds() -> (minimum: SIMD3<Float>, maximum: SIMD3<Float>) {
+        guard let first = gaussianSeeds.first else { return (.zero, .zero) }
+        var minimum = SIMD3<Float>(first.x, first.y, first.z)
+        var maximum = minimum
+        for point in gaussianSeeds.dropFirst() {
+            minimum = simd_min(minimum, SIMD3<Float>(point.x, point.y, point.z))
+            maximum = simd_max(maximum, SIMD3<Float>(point.x, point.y, point.z))
+        }
+        return (minimum, maximum)
     }
 
     private func writeGaussianPLY(to url: URL) throws {
@@ -550,6 +660,7 @@ struct SpatialLiveCaptureView: View {
     @EnvironmentObject private var camera: CameraManager
     @Environment(\.dismiss) private var dismiss
     @StateObject private var capture = SpatialLiveCaptureManager()
+    @State private var showGaussianViewer = false
 
     var body: some View {
         ZStack {
@@ -639,17 +750,28 @@ struct SpatialLiveCaptureView: View {
                     .opacity(capture.isSupported || capture.isCapturing ? 1 : 0.45)
 
                     if let plyURL = capture.plyURL {
+                        Button {
+                            showGaussianViewer = true
+                        } label: {
+                            Label("打开 3D 场景", systemImage: "cube.transparent")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(.black)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 46)
+                                .background(Color.white, in: Capsule())
+                        }
+
                         ShareLink(item: plyURL) {
                             Label("分享 Gaussian PLY", systemImage: "square.and.arrow.up")
                                 .font(.system(size: 14, weight: .semibold))
                                 .foregroundStyle(.white)
                                 .frame(maxWidth: .infinity)
-                                .frame(height: 46)
+                                .frame(height: 44)
                                 .background(.ultraThinMaterial, in: Capsule())
                         }
                     }
 
-                    Text("导出的是 LiDAR 深度初始化的 Gaussian 点元，可继续用于 3DGS 优化；当前版本尚未执行训练、稠密化或完整视角合成。")
+                    Text("已完成 ARKit 多视角位姿对齐与体素融合。此版本提供可交互 Gaussian 预览；尚未执行神经网络光度优化 / densification，细节仍受 LiDAR 深度分辨率限制。")
                         .font(.system(size: 10))
                         .foregroundStyle(.white.opacity(0.58))
                         .multilineTextAlignment(.center)
@@ -663,6 +785,11 @@ struct SpatialLiveCaptureView: View {
         }
         .background(Color.black)
         .statusBarHidden(true)
+        .sheet(isPresented: $showGaussianViewer) {
+            if let url = capture.plyURL {
+                GaussianSplatViewerScreen(url: url)
+            }
+        }
         .onAppear {
             camera.setLocalCameraCaptureSuspended(true) {
                 capture.startSession()
