@@ -1179,7 +1179,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
     }
 }
 
-private struct SpatialARPreview: UIViewRepresentable {
+struct SpatialARPreview: UIViewRepresentable {
     let manager: SpatialLiveCaptureManager
 
     func makeUIView(context: Context) -> ARView {
@@ -1196,6 +1196,80 @@ private struct SpatialARPreview: UIViewRepresentable {
 
     func updateUIView(_ uiView: ARView, context: Context) {
         // The manager attaches the session once; do not re-run AR tracking on SwiftUI updates.
+    }
+}
+
+struct SpatialScanHUD: View {
+    @ObservedObject var capture: SpatialLiveCaptureManager
+
+    private var progress: Double {
+        min(Double(capture.frameCount) / 96.0, 1)
+    }
+
+    private var guidance: String {
+        if !capture.isSessionReady { return capture.trackingStatus }
+        if capture.frameCount < 16 { return "先采集正面和两侧，保持主体完整入镜" }
+        if capture.frameCount < 48 { return "缓慢环绕主体，确保相邻视角有重叠" }
+        return "补充顶部、底部和细节，减少遮挡区域"
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(capture.isCapturing && capture.isSessionReady ? Color.green : Color.orange)
+                    .frame(width: 7, height: 7)
+                Text(capture.isCapturing ? "3D 正在采集" : "3D 扫描准备")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white)
+                Spacer()
+                Text("\(capture.frameCount)/96 视角")
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.white.opacity(0.88))
+            }
+            .padding(.horizontal, 11)
+            .padding(.vertical, 9)
+            .background(.ultraThinMaterial, in: Capsule())
+
+            Spacer(minLength: 8)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "viewfinder")
+                        .foregroundStyle(.cyan)
+                    Text(guidance)
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.system(size: 11, weight: .medium))
+
+                ProgressView(value: progress)
+                    .tint(.cyan)
+
+                HStack(spacing: 12) {
+                    Label(capture.splatCount.formatted(), systemImage: "point.3.connected.trianglepath.dotted")
+                    Label(capture.meshPointCount.formatted(), systemImage: "square.3.layers.3d")
+                    Spacer(minLength: 0)
+                    Text("\(Int(progress * 100))%")
+                        .monospacedDigit()
+                }
+                .font(.system(size: 9, weight: .medium, design: .rounded))
+                .foregroundStyle(.white.opacity(0.76))
+
+                if let error = capture.errorMessage {
+                    Text(error)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(12)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .padding(12)
+        .allowsHitTesting(false)
     }
 }
 
