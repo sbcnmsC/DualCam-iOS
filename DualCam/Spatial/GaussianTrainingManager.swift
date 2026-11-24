@@ -83,6 +83,11 @@ final class GaussianTrainingManager: ObservableObject {
             status = TrainingError.lowMemory.localizedDescription
             return
         }
+        guard ProcessInfo.processInfo.thermalState.rawValue < ProcessInfo.ThermalState.serious.rawValue else {
+            phase = .failed(TrainingError.thermal.localizedDescription)
+            status = TrainingError.thermal.localizedDescription
+            return
+        }
         phase = .loading
         status = "正在检查相机数据集…"
 
@@ -217,8 +222,8 @@ final class GaussianTrainingManager: ObservableObject {
                     cancelFlag.cancel()
                     break
                 }
-                if ProcessInfo.processInfo.thermalState == .critical {
-                    stopReason = "设备温度过高，已停止训练并导出当前结果"
+                if ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue {
+                    stopReason = "设备温度进入高温状态，已停止训练并导出当前结果"
                     cancelFlag.cancel()
                     break
                 }
@@ -316,6 +321,7 @@ final class GaussianTrainingManager: ObservableObject {
         case emptyInitialization
         case lowMemory
         case datasetAssetsMissing
+        case thermal
 
         var errorDescription: String? {
             switch self {
@@ -329,6 +335,8 @@ final class GaussianTrainingManager: ObservableObject {
                 return "当前可用内存低于 1.2 GB。请关闭其他应用或减少后台任务后再训练。"
             case .datasetAssetsMissing:
                 return "训练数据缺少有效的 LiDAR 点云或相机图像，请重新采集。"
+            case .thermal:
+                return "设备当前温度较高，已暂停 3DGS 训练。请等待 iPhone 冷却后再试。"
             }
         }
     }
