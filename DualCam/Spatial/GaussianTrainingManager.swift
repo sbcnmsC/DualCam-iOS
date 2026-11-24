@@ -285,20 +285,22 @@ final class GaussianTrainingManager: ObservableObject {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
         defer { try? handle.close() }
         guard let data = try? handle.read(upToCount: 65_536),
-              let header = String(data: data, encoding: .utf8),
-              let headerEnd = header.range(of: "end_header") else {
+              let marker = data.range(of: Data("end_header\n".utf8)),
+              let header = String(data: Data(data[..<marker.upperBound]), encoding: .utf8) else {
             return false
         }
-        let lines = header[..<headerEnd.lowerBound].split(whereSeparator: \.isNewline).map(String.init)
+
+        let lines = header.split(whereSeparator: \.isNewline).map(String.init)
         let required = [
             "ply", "format binary_little_endian 1.0",
             "property float x", "property float y", "property float z",
             "property float f_dc_0", "property float f_dc_1", "property float f_dc_2",
-            "property float f_rest_44", "property float opacity",
-            "property float scale_0", "property float scale_1", "property float scale_2",
+            "property float opacity", "property float scale_0", "property float scale_1", "property float scale_2",
             "property float rot_0", "property float rot_1", "property float rot_2", "property float rot_3"
-        ]
-        return required.allSatisfy { lines.contains($0) }
+        ] + (0..<45).map { "property float f_rest_\($0)" }
+
+        return lines.contains(where: { $0.hasPrefix("element vertex ") })
+            && required.allSatisfy { lines.contains($0) }
     }
 
     private static func availableMemoryInMB() -> Int {
