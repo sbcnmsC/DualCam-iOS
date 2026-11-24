@@ -254,7 +254,7 @@ final class GaussianTrainingManager: ObservableObject {
         trainer.exportPly(to: plyURL.path)
         trainer.exportSpz(to: spzURL.path)
 
-        let hasPLY = FileManager.default.fileExists(atPath: plyURL.path)
+        let hasPLY = Self.isCompatibleGaussianPLY(plyURL)
         let hasSPZ = FileManager.default.fileExists(atPath: spzURL.path)
         let wasCancelled = cancelFlag.isCancelled
         let finalIteration = trainer.iteration
@@ -270,14 +270,35 @@ final class GaussianTrainingManager: ObservableObject {
                 self.phase = wasCancelled ? .cancelled : .finished
                 self.status = stopReason ?? "训练完成 · 已导出优化后的 Gaussian 场景"
             } else {
-                self.phase = .failed("训练完成但没有生成 PLY 文件")
-                self.status = "训练结果导出失败"
+                self.phase = .failed("训练器导出的 PLY 不符合 MetalSplatter SH3 格式")
+                self.status = "PLY 格式校验失败，未启用场景预览"
             }
             self.worker = nil
             let completion = self.onTrainingFinished
             self.onTrainingFinished = nil
             completion?()
         }
+    }
+
+    /// Confirm the exported model contains the full SH3 schema required by MetalSplatter.
+    private static func isCompatibleGaussianPLY(_ url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: 65_536),
+              let header = String(data: data, encoding: .utf8),
+              let headerEnd = header.range(of: "end_header") else {
+            return false
+        }
+        let lines = header[..<headerEnd.lowerBound].split(whereSeparator: \\.isNewline).map(String.init)
+        let required = [
+            "ply", "format binary_little_endian 1.0",
+            "property float x", "property float y", "property float z",
+            "property float f_dc_0", "property float f_dc_1", "property float f_dc_2",
+            "property float f_rest_44", "property float opacity",
+            "property float scale_0", "property float scale_1", "property float scale_2",
+            "property float rot_0", "property float rot_1", "property float rot_2", "property float rot_3"
+        ]
+        return required.allSatisfy { lines.contains($0) }
     }
 
     private static func availableMemoryInMB() -> Int {
