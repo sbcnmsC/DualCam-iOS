@@ -104,7 +104,6 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
         errorMessage = nil
         status = "LiDAR 深度已就绪，缓慢环绕拍摄对象"
         session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
-        captureQueue.async { self.startFramePollingIfNeeded() }
     }
 
     private func startFramePollingIfNeeded() {
@@ -145,6 +144,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
                 self.lastSampleTimestamp = 0
                 self.nextFrameIndex = 0
                 self.isCapturingOnQueue = true
+                self.startFramePollingIfNeeded()
 
                 DispatchQueue.main.async {
                     self.frameCount = 0
@@ -165,6 +165,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
         captureQueue.async {
             guard self.isCapturingOnQueue else { return }
             self.isCapturingOnQueue = false
+            self.stopFramePolling()
             self.finishDataset()
         }
     }
