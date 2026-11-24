@@ -213,14 +213,15 @@ final class CameraManager: NSObject, ObservableObject {
 
     /// Suspend local capture when this device is only displaying a remote monitor stream.
     /// AVCaptureSession lifecycle is owned by sessionQueue.
-    func setLocalCameraCaptureSuspended(_ suspended: Bool) {
+    func setLocalCameraCaptureSuspended(_ suspended: Bool, completion: (() -> Void)? = nil) {
         sessionQueue.async {
             self.monitorReceiverSuspendsCamera = suspended
             if suspended {
                 if self.session.isRunning { self.session.stopRunning() }
                 DispatchQueue.main.async {
                     self.ready = false
-                    self.statusText = "无线监看接收模式"
+                    self.statusText = "空间实况采集中"
+                    completion?()
                 }
             } else if self.currentCombo != nil, !self.session.isRunning {
                 self.session.startRunning()
@@ -228,7 +229,10 @@ final class CameraManager: NSObject, ObservableObject {
                 DispatchQueue.main.async {
                     self.ready = running
                     self.statusText = running ? "" : "相机未能恢复"
+                    completion?()
                 }
+            } else {
+                DispatchQueue.main.async { completion?() }
             }
         }
     }
@@ -290,6 +294,9 @@ final class CameraManager: NSObject, ObservableObject {
 
     // sessionQueue 独占
     private var devices: [AVCaptureDevice?] = [nil, nil]
+    /// Retain the two MultiCam video connections so single-camera mode can disable
+    /// the unused sensor without rebuilding the complete capture graph.
+    private var videoConnections: [AVCaptureConnection?] = [nil, nil]
     private var pendingPhotoDelegates: [Int64: HighResolutionPhotoCaptureDelegate] = [:]
     // 高频滑块只保留最新参数，约 30 次/秒锁定一次设备配置。
     private var pendingDeviceUpdateTokens: [String: UUID] = [:]
@@ -491,6 +498,7 @@ final class CameraManager: NSObject, ObservableObject {
         for input in session.inputs { session.removeInput(input) }
         for output in session.outputs { session.removeOutput(output) }
         devices = [nil, nil]
+        videoConnections = [nil, nil]
         audioActive = false
 
         let specs = [combo.a, combo.b]
@@ -533,6 +541,7 @@ final class CameraManager: NSObject, ObservableObject {
                 break
             }
             session.addConnection(conn)
+            videoConnections[i] = conn
             let rotationAngle = Self.rotationAngle(for: interfaceOrientationSnapshot())
             if conn.isVideoRotationAngleSupported(rotationAngle) {
                 conn.videoRotationAngle = rotationAngle
@@ -569,6 +578,7 @@ final class CameraManager: NSObject, ObservableObject {
         bufferSizes = [.zero, .zero]
         sharedFPS = usedFPS
         lock.unlock()
+        applyCameraConnectionMode()
 
         // AVCaptureSession captures microphone input whenever the audio input is attached.
         // iOS mutes haptics/system sounds during audio input by default; opt in before starting
@@ -776,6 +786,7 @@ final class CameraManager: NSObject, ObservableObject {
         sharedCfg = cfg
         lock.unlock()
         let new = cfg
+
         if old.resolution != new.resolution || old.fps != new.fps {
             // 重建会话期间预览会停住：先标记未就绪，让预览显示「切换中」遮罩而不是卡死的画面
             if !combos.isEmpty { ready = false }
@@ -783,8 +794,33 @@ final class CameraManager: NSObject, ObservableObject {
                 self.errorStepDown = 0
                 self.rebuild()
             }
-        } else if old.lowLight != new.lowLight || old.stabilization != new.stabilization {
+        }
+        if old.lowLight != new.lowLight || old.stabilization != new.stabilization {
             sessionQueue.async { self.applyCaptureFlags() }
+        }
+        if old.layout != new.layout || old.swapped != new.swapped {
+            sessionQueue.async { self.applyCameraConnectionMode() }
+        }
+    }
+
+    /// sessionQueue-only. A single layout streams only the selected camera.
+    /// AVCaptureMultiCamSession connections can be enabled independently, preserving
+    /// the existing graph while releasing bandwidth and ISP work for the idle sensor.
+    private func applyCameraConnectionMode() {
+        lock.lock()
+        let currentConfig = sharedCfg
+        lock.unlock()
+        let selectedSlot = currentConfig.swapped ? 1 : 0
+        for slot in 0..<2 {
+            videoConnections[slot]?.isEnabled =
+                currentConfig.layout != .single || slot == selectedSlot
+        }
+        if currentConfig.layout == .single {
+            let unusedSlot = 1 - selectedSlot
+            lock.lock()
+            latest[unusedSlot] = nil
+            bufferSizes[unusedSlot] = .zero
+            lock.unlock()
         }
     }
 
@@ -923,26 +959,21 @@ final class CameraManager: NSObject, ObservableObject {
         let isPiPDragging = sharedPiPDragActive
         let orientation = sharedInterfaceOrientation
         lock.unlock()
-        guard let bufA = a else { return }
-
-        var imgA = orient(CIImage(cvPixelBuffer: bufA), for: orientation)
-        if front[0] && c.mirrorFront { imgA = imgA.oriented(.upMirrored) }
-        var imgB: CIImage? = nil
-        if let bufB = b {
-            var tmp = orient(CIImage(cvPixelBuffer: bufB), for: orientation)
-            if front[1] && c.mirrorFront { tmp = tmp.oriented(.upMirrored) }
-            imgB = tmp
+        let imgA: CIImage? = a.map { buffer in
+            var image = orient(CIImage(cvPixelBuffer: buffer), for: orientation)
+            if front[0] && c.mirrorFront { image = image.oriented(.upMirrored) }
+            return image
+        }
+        let imgB: CIImage? = b.map { buffer in
+            var image = orient(CIImage(cvPixelBuffer: buffer), for: orientation)
+            if front[1] && c.mirrorFront { image = image.oriented(.upMirrored) }
+            return image
         }
 
-        let mainImage: CIImage
-        let subImage: CIImage?
-        if c.swapped, let second = imgB {
-            mainImage = second
-            subImage = imgA
-        } else {
-            mainImage = imgA
-            subImage = imgB
-        }
+        guard let mainImage = (c.swapped ? imgB : imgA) else { return }
+        let subImage: CIImage? = c.layout == .single
+            ? nil
+            : (c.swapped ? imgA : imgB)
 
         // The capture canvas remains full resolution. Only downscale the idle preview render graph.
         // Composite video and Live Photo motion still use the full-resolution canvas.
@@ -1459,8 +1490,13 @@ final class CameraManager: NSObject, ObservableObject {
     // MARK: - 布局操作
 
     func toggleLayout() {
+        guard !isRecording, !isCapturingPhoto else { return }
         HapticFeedback.play(.selection)
-        cfg.layout = cfg.layout == .pip ? .split : .pip
+        switch cfg.layout {
+        case .pip: cfg.layout = .split
+        case .split: cfg.layout = .single
+        case .single: cfg.layout = .pip
+        }
     }
 
     func swapCameras() {
@@ -1753,10 +1789,14 @@ final class CameraManager: NSObject, ObservableObject {
     }
 
     private func flash(on: Bool) {
-        // DualCam lights both active sides together: rear hardware LED + front screen flash.
-        let frontActive = slotFront.contains(true)
-        let rearFlashSlot = slotFront.indices.first {
-            !slotFront[$0] && slotInfos.indices.contains($0) && slotInfos[$0].hasTorch
+        // Dual-camera mode coordinates both sides; single mode illuminates only its selected camera.
+        let activeSlots = cfg.layout == .single ? [mainSlot] : [0, 1]
+        let frontActive = activeSlots.contains { slot in
+            slotFront.indices.contains(slot) && slotFront[slot]
+        }
+        let rearFlashSlot = activeSlots.first { slot in
+            slotFront.indices.contains(slot) && !slotFront[slot]
+                && slotInfos.indices.contains(slot) && slotInfos[slot].hasTorch
         }
         if frontActive { screenFlash = on }
         if let rearFlashSlot { setTorch(slot: rearFlashSlot, on: on) }
@@ -1790,13 +1830,23 @@ final class CameraManager: NSObject, ObservableObject {
                     // before the shutter fires used to delay every high-resolution capture by two
                     // full-frame encodes; now a frame is encoded only if its native still is missing.
                     let fallbackFrames = self.snapshotFallbackFrames()
-                    // Always capture both sensors natively: the secondary still is kept as an
-                    // independently exportable original in the in-app composite archive.
-                    let slots = [primarySlot, 1 - primarySlot]
+                    // In single-camera mode, capture only the selected sensor. Dual layouts
+                    // retain both native stills so the secondary image is not a soft preview crop.
+                    let slots = captureConfig.layout == .single
+                        ? [primarySlot]
+                        : [primarySlot, 1 - primarySlot]
 
-                    let rearFlashSlot = useFlash
-                        ? self.slotFront.indices.first(where: { !self.slotFront[$0] && self.slotInfos[$0].hasTorch })
-                        : nil
+                    let rearFlashSlot: Int? = {
+                        guard useFlash else { return nil }
+                        if captureConfig.layout == .single,
+                           self.slotFront.indices.contains(primarySlot),
+                           self.slotFront[primarySlot] {
+                            // A non-nil sentinel requests the front screen flash without firing
+                            // an unused rear LED while the front camera is the only active sensor.
+                            return -1
+                        }
+                        return self.slotFront.indices.first(where: { !self.slotFront[$0] && self.slotInfos[$0].hasTorch })
+                    }()
                     self.captureHighResolutionPhotos(
                         slots: slots,
                         flashSlot: rearFlashSlot
@@ -1817,7 +1867,8 @@ final class CameraManager: NSObject, ObservableObject {
                             }
 
                             if captureConfig.outputMode.savesOriginal {
-                                for slot in 0..<2 {
+                                let originalSlots = captureConfig.layout == .single ? [primarySlot] : [0, 1]
+                                for slot in originalSlots {
                                     if let photo = highResolutionPhotos[slot] {
                                         datas.append(photo)
                                     } else if let frame = fallbackForSlot(slot) {
@@ -1830,21 +1881,22 @@ final class CameraManager: NSObject, ObservableObject {
                                 let mainData = highResolutionPhotos[primarySlot] ?? fallbackForSlot(primarySlot)
                                 if let composite = self.highResolutionCompositeJPEG(
                                     mainPhotoData: mainData,
-                                    secondaryFrame: fallbackFrames[1 - primarySlot],
+                                    secondaryFrame: captureConfig.layout == .single ? nil : fallbackFrames[1 - primarySlot],
                                     config: captureConfig,
                                     mainSlot: primarySlot,
-                                    secondaryPhotoData: highResolutionPhotos[1 - primarySlot]
+                                    secondaryPhotoData: captureConfig.layout == .single ? nil : highResolutionPhotos[1 - primarySlot]
                                 ) {
                                     datas.append(composite)
                                     compositeDatas.append(composite)
                                     compositePrimaryDatas.append(mainData)
                                     compositeSecondaryDatas.append(
-                                        highResolutionPhotos[1 - primarySlot]
-                                            ?? self.highResolutionSecondaryJPEG(
-                                                secondaryFrame: fallbackFrames[1 - primarySlot],
-                                                config: captureConfig,
-                                                slot: 1 - primarySlot
-                                            )
+                                        captureConfig.layout == .single ? nil :
+                                            (highResolutionPhotos[1 - primarySlot]
+                                                ?? self.highResolutionSecondaryJPEG(
+                                                    secondaryFrame: fallbackFrames[1 - primarySlot],
+                                                    config: captureConfig,
+                                                    slot: 1 - primarySlot
+                                                ))
                                     )
                                 }
                             }
@@ -1912,11 +1964,16 @@ final class CameraManager: NSObject, ObservableObject {
         let useFlash = flashEnabled && !fillLightActive
         if useFlash { flash(on: true) }
 
+        let burstFlashSlot: Int? = {
+            guard useFlash else { return nil }
+            if captureConfig.layout == .single,
+               slotFront.indices.contains(primarySlot),
+               slotFront[primarySlot] { return -1 }
+            return slotFront.indices.first(where: { !slotFront[$0] && slotInfos[$0].hasTorch })
+        }()
         captureHighResolutionPhotos(
             slots: Array(repeating: primarySlot, count: burstLimit),
-            flashSlot: useFlash
-                ? slotFront.indices.first(where: { !slotFront[$0] && slotInfos[$0].hasTorch })
-                : nil,
+            flashSlot: burstFlashSlot,
             burstCompletion: { [weak self] primaryPhotos in
                 guard let self else { return }
                 self.compositeRenderQueue.async {
@@ -2432,30 +2489,25 @@ final class CameraManager: NSObject, ObservableObject {
         let sizes = bufferSizes
         let fps = sharedFPS
         lock.unlock()
-        guard let bufA = a else {
-            showToast("还没有画面")
+
+        let mainSlot = c.swapped ? 1 : 0
+        let secondarySlot = 1 - mainSlot
+        let rawFrames: [CIImage?] = [
+            a.map { orient(CIImage(cvPixelBuffer: $0)) },
+            b.map { orient(CIImage(cvPixelBuffer: $0)) }
+        ]
+        guard let mainOriginalImage = rawFrames[mainSlot] else {
+            showToast("所选镜头暂时没有画面")
             return
         }
-
-        let rawA = orient(CIImage(cvPixelBuffer: bufA))
-        var imgA = rawA
-        if front[0] && c.mirrorFront { imgA = imgA.oriented(.upMirrored) }
-        var rawB: CIImage? = nil
-        var imgB: CIImage? = nil
-        if let bufB = b {
-            let r = orient(CIImage(cvPixelBuffer: bufB))
-            rawB = r
-            imgB = (front[1] && c.mirrorFront) ? r.oriented(.upMirrored) : r
+        var displayFrames = rawFrames
+        for slot in 0..<2 {
+            if front[slot] && c.mirrorFront, let image = displayFrames[slot] {
+                displayFrames[slot] = image.oriented(.upMirrored)
+            }
         }
-        let mainImage: CIImage
-        let subImage: CIImage?
-        if c.swapped, let second = imgB {
-            mainImage = second
-            subImage = imgA
-        } else {
-            mainImage = imgA
-            subImage = imgB
-        }
+        guard let mainImage = displayFrames[mainSlot] else { return }
+        let subImage: CIImage? = c.layout == .single ? nil : displayFrames[secondarySlot]
 
         // 照片用更大的画布（「最高」档 = 摄像头全部像素）；实况配套视频仍用录像画布，
         // 和 processFrame 的出帧尺寸一致，否则录制器会按错误尺寸裁切
@@ -2471,10 +2523,10 @@ final class CameraManager: NSObject, ObservableObject {
         // Keep both sensor originals beside every composite archive entry. Use rawA/rawB rather
         // than the mirrored/filtered display images, and resolve the visible main/sub roles only
         // after applying the user's camera-swap setting.
-        let mainOriginalImage = (c.swapped && rawB != nil) ? rawB! : rawA
-        let secondaryOriginalImage = (c.swapped && rawB != nil) ? rawA : rawB
         let primaryOriginalData = jpeg(mainOriginalImage)
-        let secondaryOriginalData = secondaryOriginalImage.flatMap { jpeg($0) }
+        let secondaryOriginalData = c.layout == .single
+            ? nil
+            : rawFrames[secondarySlot].flatMap { jpeg($0) }
 
         // 原图直出：每颗镜头各存一张未镜像、未加滤镜、未裁切、未合成的画面；合成图是预览里看到的样子
         var shots: [StillShot] = []
@@ -2488,8 +2540,12 @@ final class CameraManager: NSObject, ObservableObject {
             ))
         }
         if c.outputMode.savesOriginal && includeOriginals {
-            shots.append(StillShot(image: rawA, slot: 0, captureConfig: c))
-            if let rb = rawB { shots.append(StillShot(image: rb, slot: 1, captureConfig: c)) }
+            let slotsToSave = c.layout == .single ? [mainSlot] : [0, 1]
+            for slot in slotsToSave {
+                if let image = rawFrames[slot] {
+                    shots.append(StillShot(image: image, slot: slot, captureConfig: c))
+                }
+            }
         }
         guard !shots.isEmpty else {
             showToast("生成照片失败")
@@ -2499,8 +2555,8 @@ final class CameraManager: NSObject, ObservableObject {
         // 实况：每张照片配一段 1.6 秒的短视频，写入前先准备好录制器
         if c.livePhoto {
             // 主 / 副镜头槽位，和上面合成时的取法一致；B 路还没出画面时，就只有 A 路可选。
-            let mainLens = (c.swapped && b != nil) ? 1 : 0
-            let lensAvailable = [true, b != nil]
+            let mainLens = mainSlot
+            let lensAvailable = [rawFrames[0] != nil, rawFrames[1] != nil]
             for i in shots.indices {
                 let size = shots[i].slot.map { sizes[$0] } ?? videoCanvas
                 guard size.width > 0 else { continue }
@@ -2616,7 +2672,7 @@ final class CameraManager: NSObject, ObservableObject {
 
     private func jpeg(_ image: CIImage) -> Data? {
         let key = CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String)
-        return ciContext.jpegRepresentation(of: image, colorSpace: srgb, options: [key: 0.97])
+        return ciContext.jpegRepresentation(of: image, colorSpace: srgb, options: [key: 0.99])
     }
 
     /// 实况照片的静态图：JPEG 的 Apple MakerNote 里写入与视频相同的 content identifier。
@@ -3106,8 +3162,10 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate, AVCapture
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         let size = CGSize(width: CVPixelBufferGetWidth(pixel), height: CVPixelBufferGetHeight(pixel))
         lock.lock()
+        let currentConfig = sharedCfg
         latest[slot] = pixel
         bufferSizes[slot] = size.width > size.height ? CGSize(width: size.height, height: size.width) : size
+        let shouldCompose = slot == 0 || (currentConfig.layout == .single && currentConfig.swapped && slot == 1)
         lock.unlock()
 
         recLock.lock()
@@ -3121,7 +3179,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate, AVCapture
             appendLiveLensFrames(lensClips, pixel: pixel, slot: slot, time: pts)
         }
 
-        if slot == 0 { processFrame(pts) }
+        if shouldCompose { processFrame(pts) }
     }
 }
 
