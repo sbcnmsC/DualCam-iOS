@@ -1032,12 +1032,12 @@ struct SpatialLiveCaptureView: View {
                                 .multilineTextAlignment(.center)
 
                             Button {
-                                selectedViewerURL = training.exportedPLY ?? initialPLY
+                                selectedViewerURL = training.previewPLY ?? initialPLY
                                 capture.pauseSpatialSessionForViewer()
                                 showGaussianViewer = true
                             } label: {
                                 Label(
-                                    training.exportedPLY == nil ? "预览 LiDAR 初始场景" : "预览训练后的 3D 场景",
+                                    training.previewPLY == nil ? "预览 LiDAR 初始场景" : "预览训练后的 3D 场景",
                                     systemImage: "cube.transparent"
                                 )
                                 .font(.system(size: 14, weight: .semibold))
@@ -1049,7 +1049,7 @@ struct SpatialLiveCaptureView: View {
 
                             if let outputPLY = training.exportedPLY {
                                 ShareLink(item: outputPLY) {
-                                    Label("导出训练 PLY", systemImage: "square.and.arrow.up")
+                                    Label("导出标准 Gaussian PLY", systemImage: "square.and.arrow.up")
                                         .font(.system(size: 12, weight: .semibold))
                                         .foregroundStyle(.white)
                                 }
