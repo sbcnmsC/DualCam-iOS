@@ -176,7 +176,9 @@ final class GaussianTrainingManager: ObservableObject {
         config.resolutionSchedule = Int32(max(iterations / 3, 100))
         config.warmupLength = 200
         config.resetAlphaEvery = 3
-        config.shDegree = 2
+        // MetalSplatter's PLY reader expects all 45 f_rest coefficients when SH is present.
+        // Degree 3 emits exactly 45 and preserves the trained scene's view-dependent colour.
+        config.shDegree = 3
         config.shDegreeInterval = Int32(max(iterations / 4, 100))
         config.stopDensifyAt = Int32(iterations * 2 / 3)
         // Keep the trained PLY/SPZ in the original ARKit world coordinate system.
