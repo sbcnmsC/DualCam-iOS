@@ -300,7 +300,7 @@ final class GaussianTrainingManager: ObservableObject {
               let header = String(data: Data(data[..<marker.upperBound]), encoding: .utf8) else {
             return false
         }
-        let lines = header.split(whereSeparator: \.isNewline).map(String.init)
+        let lines = header.split(whereSeparator: { $0.isNewline }).map(String.init)
         let required = [
             "ply", "format binary_little_endian 1.0",
             "property float x", "property float y", "property float z",
@@ -332,7 +332,7 @@ final class GaussianTrainingManager: ObservableObject {
             }
             let headerData = Data(prefix[..<marker.upperBound])
             guard let header = String(data: headerData, encoding: .utf8),
-                  let vertexLine = header.split(whereSeparator: \.isNewline)
+                  let vertexLine = header.split(whereSeparator: { $0.isNewline })
                     .first(where: { $0.hasPrefix("element vertex ") }),
                   let vertexCount = Int(vertexLine.dropFirst("element vertex ".count)),
                   vertexCount > 0 else {
