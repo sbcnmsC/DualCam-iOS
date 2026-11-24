@@ -8,6 +8,11 @@ on:
     branches: [main, optimize/high-res-preview-app-icon, fix/wireless-black-screen-latest-ipa-2026-10-27, feature/night-vision-2026-11-11, fix/flash-fill-coordination-2026-11-14, fix/ui-outputmode-pip-resize-2026-11-14, fix/build-202-camera-ui-final, fix/build-212-exposure-outputmode-pip, fix/live-photo-button-2026-11-20, fix/recording-flash-camera-switch-2026-11-20, feature/single-dual-gaussian-3dlive-2026-11-24]
   workflow_dispatch:
 
+# Keep only the newest build for each branch; stale queued IPA jobs are cancelled.
+concurrency:
+  group: dualcam-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
