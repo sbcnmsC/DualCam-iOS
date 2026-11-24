@@ -31,6 +31,9 @@ private struct GaussianSceneBounds {
 
 struct GaussianSplatViewerScreen: View {
     let url: URL
+    var onSave: (() -> Void)? = nil
+    var isSaved = false
+    var isSaving = false
 
     @Environment(\.dismiss) private var dismiss
     @State private var yaw: Float = 0
@@ -166,6 +169,28 @@ struct GaussianSplatViewerScreen: View {
                     }
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.white.opacity(0.74))
+
+                    if let onSave {
+                        Button(action: onSave) {
+                            HStack(spacing: 8) {
+                                Image(systemName: isSaved ? "checkmark.circle.fill" : isSaving ? "arrow.triangle.2.circlepath" : "square.and.arrow.down")
+                                Text(isSaved ? "已保存到 3D 相册" : isSaving ? "正在保存 3D 场景…" : "保存到 3D 相册")
+                                Spacer(minLength: 0)
+                                if !isSaved && !isSaving {
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 10, weight: .semibold))
+                                }
+                            }
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(isSaved ? .green : .black)
+                            .padding(.horizontal, 14)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 42)
+                            .background(isSaved ? Color.green.opacity(0.16) : Color.white, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isSaved || isSaving)
+                    }
                 }
                 .padding(14)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
