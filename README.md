@@ -1,6 +1,6 @@
 # DualCam 双摄相机
 
-iPhone 单摄 / 双摄原生相机（Swift / SwiftUI，基于 `AVCaptureMultiCamSession`，iOS 17+）。支持单摄、画中画和上下 / 左右分屏，双摄模式下两路同时取景并实时合成。
+iPhone 单摄 / 双摄原生相机（Swift / SwiftUI，基于 `AVCaptureMultiCamSession`，iOS 18+）。支持单摄、画中画和上下 / 左右分屏，双摄模式下两路同时取景并实时合成。
 
 > 状态：代码通过 GitHub Actions 云端编译，**尚未在真机上完整测试**。多摄支持因机型而异（需要 iPhone XS / XR 及以上），部分镜头组合、60 帧、最高分辨率在不同机型上可能自动退回较低规格。
 
@@ -45,15 +45,16 @@ iPhone 单摄 / 双摄原生相机（Swift / SwiftUI，基于 `AVCaptureMultiCam
 
 单镜头的动态片段会按预览同样的方式处理（前置镜像、滤镜），并裁成静态图的画幅，避免系统相册播放时变形。「两者都存」时，两张原片的实况仍各自取自自己的镜头，只有合成图那张按这个选项走；「原图直出」没有合成图，这个选项不生效。
 
-**3D 实况（LiDAR + Metal Gaussian Splat）**
+**3D 实况（LiDAR + ARKit Mesh + 真正的 3D Gaussian Splatting）**
 
-- 顶部自定义控制栏增加「3D 实况」。打开后暂停 DualCam 普通相机会话，交由 RealityKit / ARKit 管理空间相机，避免两个会话同时争用摄像头。
-- 仅当设备支持 ARKit Scene Depth 时启用（需要 LiDAR）；最多记录 72 个有效关键帧。关键帧按相机位姿变化筛选（约 2.5 cm 位移或 0.075 rad 视角变化），逐帧保存 JPG、Float32 深度、相机内参和 camera-to-world 位姿。
-- 将深度反投影到 ARKit 世界坐标，并按 18 mm 体素进行多视角融合：位置、球谐 DC 颜色、尺度、透明度与旋转四元数进行加权融合，减少重复点；输出场景包围盒和观测 / 融合统计。
-- 导出兼容 GraphDECO / MetalSplatter 的二进制 Gaussian PLY（XYZ、SH DC、opacity logit、log-scale、WXYZ quaternion）。采集结束后可直接打开 App 内 Metal 场景查看器：单指旋转、平移模式、双指缩放、自动旋转、重置视角；也可以分享 PLY。
-- **重建边界**：当前已实现 LiDAR 多视角位姿对齐、深度点融合、Gaussian 初始化和实时 Metal 渲染；尚未在手机端执行基于多视图 RGB 光度损失的训练优化、densification 或 SH 高阶拟合。其视觉细节受 LiDAR 深度分辨率与采集覆盖影响，不应视为训练完成的生产级 3DGS。
-- 渲染依赖 MIT 授权的 MetalSplatter（iOS 17 / Swift 5.9 兼容分支）；许可证副本保存在 `ThirdPartyLicenses/MetalSplatter-MIT.txt`。
-
+- 进入 3D 实况会暂停普通相机会话，由 ARKit / RealityKit 使用 LiDAR。ARKit 开启 \`.meshWithClassification\` 场景重建和水平 / 垂直平面检测，扫描画面显示实时场景网格。
+- 扫描页统计 ARKit 网格面片的分类样本：地面、墙面、天花板、桌面、座椅、门、窗。它是 ARKit 的空间表面分类，不等同于通用目标检测或任意物体识别。
+- 采集最多 96 个有效关键帧。只有相机追踪状态正常时才保存，位姿变化阈值约 3.5 cm / 5°；LiDAR 过滤低置信度像素，并在深度突变处剔除边缘飞点。深度点融合为初始 Gaussian 时，椭球切向由局部深度邻域估计，不再统一沿相机朝向。
+- 每次扫描保存 RGB 图像、Float32 深度、相机内参和 camera-to-world 位姿，并生成 Nerfstudio 兼容的 \`transforms.json\`。这是训练阶段的输入，不是仅供展示的 PLY。
+- 采集完成后可在设备端启动 \`msplat\` Metal 训练，支持 1K / 2K / 4K 步数；默认半分辨率，包含多视角光度优化、Gaussian densification、球谐颜色拟合。训练过程周期性生成预览，监控可用内存；可安全停止并导出当前结果。
+- 训练结果优先以优化后的 Gaussian PLY 在 MetalSplatter 中预览，也可导出压缩 SPZ；LiDAR 初始化 PLY 仍可单独分享，用于诊断采集覆盖和数据质量。
+- **设备要求**：需要支持 ARKit Scene Depth / Scene Reconstruction 的 LiDAR 设备。msplat 训练引擎最低要求 iOS 18；因此此功能分支的 App 最低系统版本调整为 iOS 18。训练时会暂停 ARKit 相机以降低 GPU 争用；当可用内存低于保护阈值或设备进入严重热状态时，会停止迭代并尝试导出已有结果。
+- 第三方依赖固定版本：\`MetalSplatter\`（MIT）和 \`msplat-ios\`（Apache 2.0）；许可证副本分别保存在 \`ThirdPartyLicenses/\`。
 **视频**：HEVC，带声音；可同时录合成视频和每颗镜头的原始视频；录像中可随时切布局、拖小窗、换滤镜。
 
 **其他**：小窗拖动 / 缩放 / 形状 / 边框，14 个实时滤镜（新增海边、人文风格），主副镜头分别设置曝光 / ISO / 快门 / 白平衡 / 对焦，点按对焦，顶部定时器图标（关 / 3 秒 / 10 秒），画幅 9:16 / 3:4 / 1:1 / 16:9 / 21:9 / 全屏自由，分辨率 720p / 1080p / 最高，30 / 60 帧，视频防抖。
@@ -92,7 +93,11 @@ base64 转换：macOS 用 `base64 -i 文件 | pbcopy`；Windows 用 `certutil -e
 先生成 iOS 要求的 1024×1024 PNG 图标（矢量母版保留在 `scripts/DualCam-AppIcon.svg`）：
 
 ```bash
-brew install xcodegen librsvg
+brew install cmake xcodegen librsvg
+mkdir -p Vendor
+git clone https://github.com/frs0n/msplat-ios.git Vendor/msplat-ios
+git -C Vendor/msplat-ios checkout e8611098583059b82e0b7d35259fb4e9c42df248
+BUILD_JOBS=4 IOS_DEPLOYMENT_TARGET=18.0 bash Vendor/msplat-ios/scripts/build-xcframework.sh
 ./scripts/generate-app-icon.sh
 xcodegen generate
 open DualCam.xcodeproj
@@ -104,8 +109,8 @@ open DualCam.xcodeproj
 
 - `DualCam/Camera/`：相机会话（`CameraManager`）、画面合成（`Compositor`）、视频 / 实况写入（`VideoRecorder`）、滤镜、数据模型
 - `DualCam/UI/`：取景界面、工具面板、预览层
-- `DualCam/Spatial/`：ARKit LiDAR 关键帧采集、世界坐标体素融合、Gaussian PLY 导出与 Metal 场景查看器
-- `ThirdPartyLicenses/`：第三方渲染库许可证
+- `DualCam/Spatial/`：ARKit LiDAR / 分类网格采集、Nerfstudio 数据导出、msplat 端侧训练、Gaussian PLY / SPZ 与 Metal 场景查看器
+- `ThirdPartyLicenses/`：MetalSplatter（MIT）与 msplat（Apache 2.0）许可证
 - `project.yml`：XcodeGen 工程描述
 - `scripts/DualCam-AppIcon.svg`：应用图标矢量母版；构建前生成至 `DualCam/Assets.xcassets/AppIcon.appiconset/AppIcon.png`
 - `.github/workflows/build-ipa.yml`：云端编译、签名、发布
