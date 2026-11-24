@@ -1127,7 +1127,7 @@ struct SpatialLiveCaptureView: View {
 
                     Spacer()
 
-                    Label("3D 实况 · LiDAR", systemImage: "cube.transparent")
+                    Label("3D 实况 · LiDAR + Gaussian", systemImage: "cube.transparent")
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(.white)
 
@@ -1154,11 +1154,12 @@ struct SpatialLiveCaptureView: View {
                     .foregroundStyle(capture.isSessionReady ? Color.green : Color.orange)
                     .multilineTextAlignment(.center)
 
-                    HStack(spacing: 18) {
+                    HStack(spacing: 12) {
                         Label("\(capture.frameCount) 视角", systemImage: "camera")
-                        Label("\(capture.splatCount.formatted()) 个初始点", systemImage: "point.3.connected.trianglepath.dotted")
+                        Label("\(capture.splatCount.formatted()) 深度点", systemImage: "point.3.connected.trianglepath.dotted")
+                        Label("\(capture.meshPointCount.formatted()) 网格点", systemImage: "square.3.layers.3d")
                     }
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(.white.opacity(0.82))
 
                     Text("空间分类 · \(capture.surfaceSummary)")
@@ -1166,7 +1167,7 @@ struct SpatialLiveCaptureView: View {
                         .foregroundStyle(.cyan.opacity(0.95))
                         .multilineTextAlignment(.center)
 
-                    Text("保持主体始终在画面内，缓慢绕行一圈，再从略高和略低角度补拍。网格用于显示空间表面；训练使用彩色帧、相机内参与位姿。")
+                    Text("缓慢环绕主体并从高低角度补拍。LiDAR 深度提供米制几何，ARKit 网格补充可见表面；多视角 RGB 与相机位姿用于 3D Gaussian 优化。")
                         .font(.system(size: 12))
                         .foregroundStyle(.white.opacity(0.76))
                         .multilineTextAlignment(.center)
