@@ -1,4 +1,5 @@
 import CoreGraphics
+import Darwin
 import Foundation
 import Msplat
 import SwiftUI
@@ -113,6 +114,23 @@ final class GaussianTrainingManager: ObservableObject {
                     throw TrainingError.insufficientViews
                 }
 
+                let pointCloudURL = root.appendingPathComponent("points3D.ply")
+                let pointCloudSize = (try? FileManager.default.attributesOfItem(atPath: pointCloudURL.path)[.size] as? NSNumber)?.intValue ?? 0
+                guard pointCloudSize > 128 else { throw TrainingError.datasetAssetsMissing }
+
+                for frame in frames {
+                    guard let relativePath = frame["file_path"] as? String, !relativePath.isEmpty else {
+                        throw TrainingError.datasetAssetsMissing
+                    }
+                    let imageURL = root.appendingPathComponent(relativePath)
+                    guard FileManager.default.fileExists(atPath: imageURL.path) else {
+                        throw TrainingError.datasetAssetsMissing
+                    }
+                }
+
+                // msplat otherwise defaults to a 512 MB decoded-image LRU on iOS.
+                // Keep headroom for DualCam's UI and the Metal renderer during training.
+                setenv("MSPLAT_IMAGE_CACHE_MB", "384", 1)
                 let dataset = GaussianDataset(path: path, downscaleFactor: 2.0)
                 guard dataset.numTrain >= 5 else {
                     throw TrainingError.datasetLoadFailed
@@ -293,6 +311,7 @@ final class GaussianTrainingManager: ObservableObject {
         case datasetLoadFailed
         case emptyInitialization
         case lowMemory
+        case datasetAssetsMissing
 
         var errorDescription: String? {
             switch self {
@@ -304,6 +323,8 @@ final class GaussianTrainingManager: ObservableObject {
                 return "训练器没有得到有效的 Gaussian 初始化。"
             case .lowMemory:
                 return "当前可用内存低于 1.2 GB。请关闭其他应用或减少后台任务后再训练。"
+            case .datasetAssetsMissing:
+                return "训练数据缺少有效的 LiDAR 点云或相机图像，请重新采集。"
             }
         }
     }
