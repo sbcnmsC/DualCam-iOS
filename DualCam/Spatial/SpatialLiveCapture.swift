@@ -627,6 +627,9 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
         }
 
         do {
+            guard frameRecords.count >= 6, gaussianSeeds.count >= 100 else {
+                throw CaptureError.insufficientSceneData
+            }
             DispatchQueue.main.async {
                 self.status = "正在融合多视角深度点并整理 Gaussian…"
             }
@@ -828,6 +831,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
         case depthBufferUnavailable
         case colorBufferUnavailable
         case transformsExportFailed
+        case insufficientSceneData
 
         var errorDescription: String? {
             switch self {
@@ -836,6 +840,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
             case .depthBufferUnavailable: return "无法读取 LiDAR 深度缓冲区。"
             case .colorBufferUnavailable: return "无法读取相机颜色帧。"
             case .transformsExportFailed: return "无法生成训练相机数据，请重新扫描并至少保留 6 个有效视角。"
+            case .insufficientSceneData: return "有效空间数据不足：至少需要 6 个有效视角和 100 个 LiDAR 点，请增加扫描覆盖。"
             }
         }
     }
@@ -911,7 +916,8 @@ struct SpatialLiveCaptureView: View {
 
                 Spacer()
 
-                VStack(spacing: 10) {
+                ScrollView(.vertical) {
+                    VStack(spacing: 10) {
                     Text(capture.status)
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(.white)
@@ -979,6 +985,9 @@ struct SpatialLiveCaptureView: View {
                                 } else {
                                     capture.pauseSpatialSessionForViewer()
                                     training.startTraining(datasetURL: initialPLY.deletingLastPathComponent())
+                                    if !training.isWorking {
+                                        capture.resumeSpatialSessionAfterViewer()
+                                    }
                                 }
                             } label: {
                                 Label(
@@ -991,7 +1000,7 @@ struct SpatialLiveCaptureView: View {
                                 .frame(height: 46)
                                 .background(training.isWorking ? Color.orange : Color.white, in: Capsule())
                             }
-                            .disabled(training.phase == .loading || capture.frameCount < 6)
+                            .disabled(training.phase == .loading || capture.frameCount < 6 || capture.splatCount < 100)
 
                             if training.isWorking {
                                 ProgressView(value: training.progress)
@@ -1055,14 +1064,15 @@ struct SpatialLiveCaptureView: View {
                             }
                         }
                     }
-                        .font(.system(size: 10))
-                        .foregroundStyle(.white.opacity(0.58))
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(18)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-                .padding(.bottom, 18)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(18)
+            .frame(maxHeight: 560)
+            .scrollIndicators(.hidden)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .padding(.bottom, 18)
             }
             .padding(.horizontal, 16)
         }
