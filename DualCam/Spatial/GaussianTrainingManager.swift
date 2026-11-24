@@ -392,8 +392,6 @@ final class GaussianTrainingManager: ObservableObject {
             try? output.close()
             try input.close()
 
-            let backupURL = sourceURL.appendingPathExtension("backup")
-            try? manager.removeItem(at: backupURL)
             try manager.moveItem(at: temporaryURL, to: destinationURL)
             return manager.fileExists(atPath: destinationURL.path)
         } catch {
