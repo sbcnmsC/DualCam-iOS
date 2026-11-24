@@ -1,6 +1,7 @@
 import Foundation
 import Metal
 import MetalKit
+import QuartzCore
 import MetalSplatter
 import SwiftUI
 import simd
