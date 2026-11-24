@@ -289,7 +289,7 @@ final class GaussianTrainingManager: ObservableObject {
               let headerEnd = header.range(of: "end_header") else {
             return false
         }
-        let lines = header[..<headerEnd.lowerBound].split(whereSeparator: \\.isNewline).map(String.init)
+        let lines = header[..<headerEnd.lowerBound].split(whereSeparator: \.isNewline).map(String.init)
         let required = [
             "ply", "format binary_little_endian 1.0",
             "property float x", "property float y", "property float z",
