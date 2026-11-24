@@ -77,6 +77,11 @@ final class GaussianTrainingManager: ObservableObject {
         exportedPLY = nil
         exportedSPZ = nil
         totalIterations = max(500, min(iterationTarget, 4_000))
+        guard availableMemoryMB >= 1_200 else {
+            phase = .failed(TrainingError.lowMemory.localizedDescription)
+            status = TrainingError.lowMemory.localizedDescription
+            return
+        }
         phase = .loading
         status = "正在检查相机数据集…"
 
@@ -121,10 +126,11 @@ final class GaussianTrainingManager: ObservableObject {
                     )
                 }
             } catch {
+                let message = error.localizedDescription
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
-                    self.phase = .failed(error.localizedDescription)
-                    self.status = error.localizedDescription
+                    self.phase = .failed(message)
+                    self.status = message
                     self.worker = nil
                     let completion = self.onTrainingFinished
                     self.onTrainingFinished = nil
@@ -143,7 +149,11 @@ final class GaussianTrainingManager: ObservableObject {
         config.iterations = Int32(iterations)
         config.downscaleFactor = 2.0
         config.numDownscales = 2
+        config.resolutionSchedule = Int32(max(iterations / 3, 100))
+        config.warmupLength = 200
+        config.resetAlphaEvery = 3
         config.shDegree = 2
+        config.shDegreeInterval = Int32(max(iterations / 4, 100))
         config.stopDensifyAt = Int32(iterations * 2 / 3)
         config.bgColor = (0.015, 0.015, 0.015)
 
@@ -282,6 +292,7 @@ final class GaussianTrainingManager: ObservableObject {
         case insufficientViews
         case datasetLoadFailed
         case emptyInitialization
+        case lowMemory
 
         var errorDescription: String? {
             switch self {
@@ -291,6 +302,8 @@ final class GaussianTrainingManager: ObservableObject {
                 return "训练器无法读取 transforms.json 或图像目录。"
             case .emptyInitialization:
                 return "训练器没有得到有效的 Gaussian 初始化。"
+            case .lowMemory:
+                return "当前可用内存低于 1.2 GB。请关闭其他应用或减少后台任务后再训练。"
             }
         }
     }
