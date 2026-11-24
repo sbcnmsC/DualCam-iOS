@@ -463,6 +463,8 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
         depthRows: Int,
         depthWidth: Int,
         depthHeight: Int,
+        confidenceBase: UnsafeMutablePointer<UInt8>?,
+        confidenceBytesPerRow: Int,
         colorBase: UnsafePointer<UInt8>,
         colorBytesPerRow: Int,
         imageWidth: Int,
@@ -509,6 +511,10 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
                 let depthX = min(depthWidth - 1, max(0, Int(Float(x) * Float(depthWidth) / Float(imageWidth))))
                 let depthY = min(depthHeight - 1, max(0, Int(Float(y) * Float(depthHeight) / Float(imageHeight))))
                 let measuredDepth = depthBase[depthY * depthRows + depthX]
+                if let confidenceBase,
+                   confidenceBase[depthY * confidenceBytesPerRow + depthX] < 1 {
+                    continue
+                }
                 let tolerance = max(0.045, distance * 0.04)
                 guard measuredDepth.isFinite, measuredDepth >= 0.18,
                       abs(measuredDepth - distance) <= tolerance else { continue }
@@ -642,6 +648,8 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
             depthRows: depthRows,
             depthWidth: depthWidth,
             depthHeight: depthHeight,
+            confidenceBase: confidencePointer,
+            confidenceBytesPerRow: confidenceBytesPerRow,
             colorBase: colorBase,
             colorBytesPerRow: colorBytesPerRow,
             imageWidth: imageWidth,
