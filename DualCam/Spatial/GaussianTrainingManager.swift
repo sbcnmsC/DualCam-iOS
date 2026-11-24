@@ -115,7 +115,8 @@ final class GaussianTrainingManager: ObservableObject {
                 }
 
                 let pointCloudURL = root.appendingPathComponent("points3D.ply")
-                let pointCloudSize = (try? FileManager.default.attributesOfItem(atPath: pointCloudURL.path)[.size] as? NSNumber)?.intValue ?? 0
+                let pointCloudAttributes = try? FileManager.default.attributesOfItem(atPath: pointCloudURL.path)
+                let pointCloudSize = (pointCloudAttributes?[.size] as? NSNumber)?.intValue ?? 0
                 guard pointCloudSize > 128 else { throw TrainingError.datasetAssetsMissing }
 
                 for frame in frames {
