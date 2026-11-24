@@ -1268,6 +1268,7 @@ struct SpatialScanHUD: View {
             .padding(12)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(12)
         .allowsHitTesting(false)
     }
