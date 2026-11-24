@@ -837,8 +837,13 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
                 "createdAt": ISO8601DateFormatter().string(from: Date()),
                 "frameCount": frameRecords.count,
                 "gaussianSeedCount": gaussianSeeds.count,
+                "meshVertexObservationCount": meshPointSeeds.count,
+                "supplementalMeshPointCount": meshPointSeeds.filter {
+                    voxelIndices[voxelKey(for: $0.position)] == nil
+                }.count,
                 "rawDepthObservations": rawGaussianObservations,
                 "fusedVoxelCount": gaussianSeeds.count,
+                "pointCloudFusion": "LiDAR depth back-projection plus RGB-projected and depth-verified ARKit mesh vertices; duplicate 18 mm voxels omitted",
                 "voxelSizeMeters": voxelSize,
                 "keyframePolicy": "retain frame after 0.035m translation or 0.087rad view rotation",
                 "depthSource": "ARKit sceneDepth / smoothedSceneDepth",
@@ -849,8 +854,8 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
                     "max": [bounds.maximum.x, bounds.maximum.y, bounds.maximum.z]
                 ],
                 "plySchema": "x y z nx ny nz f_dc_0 f_dc_1 f_dc_2 opacity scale_0 scale_1 scale_2 rot_0 rot_1 rot_2 rot_3",
-                "reconstructionStage": "ARKit LiDAR depth fusion initialisation; Nerfstudio camera dataset exported for on-device photometric 3DGS training",
-                "notes": "Captured RGB frames, raw Float32 depth maps, camera intrinsics and camera-to-world transforms are saved alongside the fused PLY.",
+                "reconstructionStage": "ARKit LiDAR depth and RGB-verified mesh fusion initialisation; Nerfstudio camera dataset exported for on-device photometric 3DGS training",
+                "notes": "The initial point cloud combines metric LiDAR depth back-projection with visible ARKit mesh vertices verified against the current depth map and coloured from the corresponding RGB frame. Captured RGB frames, raw Float32 depth maps, camera intrinsics and camera-to-world poses are retained for photometric Gaussian optimisation.",
                 "frames": frameRecords
             ]
             let manifestData = try JSONSerialization.data(
@@ -866,7 +871,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
                 self.isCapturing = false
                 self.status = self.gaussianSeeds.isEmpty
                     ? "已结束，但没有获得有效深度点"
-                    : "多视角融合完成，可预览 3D Gaussian 场景"
+                    : "LiDAR 深度与 ARKit 网格融合完成，可训练 3D Gaussian 场景"
             }
         } catch {
             DispatchQueue.main.async {
@@ -882,11 +887,17 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
     /// msplat's Nerfstudio loader uses points3D.ply as the initial xyz/RGB cloud.
     /// Keep this separate from the GraphDECO Gaussian PLY exported for the viewer.
     private func writeInitialPointCloudPLY(to url: URL) throws {
+        // LiDAR depth points remain the primary metric observations. ARKit mesh samples
+        // supplement only empty 18 mm voxels, avoiding near-duplicate initial positions.
+        let supplementalMeshPoints = meshPointSeeds.filter {
+            voxelIndices[voxelKey(for: $0.position)] == nil
+        }
+        let pointCount = gaussianSeeds.count + supplementalMeshPoints.count
         let header = """
         ply
         format binary_little_endian 1.0
-        comment DualCam ARKit LiDAR coloured point cloud for msplat initialisation
-        element vertex \(gaussianSeeds.count)
+        comment DualCam fused LiDAR depth and RGB-verified ARKit mesh point cloud for msplat initialisation
+        element vertex \(pointCount)
         property float x
         property float y
         property float z
@@ -898,7 +909,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
         // Swift multiline strings omit the final newline. PLY requires a line break
         // after end_header before the binary vertex payload begins.
         var data = Data((header + "\n").utf8)
-        data.reserveCapacity(data.count + gaussianSeeds.count * 15)
+        data.reserveCapacity(data.count + pointCount * 15)
 
         for point in gaussianSeeds {
             appendLittleEndianFloat(point.x, to: &data)
@@ -907,6 +918,16 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
             let red = UInt8((min(max(point.redDC * sphericalHarmonicDC + 0.5, 0), 1) * 255).rounded())
             let green = UInt8((min(max(point.greenDC * sphericalHarmonicDC + 0.5, 0), 1) * 255).rounded())
             let blue = UInt8((min(max(point.blueDC * sphericalHarmonicDC + 0.5, 0), 1) * 255).rounded())
+            data.append(contentsOf: [red, green, blue])
+        }
+
+        for point in supplementalMeshPoints {
+            appendLittleEndianFloat(point.position.x, to: &data)
+            appendLittleEndianFloat(point.position.y, to: &data)
+            appendLittleEndianFloat(point.position.z, to: &data)
+            let red = UInt8((min(max(point.red, 0), 1) * 255).rounded())
+            let green = UInt8((min(max(point.green, 0), 1) * 255).rounded())
+            let blue = UInt8((min(max(point.blue, 0), 1) * 255).rounded())
             data.append(contentsOf: [red, green, blue])
         }
 
