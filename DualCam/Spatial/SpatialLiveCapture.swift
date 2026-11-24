@@ -4,9 +4,10 @@ import CoreImage
 import CoreVideo
 import Foundation
 import ImageIO
-import SceneKit
+import RealityKit
 import simd
 import SwiftUI
+import UIKit
 
 /// LiDAR-backed spatial capture. The exported PLY contains depth-initialized Gaussian
 /// primitives in ARKit world space; it is deliberately labelled as an initialisation
@@ -58,6 +59,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject, ARSessionDele
     }
 
     func attach(session: ARSession) {
+        guard arSession !== session else { return }
         arSession = session
         session.delegate = self
         session.delegateQueue = captureQueue
@@ -528,17 +530,19 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject, ARSessionDele
 private struct SpatialARPreview: UIViewRepresentable {
     let manager: SpatialLiveCaptureManager
 
-    func makeUIView(context: Context) -> ARSCNView {
-        let view = ARSCNView(frame: .zero)
-        view.scene = SCNScene()
-        view.automaticallyUpdatesLighting = true
+    func makeUIView(context: Context) -> ARView {
+        let view = ARView(
+            frame: .zero,
+            cameraMode: .ar,
+            automaticallyConfigureSession: false
+        )
         view.backgroundColor = .black
         manager.attach(session: view.session)
         return view
     }
 
-    func updateUIView(_ uiView: ARSCNView, context: Context) {
-        manager.attach(session: uiView.session)
+    func updateUIView(_ uiView: ARView, context: Context) {
+        // The manager attaches the session once; do not re-run AR tracking on SwiftUI updates.
     }
 }
 
