@@ -232,7 +232,7 @@ struct SpatialCaptureResultView: View {
             switch result {
             case .success:
                 isSaved = true
-                HapticFeedback.play(.success)
+                HapticFeedback.play(.selection)
             case .failure(let error):
                 saveError = error.localizedDescription
             }
