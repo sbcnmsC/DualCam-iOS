@@ -1790,6 +1790,7 @@ struct TopBar: View {
     let onTimerTap: () -> Void
     let onNightAssistTap: () -> Void
     var onSpatialLiveTap: () -> Void = {}
+    var isSpatialCaptureActive = false
     let onWirelessMonitorTap: () -> Void
     let onWirelessReceiveTap: () -> Void
     let onWirelessShareTap: () -> Void
@@ -1944,10 +1945,10 @@ struct TopBar: View {
         case "spatialLive":
             iconButton(
                 actionKey: key,
-                icon: "cube.transparent",
-                active: false,
+                icon: isSpatialCaptureActive ? "stop.circle.fill" : "cube.transparent",
+                active: isSpatialCaptureActive,
                 disabled: cam.isRecording || cam.isCapturingPhoto,
-                label: "3D 实况采集（LiDAR 深度 + Gaussian Splat）"
+                label: isSpatialCaptureActive ? "结束 3D 扫描并生成场景" : "开始 3D 实况采集（LiDAR + Gaussian）"
             ) {
                 HapticFeedback.play(.selection)
                 onSpatialLiveTap()
