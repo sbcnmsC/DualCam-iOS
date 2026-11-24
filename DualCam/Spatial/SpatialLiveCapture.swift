@@ -467,7 +467,6 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
             SIMD3<Float>(cameraTransform.columns.1.x, cameraTransform.columns.1.y, cameraTransform.columns.1.z),
             SIMD3<Float>(cameraTransform.columns.2.x, cameraTransform.columns.2.y, cameraTransform.columns.2.z)
         )
-        let cameraRotation = simd_quatf(cameraRotationMatrix).vector
         let sampleStride = max(2, max(depthWidth / 80, depthHeight / 60))
         let opacityLogit = Float(log(0.72 / (1.0 - 0.72)))
 
@@ -633,6 +632,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
             }
             let plyURL = folder.appendingPathComponent("gaussian_splats.ply")
             try writeGaussianPLY(to: plyURL)
+            try writeInitialPointCloudPLY(to: folder.appendingPathComponent("points3D.ply"))
             try writeNerfstudioTransforms(to: folder)
             let bounds = sceneBounds()
 
@@ -682,6 +682,38 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
 
     /// Export the RGB frames, calibrated intrinsics, and camera-to-world poses in
     /// Nerfstudio's transforms.json schema consumed by msplat's GaussianDataset.
+    /// msplat's Nerfstudio loader uses points3D.ply as the initial xyz/RGB cloud.
+    /// Keep this separate from the GraphDECO Gaussian PLY exported for the viewer.
+    private func writeInitialPointCloudPLY(to url: URL) throws {
+        let header = """
+        ply
+        format binary_little_endian 1.0
+        comment DualCam ARKit LiDAR coloured point cloud for msplat initialisation
+        element vertex \(gaussianSeeds.count)
+        property float x
+        property float y
+        property float z
+        property uchar red
+        property uchar green
+        property uchar blue
+        end_header
+        """
+        var data = Data(header.utf8)
+        data.reserveCapacity(data.count + gaussianSeeds.count * 15)
+
+        for point in gaussianSeeds {
+            appendLittleEndianFloat(point.x, to: &data)
+            appendLittleEndianFloat(point.y, to: &data)
+            appendLittleEndianFloat(point.z, to: &data)
+            let red = UInt8((min(max(point.redDC * sphericalHarmonicDC + 0.5, 0), 1) * 255).rounded())
+            let green = UInt8((min(max(point.greenDC * sphericalHarmonicDC + 0.5, 0), 1) * 255).rounded())
+            let blue = UInt8((min(max(point.blueDC * sphericalHarmonicDC + 0.5, 0), 1) * 255).rounded())
+            data.append(contentsOf: [red, green, blue])
+        }
+
+        try data.write(to: url, options: .atomic)
+    }
+
     private func writeNerfstudioTransforms(to folder: URL) throws {
         guard let first = frameRecords.first,
               let intrinsics = first["cameraIntrinsics"] as? [NSNumber],
@@ -713,6 +745,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
         guard frames.count >= 5 else { throw CaptureError.transformsExportFailed }
         let document: [String: Any] = [
             "camera_model": "OPENCV",
+            "ply_file_path": "points3D.ply",
             "fl_x": intrinsics[0].doubleValue,
             "fl_y": intrinsics[4].doubleValue,
             "cx": intrinsics[6].doubleValue,
