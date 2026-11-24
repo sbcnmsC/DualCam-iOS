@@ -174,6 +174,9 @@ final class GaussianTrainingManager: ObservableObject {
         config.shDegree = 2
         config.shDegreeInterval = Int32(max(iterations / 4, 100))
         config.stopDensifyAt = Int32(iterations * 2 / 3)
+        // Keep the trained PLY/SPZ in the original ARKit world coordinate system.
+        // The Metal viewer uses the capture manifest's original scene bounds.
+        config.keepCrs = true
         config.bgColor = (0.015, 0.015, 0.015)
 
         let trainer = GaussianTrainer(dataset: dataset, config: config)
