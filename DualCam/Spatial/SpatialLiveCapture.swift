@@ -307,7 +307,7 @@ final class SpatialLiveCaptureManager: NSObject, ObservableObject {
         )
         let cameraRotation = simd_quatf(cameraRotationMatrix).vector
         let sampleStride = max(2, max(depthWidth / 80, depthHeight / 60))
-        let opacityLogit = log(0.72 / (1.0 - 0.72))
+        let opacityLogit = Float(log(0.72 / (1.0 - 0.72)))
 
         for y in Swift.stride(from: 0, to: depthHeight, by: sampleStride) {
             if gaussianSeeds.count >= maximumSplats { break }
