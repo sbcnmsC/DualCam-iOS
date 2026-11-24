@@ -12,6 +12,7 @@ private enum WirelessSetupSheetRoute: String, Identifiable {
 struct CameraScreen: View {
     @EnvironmentObject private var cam: CameraManager
     @State private var showPanel = false
+    @State private var showSpatialLiveCapture = false
     @State private var panelTab: PanelTab = .pip
     @AppStorage("dualcam.quickParameterSelected") private var selectedQuickParameterName = "曝光补偿"
     @State private var showTimerSettings = false
@@ -221,6 +222,17 @@ struct CameraScreen: View {
                                     showNightAssistControls.toggle()
                                 }
                                 HapticFeedback.play(.selection)
+                            },
+                            onSpatialLiveTap: {
+                                guard !cam.isRecording, !cam.isCapturingPhoto else {
+                                    cam.showToast("请先结束当前拍摄")
+                                    return
+                                }
+                                guard wirelessSession.mode == .idle else {
+                                    cam.showToast("请先结束无线监看")
+                                    return
+                                }
+                                showSpatialLiveCapture = true
                             },
                             onWirelessMonitorTap: {
                                 // A single tap opens the wireless feature's own mode screen.
@@ -440,6 +452,10 @@ struct CameraScreen: View {
             }
         }
         .background(Color.black.ignoresSafeArea())
+        .fullScreenCover(isPresented: $showSpatialLiveCapture) {
+            SpatialLiveCaptureView()
+                .environmentObject(cam)
+        }
         // The stop button lives in the UIWindow, outside the camera canvas layout, so it never
         // changes preview size, previewTop or safe-area calculations.
         .background {
@@ -963,7 +979,7 @@ struct PreviewStage: View {
             // 小窗 / 分割线盖在手势层之上，各自的手势优先
             if cam.cfg.layout == .pip {
                 PiPOverlay(size: size, iconRotationDegrees: iconRotationDegrees)
-            } else {
+            } else if cam.cfg.layout == .split {
                 SplitDivider(size: size)
             }
 
@@ -1690,11 +1706,12 @@ struct TimerSettingsOverlay: View {
 struct TopBar: View {
     @EnvironmentObject private var cam: CameraManager
     @AppStorage("dualcam.topbar.actions")
-    private var actionOrderValue = "flash,livePhoto,liveMotion,outputMode,timer,swapCamera,nightAssist,wireless"
+    private var actionOrderValue = "flash,livePhoto,spatialLive,liveMotion,outputMode,timer,swapCamera,nightAssist,wireless"
     @State private var isCustomizing = false
 
     let onTimerTap: () -> Void
     let onNightAssistTap: () -> Void
+    var onSpatialLiveTap: () -> Void = {}
     let onWirelessMonitorTap: () -> Void
     let onWirelessReceiveTap: () -> Void
     let onWirelessShareTap: () -> Void
@@ -1704,7 +1721,7 @@ struct TopBar: View {
     var iconRotationDegrees: CGFloat = 90
     var compactLayout = false
 
-    private static let baseActionKeys = ["flash", "livePhoto", "liveMotion", "outputMode", "timer", "swapCamera", "nightAssist", "wireless", "shareComposite"]
+    private static let baseActionKeys = ["flash", "livePhoto", "spatialLive", "liveMotion", "outputMode", "timer", "swapCamera", "nightAssist", "wireless", "shareComposite"]
     private static var allActionKeys: [String] {
         baseActionKeys + QuickParameter.allCases.map { "param.\($0.shortcutKey)" }
     }
@@ -1821,6 +1838,12 @@ struct TopBar: View {
                 migratedKeys.insert("outputMode", at: insertionIndex)
                 saveActionKeys(migratedKeys)
             }
+            if actionOrderValue != "none", !actionKeys.contains("spatialLive") {
+                var migratedKeys = actionKeys
+                let insertionIndex = migratedKeys.firstIndex(of: "livePhoto").map { $0 + 1 } ?? migratedKeys.endIndex
+                migratedKeys.insert("spatialLive", at: insertionIndex)
+                saveActionKeys(migratedKeys)
+            }
             if cam.cfg.filter == .nightVision {
                 cam.applyFilter(.original, intensity: 1)
             }
@@ -1839,6 +1862,17 @@ struct TopBar: View {
                        active: cam.flashEnabled, label: flashLabel) {
                 HapticFeedback.play(.button)
                 cam.flashEnabled.toggle()
+            }
+        case "spatialLive":
+            iconButton(
+                actionKey: key,
+                icon: "cube.transparent",
+                active: false,
+                disabled: cam.isRecording || cam.isCapturingPhoto,
+                label: "3D 实况采集（LiDAR 深度 + Gaussian Splat）"
+            ) {
+                HapticFeedback.play(.selection)
+                onSpatialLiveTap()
             }
         case "livePhoto":
             iconButton(
@@ -2016,6 +2050,7 @@ struct TopBar: View {
         switch key {
         case "flash": return "闪光灯"
         case "livePhoto": return "实况照片"
+        case "spatialLive": return "3D 实况"
         case "liveMotion": return "实况动态来源"
         case "outputMode": return "保存模式"
         case "timer": return "倒计时"
@@ -2036,6 +2071,7 @@ struct TopBar: View {
         switch key {
         case "flash": return "bolt.fill"
         case "livePhoto": return "livephoto"
+        case "spatialLive": return "cube.transparent"
         case "liveMotion": return "waveform"
         case "outputMode": return "viewfinder"
         case "timer": return "timer"
@@ -2112,9 +2148,15 @@ struct BottomBar: View {
 
     private var splitButton: some View {
         Button { cam.toggleLayout() } label: {
-            Image(systemName: cam.cfg.layout == .pip
-                  ? "rectangle.on.rectangle"
-                  : (Compositor.splitIsSideBySide(cfg: cam.cfg) ? "rectangle.split.2x1" : "rectangle.split.1x2"))
+            let icon: String
+            switch cam.cfg.layout {
+            case .pip: icon = "rectangle.on.rectangle"
+            case .split:
+                icon = Compositor.splitIsSideBySide(cfg: cam.cfg)
+                    ? "rectangle.split.2x1" : "rectangle.split.1x2"
+            case .single: icon = "camera"
+            }
+            Image(systemName: icon)
                 .rotationEffect(.degrees(iconRotationDegrees))
                 .animation(.smooth(duration: 0.28), value: iconRotationDegrees)
                 .font(.system(size: 17, weight: .semibold))
@@ -2124,9 +2166,14 @@ struct BottomBar: View {
                 .overlay(Circle().stroke(Color.yellow, lineWidth: 2))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(cam.cfg.layout == .pip
-                            ? (Compositor.splitIsSideBySide(cfg: cam.cfg) ? "切换左右分屏" : "切换上下分屏")
-                            : "切换画中画")
+        .disabled(cam.isRecording || cam.isCapturingPhoto)
+        .accessibilityLabel({
+            switch cam.cfg.layout {
+            case .pip: return "当前画中画，切换分屏"
+            case .split: return "当前分屏，切换单摄"
+            case .single: return "当前单摄，切换画中画"
+            }
+        }())
     }
 
     private var paramsButton: some View {
